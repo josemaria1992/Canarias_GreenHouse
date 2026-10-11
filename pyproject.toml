@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aquacrop-greenhouse"
+version = "0.2.0.dev0"
+description = "AquaCrop greenhouse platform: desktop simulation, causal process twin, historian and browser UI; read-only Modbus acquisition and guarded bench commissioning."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Proprietary — AquaCrop Technologies AB" }
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic>=2.7,<3",
+  "PyYAML>=6,<7",
+  "argon2-cffi>=23,<26",
+]
+
+[project.optional-dependencies]
+# Hardware extras are never imported by simulation code paths.
+hardware = ["pymodbus==3.11.3", "pyserial==3.5"]
+dev = ["pytest>=8", "httpx>=0.27", "build>=1.2", "pymodbus==3.11.3", "pyserial==3.5"]
+
+[project.scripts]
+aquacrop = "aquacrop.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aquacrop = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg", "web/vendor/*", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

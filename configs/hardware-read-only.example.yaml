@@ -1,0 +1,36 @@
+# EXAMPLE ONLY — every field below that is not an owner-supplied fact is a placeholder that must be
+# replaced with verified commissioning evidence before use. Starts HARDWARE_READ_ONLY: no writes.
+# Copy to configs/hardware-read-only.yaml and edit. Do not copy DEMO scaling or twin values here.
+schema_version: 1
+config_id: hw-ro-example
+config_version: "UNVERIFIED-0"
+profile: HARDWARE_READ_ONLY
+label: "REAL — READ ONLY (example, unverified)"
+site:
+  timezone: Europe/Stockholm
+buses:
+  - bus_id: rs485_a
+    kind: rtu
+    port: "/dev/TBD-verify-on-CM4"          # TBD: map carrier terminal -> tty on the actual Pi
+    port_evidence: null                     # TBD: record how the mapping was verified
+    serial: {baudrate: 9600, parity: N, bytesize: 8, stopbits: 1, timeout_s: 0.5, read_retries: 1}
+    poll_interval_s: 3.0
+devices:
+  - device_uid: relay_A
+    bus_id: rs485_a
+    address: 1                              # TBD: prove uniqueness with the device isolated
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: "26517"
+    revision_evidence: null                 # TBD: label/photo evidence
+    firmware_evidence: null                 # TBD: diagnostics read of 0x8000 with date
+  - device_uid: analog_A
+    bus_id: rs485_a
+    address: 2
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: "25821"
+    hardware_variant: UNKNOWN               # TBD: STANDARD or B, verify on the unit
+    # ai channel modes stay UNKNOWN (unscaled) until observed and jumpers physically verified
+scaling_profiles: []
+virtual_mapping: []
+physical_mapping: []
+alarm_rules: []
