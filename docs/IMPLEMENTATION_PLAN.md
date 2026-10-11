@@ -1,13 +1,13 @@
 # AquaCrop greenhouse platform — milestone 0 implementation plan
 
-Date: 2026-10-11. Status: **living document**, updated per milestone.
+Date: 2026-10-11. Status: **living document**. Milestones 0–4 implemented; milestone 5 documents only. Results: `ACCEPTANCE.md`.
 
 ## 0.1 Inputs actually inspected
 
 | Input | Status |
 |---|---|
 | Owner brief, 11 Oct 2026 (project thread) | Read in full; this plan is derived from it |
-| `AquaCrop_Greenhouse_Control_v0.1.zip` / `greenhouse_control_v0_1` | **NOT YET RECEIVED.** Baseline tests not run, source hash not recorded, line-referenced bug list not produced. See §0.5 |
+| `AquaCrop_Greenhouse_Control_v0.1.zip` / `greenhouse_control_v0_1` | Received 2026-10-11 18:46 UTC. SHA-256 `fa118eb2…6dd8`, kept byte-identical in `legacy/`. Baseline 9 passed. Findings: `docs/architecture/v0_1_findings.md` |
 | `V0_1_CODE_AUDIT.md`, `ACCEPTANCE_TEST_PLAN.md`, `CLAUDE_IMPLEMENTATION_MILESTONES.md`, `PROJECT_FACTS_AND_UNCERTAINTIES.md`, `OPEN_DECISIONS.md` | **NOT RECEIVED.** Acceptance IDs below are this plan's own provisional IDs (`AT-…`). When the owner's acceptance plan arrives they will be cross-mapped, not silently renamed |
 
 Because v0.1 is absent, work starts with the parts of the specification that do not depend on it
@@ -86,9 +86,8 @@ Cannot be marked PASS from a desktop.
 
 ## 0.5 v0.1 findings
 
-Pending the source. The brief's 12 findings (§3) are treated as requirements and each is
-covered by the acceptance items above; once the source arrives each will be reproduced against
-the original code with file:line references in `docs/architecture/v0_1_findings.md`.
+All 12 brief findings reproduced against the original source with file:line references, plus nine
+more: `docs/architecture/v0_1_findings.md`. Results per acceptance ID: `docs/ACCEPTANCE.md`.
 
 ## 0.6 Repository delivery
 
