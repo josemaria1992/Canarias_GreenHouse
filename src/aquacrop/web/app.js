@@ -1,0 +1,453 @@
+/* AquaCrop browser UI. Vanilla JS, no external assets. All user/config text is inserted with
+ * textContent (never parsed as markup) so labels and event text cannot become executable HTML. */
+"use strict";
+(function () {
+  const S = { csrf: null, user: null, perms: [], status: null, lastOk: 0, stale: false, view: "overview",
+              cfgVersion: null, tz: "Europe/Stockholm", trendSel: ["analog_A.AI1", "analog_A.AI2", "relay_A.DI1"],
+              trendMin: 10, settingsLoaded: false };
+  const STALE_AFTER_MS = 4000;
+
+  // ---------------------------------------------------------------- DOM helpers
+  function h(tag, attrs, ...kids) {
+    const e = document.createElement(tag);
+    if (attrs) for (const k in attrs) {
+      const v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === "class") e.className = v;
+      else if (k === "style") e.style.cssText = v;  // CSSOM: allowed under the strict CSP
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) {
+      if (k == null || k === false) continue;
+      e.appendChild(typeof k === "string" || typeof k === "number" ? document.createTextNode(String(k)) : k);
+    }
+    return e;
+  }
+  const $ = id => document.getElementById(id);
+  function mount(id, ...kids) { const el = $(id); el.replaceChildren(...kids.flat()); return el; }
+  function toast(msg, bad) {
+    const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
+    t.style.background = bad ? "var(--bad)" : "";
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), 5000);
+  }
+  function can(p) { return S.perms.includes(p); }
+  function fmtTime(iso) {
+    if (!iso) return "—";
+    return new Intl.DateTimeFormat("sv-SE", { timeZone: S.tz, dateStyle: "short", timeStyle: "medium" }).format(new Date(iso));
+  }
+  function age(iso) {
+    if (!iso) return "—";
+    const ref = S.status ? Date.parse(S.status.freshness.server_utc) + (Date.now() - S.lastOk) : Date.now();
+    return ((ref - Date.parse(iso)) / 1000).toFixed(1) + " s";
+  }
+  function num(v, d = 2) { return v == null ? "—" : (typeof v === "boolean" ? (v ? "ON" : "OFF") : Number(v).toFixed(d)); }
+  function qBadge(q) { return h("span", { class: "q q-" + q }, q); }
+  function oBadge(o) { return h("span", { class: "origin origin-" + o }, o === "SIMULATED" ? "SIM" : o); }
+  function pill(text, cls) { return h("span", { class: "pill " + (cls || "") }, text); }
+
+  // ---------------------------------------------------------------- API
+  async function api(method, path, body) {
+    const opts = { method, headers: {}, credentials: "same-origin" };
+    if (method !== "GET") { opts.headers["X-CSRF-Token"] = S.csrf || ""; }
+    if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+    const r = await fetch(path, opts);
+    if (r.status === 401) { showLogin(); throw new Error("not authenticated"); }
+    const ct = r.headers.get("content-type") || "";
+    const data = ct.includes("json") ? await r.json() : await r.text();
+    if (!r.ok) throw new Error((data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.status);
+    return data;
+  }
+  async function act(method, path, body, okMsg) {
+    if (S.stale) { toast("Connection stale: command not sent", true); return null; }
+    try { const r = await api(method, path, body); if (okMsg) toast(okMsg); refresh(); return r; }
+    catch (e) { toast(String(e.message || e), true); return null; }
+  }
+  function rid() { return "ui_" + crypto.getRandomValues(new Uint32Array(4)).join("").slice(0, 24); }
+  function cmd(target, desired) {
+    return act("POST", "/api/commands", { backend: "SIMULATED", config_version: S.cfgVersion, target, desired,
+      request_id: rid(), reason: "operator via I/O bench" }).then(r => r && toast(`${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, r.outcome !== "READBACK_CONFIRMED"));
+  }
+  function cbtn(label, onclick, cls) { return h("button", { class: "cmd small " + (cls || ""), onclick, disabled: !can("sim_command") }, label); }
+
+  // ---------------------------------------------------------------- auth
+  function showLogin() {
+    $("app").classList.add("hidden"); $("pwchange-view").classList.add("hidden"); $("login-view").classList.remove("hidden");
+  }
+  async function afterLogin(sess) {
+    S.csrf = sess.csrf_token; S.user = sess.username; S.perms = sess.permissions || [];
+    if (sess.must_change_password) {
+      $("login-view").classList.add("hidden"); $("pwchange-view").classList.remove("hidden"); return;
+    }
+    $("login-view").classList.add("hidden"); $("pwchange-view").classList.add("hidden"); $("app").classList.remove("hidden");
+    $("who").textContent = `${sess.username} (${sess.role}${sess.commissioning ? ", commissioning" : ""})`;
+    route(); refresh();
+  }
+  $("login-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    try {
+      const r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: f.get("username"), password: f.get("password") }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "login failed");
+      ev.target.reset(); $("login-error").textContent = "";
+      afterLogin(await api("GET", "/api/auth/session"));
+    } catch (e) { $("login-error").textContent = e.message; }
+  });
+  $("pw-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    try {
+      await api("POST", "/api/auth/password", { old_password: f.get("old"), new_password: f.get("new") });
+      ev.target.reset(); toast("Password changed. Log in again."); showLogin();
+    } catch (e) { $("pw-error").textContent = e.message; }
+  });
+  $("logout").addEventListener("click", async () => { try { await api("POST", "/api/auth/logout"); } catch (e) {} showLogin(); });
+
+  // ---------------------------------------------------------------- routing / polling
+  function route() {
+    S.view = (location.hash || "#overview").slice(1);
+    document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + S.view));
+    document.querySelectorAll(".view").forEach(v => v.classList.toggle("hidden", v.id !== "v-" + S.view));
+    refresh();
+  }
+  window.addEventListener("hashchange", route);
+
+  let busy = false;
+  async function refresh() {
+    if (busy || $("app").classList.contains("hidden")) return;
+    busy = true;
+    try {
+      S.status = await api("GET", "/api/status");
+      S.lastOk = Date.now(); S.cfgVersion = S.status.config_version; S.tz = S.status.timezone;
+      setStale(false);
+      renderBanner();
+      const fn = VIEWS[S.view]; if (fn) await fn();
+    } catch (e) {
+      if (String(e.message) !== "not authenticated") setStale(true);
+    } finally { busy = false; }
+  }
+  function setStale(stale) {
+    S.stale = stale;
+    $("stale").classList.toggle("hidden", !stale);
+    document.body.classList.toggle("disabled-by-stale", stale);
+    if (stale) {
+      $("stale-age").textContent = S.lastOk ? ((Date.now() - S.lastOk) / 1000).toFixed(0) : "?";
+      document.querySelectorAll(".pill.ok").forEach(p => { p.className = "pill warn"; p.textContent = "STALE"; });
+    }
+  }
+  setInterval(() => { if (S.lastOk && Date.now() - S.lastOk > STALE_AFTER_MS) setStale(true); }, 1000);
+  setInterval(refresh, 1000);
+
+  function renderBanner() {
+    const st = S.status;
+    const b = $("banner"); b.textContent = st.banner;
+    b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
+    const t = st.twin, c = st.controller;
+    $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · controller ${c.state}/${c.phase}` +
+      ` · twin ${t.activity} ${t.speed}× sim ${t.sim_s.toFixed(1)} s · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
+      ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
+  }
+
+  // ---------------------------------------------------------------- views
+  const VIEWS = {};
+
+  VIEWS.overview = async function () {
+    const st = S.status, tw = await api("GET", "/api/twin"), pl = tw.snapshot.plant;
+    const devRows = Object.entries(st.devices).map(([k, d]) => h("tr", null, h("td", null, k), h("td", null, d.bus_id + " @" + d.address),
+      h("td", null, d.online ? pill("online", "ok") : pill("FAILED", "bad")), h("td", { class: "mono" }, d.last_error || ""),
+      h("td", null, d.last_ok_utc ? age(d.last_ok_utc) : "never")));
+    const al = await api("GET", "/api/alarms");
+    mount("v-overview",
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
+          h("dt", null, "Backend"), h("dd", null, st.profile, " ", pill("physical writes impossible", "ok")),
+          h("dt", null, "Controller"), h("dd", null, st.controller.state, " / ", st.controller.phase, st.controller.fault_reason ? " — " + st.controller.fault_reason : ""),
+          h("dt", null, "Twin"), h("dd", null, `${st.twin.activity} at ${st.twin.speed}×, run ${st.twin.run_id.slice(0, 12)}…, seed ${st.twin.seed}`),
+          h("dt", null, "Signal source"), h("dd", null, st.twin.source),
+          h("dt", null, "Acquisition task"), h("dd", null, st.acquisition_task.ok ? pill("running", "ok") : pill(st.acquisition_task.state, "bad")),
+          h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad"),
+            ` ${(st.storage.db_bytes / 1048576).toFixed(1)} MiB / budget ${(st.storage.budget_bytes / 1073741824).toFixed(1)} GiB`),
+          h("dt", null, "Live control"), h("dd", null, st.live_control))),
+        h("div", { class: "card" }, h("h2", null, "Water (simulated)"), h("dl", { class: "kv" },
+          ...Object.entries(pl.tanks).flatMap(([k, t]) => [h("dt", null, k), h("dd", null, `${t.volume_L.toFixed(1)} / ${t.capacity_L} L`)]),
+          ...Object.entries(pl.sector_flow_L_min).flatMap(([k, q]) => [h("dt", null, "Sector " + k), h("dd", null, q.toFixed(2) + " L/min")]),
+          ...Object.entries(pl.pumps).flatMap(([k, p]) => [h("dt", null, "Pump " + k), h("dd", null, `requested ${p.requested ? "ON" : "OFF"}, speed ${(p.speed * 100).toFixed(0)} %${p.fault ? " FAULT " + p.fault : ""}`)]),
+          h("dt", null, "Ledger residual"), h("dd", null, pl.ledger.residual_L.toExponential(2) + " L"))),
+        h("div", { class: "card" }, h("h2", null, `Active alarms (${al.open.length})`),
+          al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
+            h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"), h("td", null, o.acknowledged ? "ack" : "unack"))))) : h("p", { class: "muted" }, "None"))),
+      h("div", { class: "card" }, h("h2", null, "Devices (each polled and reported independently)"),
+        h("table", null, h("thead", null, h("tr", null, ["Device", "Bus/address", "Health", "Last error", "Last OK age"].map(x => h("th", null, x)))), h("tbody", null, devRows))));
+  };
+
+  // ------------------------------------------------ digital twin
+  function schematic(pl, ctrl) {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 1000 520"); svg.setAttribute("class", "schematic");
+    svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Simulated hydraulic schematic (DEMO topology)");
+    function e(tag, a, txt) { const x = document.createElementNS(NS, tag); for (const k in a) x.setAttribute(k, a[k]); if (txt != null) x.textContent = txt; svg.appendChild(x); return x; }
+    function tank(x, y, w, hgt, name, t) {
+      const frac = Math.max(0, Math.min(1, t.volume_L / t.capacity_L));
+      e("rect", { x, y: y + hgt * (1 - frac), width: w, height: hgt * frac, class: "water" });
+      e("rect", { x, y, width: w, height: hgt, class: "tank-wall" });
+      e("text", { x: x + w / 2, y: y - 8, "text-anchor": "middle" }, name);
+      e("text", { x: x + w / 2, y: y + hgt + 16, "text-anchor": "middle" }, `${t.volume_L.toFixed(1)} L (${(frac * 100).toFixed(0)} %)`);
+    }
+    const flowing = q => q > 0.05;
+    const anyPump = Object.values(pl.pumps).some(p => p.speed > 0.05);
+    // pipes
+    e("path", { d: "M170 330 H260", class: "pipe" + (anyPump ? " flow" : "") });
+    e("path", { d: "M90 60 V120", class: "pipe" + (pl.fill_flow_L_min > 0.05 ? " flow" : "") });
+    const pumps = Object.entries(pl.pumps);
+    pumps.forEach(([k, p], i) => {
+      const y = 250 + i * 80;
+      e("path", { d: `M260 330 V${y} H300`, class: "pipe" + (p.speed > 0.05 ? " flow" : "") });
+      e("path", { d: `M360 ${y} H420 V330`, class: "pipe" + (p.speed > 0.05 ? " flow" : "") });
+      e("circle", { cx: 330, cy: y, r: 22, class: "equip-act", "fill-opacity": 0.2 + 0.8 * p.speed });
+      e("circle", { cx: 330, cy: y, r: 26, class: "equip-req " + (p.requested ? "req-on" : "req-off") });
+      e("text", { x: 330, y: y + 4, "text-anchor": "middle" }, k);
+      if (p.fault) e("text", { x: 330, y: y + 42, "text-anchor": "middle", class: "fault-mark" }, "⚠ " + p.fault);
+    });
+    const secs = Object.keys(pl.sector_flow_L_min);
+    secs.forEach((s, i) => {
+      const y = 120 + i * 260, q = pl.sector_flow_L_min[s], v = pl.valves[s];
+      e("path", { d: `M420 330 V${y} H500`, class: "pipe" + (flowing(q) ? " flow" : "") });
+      e("polygon", { points: `500,${y - 14} 500,${y + 14} 540,${y} `, class: "equip-act", "fill-opacity": 0.2 + 0.8 * v.position });
+      e("polygon", { points: `580,${y - 14} 580,${y + 14} 540,${y}`, class: "equip-act", "fill-opacity": 0.2 + 0.8 * v.position });
+      e("rect", { x: 496, y: y - 18, width: 88, height: 36, class: "equip-req " + (v.requested ? "req-on" : "req-off"), fill: "none" });
+      e("text", { x: 540, y: y - 24, "text-anchor": "middle" }, `Valve ${s} ${(v.position * 100).toFixed(0)} %`);
+      if (v.fault) e("text", { x: 540, y: y + 34, "text-anchor": "middle", class: "fault-mark" }, "⚠ " + v.fault);
+      e("text", { x: 430, y: y + 34 }, `${q.toFixed(2)} L/min (demand ${pl.sector_demand_L_min[s].toFixed(2)})`);
+    });
+    // channels
+    const chans = Object.entries(pl.channel_flow_L_min);
+    chans.forEach(([c, q], i) => {
+      const sIdx = Number(c) <= 6 ? 0 : 1, base = 120 + sIdx * 260;
+      const off = (sIdx === 0 ? i : i - 6) * 16 - 48;
+      e("path", { d: `M584 ${base} H620 V${base + off} H900`, class: "pipe" + (flowing(q) ? " flow" : ""), "stroke-width": 4 });
+      e("text", { x: 905, y: base + off + 4 }, `ch${c}`);
+    });
+    tank(30, 120, 140, 300, "Reservoir", pl.tanks.reservoir);
+    e("text", { x: 100, y: 52, "text-anchor": "middle" }, `Fill valve ${(pl.valves.FILL.position * 100).toFixed(0)} %${pl.valves.FILL.fault ? " ⚠ " + pl.valves.FILL.fault : ""}`);
+    const rt = pl.tanks.return_tank;
+    e("text", { x: 760, y: 470 }, `Return tank ${rt.volume_L.toFixed(1)} / ${rt.capacity_L} L · in transit ${pl.transit_L.toFixed(2)} L · transfer ${pl.return_transfer_L_min.toFixed(1)} L/min`);
+    e("text", { x: 760, y: 492 }, `Spill ${(pl.ledger.spill_L.reservoir + pl.ledger.spill_L.return_tank).toFixed(2)} L · consumed ${pl.ledger.consumption_L.toFixed(2)} L`);
+    e("text", { x: 300, y: 500 }, `Controller ${ctrl.state} / ${ctrl.phase}${ctrl.fault_reason ? " — " + ctrl.fault_reason : ""}`);
+    e("text", { x: 300, y: 24 }, "DEMO topology (synthetic). Ring/box = requested state (solid on, dashed off); fill = actual.");
+    return svg;
+  }
+
+  VIEWS.twin = async function () {
+    const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
+    if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
+    const tc = (action, extra) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), action);
+    const sel = h("select", { id: "scn" }, S.scenarios.map(s => h("option", { value: s.name }, s.name)));
+    const fsel = (kind, ids, faults) => {
+      const id = h("select", null, ids.map(x => h("option", { value: x }, x)));
+      const f = h("select", null, h("option", { value: "" }, "no fault"), faults.map(x => h("option", { value: x }, x)));
+      return h("div", { class: "row" }, h("span", null, kind), id, f, cbtn("Apply", () => act("POST", "/api/twin/actuator-fault", { kind, ident: id.value, fault: f.value || null }, "fault applied")));
+    };
+    const lg = pl.ledger;
+    mount("v-twin",
+      h("div", { class: "card" }, h("div", { class: "row" },
+        cbtn("Run", () => tc("run")), cbtn("Pause", () => tc("pause")), cbtn("Step", () => tc("step")),
+        ...[1, 10, 60].map(sp => cbtn(sp + "×", () => tc("speed", { speed: sp }), tw.speed === sp ? "" : "ghost")),
+        cbtn("Reset run", () => confirm("Start a new simulation run? History remains.") && tc("reset"), "ghost"),
+        h("span", { class: "muted" }, `${tw.activity} · ${tw.speed}× · t=${sn.sim_s.toFixed(1)} s · tick ${sn.tick} · run ${sn.run_id.slice(0, 14)}…`)),
+        h("div", { class: "row" }, h("label", null, "Scenario preset", sel), cbtn("Load scenario (new run)", () => act("POST", "/api/twin/scenario", { name: sel.value }, "scenario loaded")),
+          h("span", { class: "muted" }, tw.scenario ? "Active: " + tw.scenario : ""))),
+      h("div", { class: "card" }, schematic(pl, sn.controller)),
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h3", null, "Mass ledger (L)"), h("dl", { class: "kv" },
+          ...[["initial accounted", lg.initial_accounted_L], ["external supply", lg.external_supply_L], ["consumption", lg.consumption_L],
+             ["spill reservoir", lg.spill_L.reservoir], ["spill return", lg.spill_L.return_tank], ["returned to tank", lg.returned_to_tank_L],
+             ["transferred", lg.transferred_to_reservoir_L], ["unmet demand", lg.unmet_demand_L], ["residual", lg.residual_L]]
+            .flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: "mono" }, k === "residual" ? v.toExponential(3) : v.toFixed(3))]),
+          h("dt", null, "delivered by sector"), h("dd", { class: "mono" }, Object.entries(lg.delivered_by_sector_L).map(([k, v]) => `${k}: ${v.toFixed(3)}`).join("  ")))),
+        h("div", { class: "card" }, h("h3", null, "Actuator faults (change plant dynamics)"),
+          fsel("pump", Object.keys(pl.pumps), ["NO_RUN", "NO_FLOW", "STUCK_ON"]),
+          fsel("valve", Object.keys(pl.valves), ["STUCK_CLOSED", "STUCK_OPEN"]),
+          h("div", { class: "row" }, cbtn("Stall acquisition", () => tc("acq_stall"), "ghost"), cbtn("Resume acquisition", () => tc("acq_resume"), "ghost")),
+          h("p", { class: "muted" }, "Sensor overrides are on the I/O test bench; they change observations only, never tank volumes.")),
+        h("div", { class: "card" }, h("h3", null, "Simulation parameters (DEMO, validated)"),
+          h("details", null, h("summary", null, "Show parameters and virtual tag map"),
+            h("pre", { class: "mono" }, JSON.stringify(tw.params, null, 1)),
+            h("table", null, h("tbody", null, tw.mapping.map(m => h("tr", null, h("td", null, m.point), h("td", null, m.signal), h("td", null, m.provenance)))))))));
+  };
+
+  // ------------------------------------------------ I/O bench
+  VIEWS.io = async function () {
+    const d = await api("GET", "/api/points");
+    const ioTest = d.source === "IO_TEST";
+    const groups = d.devices.map(g => {
+      const rows = g.points.map(p => {
+        const s = p.sample || {};
+        let ctl = null;
+        if (p.kind === "DO") ctl = h("span", null, cbtn("ON", () => cmd(p.id, true)), " ", cbtn("OFF", () => cmd(p.id, false), "ghost"));
+        else if (ioTest && p.kind === "DI") ctl = h("span", null, cbtn("Inject 1", () => act("POST", "/api/io/inject", { point: p.id, raw: true })), " ", cbtn("Inject 0", () => act("POST", "/api/io/inject", { point: p.id, raw: false }), "ghost"));
+        else if (ioTest && p.kind === "AI") { const inp = h("input", { type: "number", min: 0, max: 65535, step: 1, style: "width:90px", placeholder: "raw" }); ctl = h("span", null, inp, " ", cbtn("Inject", () => act("POST", "/api/io/inject", { point: p.id, raw: Number(inp.value) }))); }
+        else if (!ioTest) {
+          const inp = h("input", { style: "width:80px", placeholder: p.kind === "DI" ? "0/1" : "raw" });
+          ctl = h("span", null, inp, " ", cbtn("Override", () => {
+            const reason = prompt("Reason for override (recorded):"); if (!reason) return;
+            const raw = p.kind === "DI" ? inp.value === "1" || inp.value === "true" : Number(inp.value);
+            act("POST", "/api/io/override", { point: p.id, raw, reason }, "override set");
+          }), s.override ? cbtn("Clear", () => act("POST", "/api/io/override/clear", { point: p.id }, "override cleared"), "ghost") : null);
+        }
+        return h("tr", null, h("td", { class: "mono" }, p.id), h("td", null, p.label || h("span", { class: "muted" }, p.mapping ? "" : "UNMAPPED")),
+          h("td", { class: "mono" }, "0x" + p.register_address.toString(16).padStart(4, "0")), h("td", null, p.mode || ""),
+          h("td", { class: "mono" }, s.raw == null ? "—" : String(s.raw) + (s.raw_unit && s.raw_unit !== "bool" ? " " + s.raw_unit : "")),
+          h("td", { class: "mono" }, s.value == null ? "—" : num(s.value) + (s.unit ? " " + s.unit : "")),
+          h("td", null, qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
+          h("td", { class: "muted" }, s.override ? `override by ${s.override.owner}: ${s.override.reason} (base ${s.override.base_raw})` : (s.reason || "")),
+          h("td", null, age(s.acquired_utc)), h("td", null, ctl));
+      });
+      return h("div", { class: "card" },
+        h("div", { class: "row" }, h("h3", null, `${g.device_uid} — ${g.model} (SKU ${g.sku}) · ${g.bus_id} @ ${g.address}`),
+          g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad"),
+          cbtn(g.online ? "Simulate timeout" : "Restore", () => act("POST", "/api/io/device-fault", { device_uid: g.device_uid, fault: g.online ? "TIMEOUT" : null }), "ghost")),
+        h("table", null, h("thead", null, h("tr", null, ["Point", "Label", "Zero-based addr", "Mode", "Raw", "Scaled", "Quality/origin", "Detail", "Age", "VIRTUAL control"].map(x => h("th", null, x)))),
+          h("tbody", null, rows)));
+    });
+    mount("v-io",
+      h("div", { class: "card" }, h("div", { class: "row" },
+        h("strong", null, "VIRTUAL I/O — these controls can only reach simulated modules."),
+        h("span", null, "Signal source: ", pill(d.source)),
+        cbtn("Use IO_TEST (raw injection)", () => act("POST", "/api/io/source", { source: "IO_TEST" }, "source IO_TEST"), "ghost"),
+        cbtn("Use TWIN (process model)", () => act("POST", "/api/io/source", { source: "TWIN" }, "source TWIN"), "ghost")),
+        h("p", { class: "muted" }, ioTest ? "IO_TEST: process control is inactive; injected raw values and DO commands do not drive the plant." :
+          "TWIN: inputs derive from the model; overrides take precedence until cleared and are shown with owner and base value. DO ON requires MANUAL.")),
+      groups);
+  };
+
+  // ------------------------------------------------ control
+  VIEWS.control = async function () {
+    const c = await api("GET", "/api/controller"), d = await api("GET", "/api/points");
+    const st = s => act("POST", "/api/controller/state", { target: s }, s);
+    const mapped = d.devices.flatMap(g => g.points).filter(p => p.kind === "DO" && p.mapping);
+    mount("v-control",
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h2", null, "Controller (simulation only)"), h("dl", { class: "kv" },
+          h("dt", null, "State"), h("dd", null, pill(c.state, c.state === "FAULT_LOCKOUT" ? "bad" : c.state === "AUTO" ? "ok" : "")),
+          h("dt", null, "Phase"), h("dd", null, c.phase, ` since ${num(c.phase_since_s, 1)} s`),
+          h("dt", null, "Sector / pump"), h("dd", null, `${c.sector} / ${c.selected_pump}`),
+          h("dt", null, "Fault"), h("dd", null, c.fault_reason || "none"),
+          h("dt", null, "This sector"), h("dd", null, `irrigated ${num(c.irrigated_s, 1)} s, ~${num(c.delivered_L_observed, 2)} L observed`)),
+          h("div", { class: "row" }, cbtn("MANUAL", () => st("MANUAL")), cbtn("AUTO (simulation)", () => st("AUTO")), cbtn("STOP", () => st("STOPPED"), "danger"),
+            h("button", { class: "cmd small ghost", disabled: !can("lockout_reset"), onclick: () => act("POST", "/api/controller/reset", undefined, "reset") }, "Reset lockout")),
+          h("p", { class: "muted" }, c.policy_note + ". Physical AUTO is unavailable in this release.")),
+        h("div", { class: "card" }, h("h2", null, "Permissives (last precheck)"),
+          h("table", null, h("tbody", null, Object.entries(c.permissives || {}).map(([k, v]) => h("tr", null, h("td", null, k), h("td", null, v ? pill("OK", "ok") : pill("FAIL", "bad"))))))),
+        h("div", { class: "card" }, h("h2", null, "Virtual equipment (MANUAL)"),
+          h("table", null, h("tbody", null, mapped.map(p => h("tr", null, h("td", null, p.mapping.signal), h("td", { class: "mono" }, p.id),
+            h("td", null, p.sample && p.sample.value ? pill("requested ON", "ok") : pill("requested OFF")),
+            h("td", null, cbtn("ON", () => cmd(p.id, true)), " ", cbtn("OFF", () => cmd(p.id, false), "ghost")))))))),
+      h("div", { class: "card" }, h("h2", null, "Phase history"),
+        h("table", null, h("thead", null, h("tr", null, ["sim s", "state", "phase", "reason", "actor"].map(x => h("th", null, x)))),
+          h("tbody", null, c.history.slice().reverse().map(t => h("tr", null, h("td", null, num(t.sim_s, 1)), h("td", null, t.to_state), h("td", null, t.to_phase), h("td", null, t.reason), h("td", null, t.actor)))))),
+      h("div", { class: "card" }, h("h2", null, "Completed sector cycles"),
+        h("table", null, h("tbody", null, c.cycles.slice().reverse().map(x => h("tr", null, h("td", null, x.sector), h("td", null, `end ${num(x.end_sim_s, 1)} s`), h("td", null, `${num(x.irrigated_s, 1)} s`), h("td", null, `~${num(x.delivered_L_observed, 2)} L observed`)))))));
+  };
+
+  // ------------------------------------------------ trends
+  VIEWS.trends = async function () {
+    if (!S.allPoints) { const d = await api("GET", "/api/points"); S.allPoints = d.devices.flatMap(g => g.points); }
+    const end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000);
+    const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
+    const tr = await api("GET", "/api/trends?" + q);
+    const series = S.trendSel.map(pid => {
+      const meta = S.allPoints.find(p => p.id === pid) || {};
+      const pts = (tr.series[pid] || []).map(r => [Date.parse(r[0]), r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", r[8]]);
+      const unit = (tr.series[pid] || []).map(r => r[5]).find(u => u) || "";
+      return { name: `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`, digital: meta.kind !== "AI", points: pts, dashed: false };
+    });
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");
+    const picker = h("select", { multiple: true, size: 8 }, S.allPoints.map(p => h("option", { value: p.id, selected: S.trendSel.includes(p.id) }, `${p.id}${p.label ? " — " + p.label : ""}`)));
+    picker.addEventListener("change", () => { S.trendSel = Array.from(picker.selectedOptions).map(o => o.value).slice(0, 8); refresh(); });
+    const rng = h("select", null, [5, 10, 30, 120, 720].map(m => h("option", { value: m, selected: m === S.trendMin }, m + " min")));
+    rng.addEventListener("change", () => { S.trendMin = Number(rng.value); refresh(); });
+    const an = await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()));
+    const legend = h("div", { class: "legend" });
+    mount("v-trends",
+      h("div", { class: "card" }, h("div", { class: "row" }, h("label", null, "Points (max 8)", picker), h("label", null, "Range", rng),
+        h("a", { href: "/api/export.csv?" + q, download: "aquacrop-samples.csv" }, "Export CSV (complete, paginated)")),
+        svg, legend, tr.truncated ? h("p", { class: "error" }, `Truncated at ${tr.limit} rows per point — narrow the range.`) : null),
+      h("div", { class: "card" }, h("h3", null, "Runtime / volume estimates (from sampled history; coverage disclosed)"),
+        h("table", null, h("thead", null, h("tr", null, ["Signal", "Kind", "Origin", "Estimate", "Coverage"].map(x => h("th", null, x)))),
+          h("tbody", null, Object.entries(an.estimates).flatMap(([sig, e]) => Object.entries(e.by_origin).map(([o, v]) =>
+            h("tr", null, h("td", null, sig), h("td", null, e.kind), h("td", null, oBadge(o)), h("td", null, num(v.estimate, 2)), h("td", null, (v.coverage * 100).toFixed(0) + " %")))))),
+        h("p", { class: "muted" }, an.note)));
+    const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz });
+    legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, "■ " + l.name)));
+  };
+
+  // ------------------------------------------------ alarms/events
+  VIEWS.alarms = async function () {
+    const al = await api("GET", "/api/alarms"), ev = await api("GET", "/api/events?limit=200"), ch = await api("GET", "/api/commands/history?limit=100");
+    const occRow = o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")), h("td", null, o.rule_id), h("td", { class: "mono" }, o.target),
+      h("td", null, o.message), h("td", null, o.active ? pill("ACTIVE", "bad") : pill("cleared")), h("td", null, o.acknowledged ? `ack ${o.ack_user}` : pill("UNACK", "warn")),
+      h("td", null, o.latched ? (o.reset_required ? pill("RESET REQUIRED", "warn") : "reset " + (o.reset_user || "")) : "—"),
+      h("td", null, fmtTime(o.first_seen_utc)), h("td", null, fmtTime(o.last_seen_utc)), h("td", { class: "mono" }, o.value == null ? "" : String(o.value)),
+      h("td", null, !o.closed && !o.acknowledged ? h("button", { class: "cmd small", disabled: !can("alarm_ack"), onclick: () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "acknowledged") }, "Ack") : null,
+        !o.closed && o.reset_required && !o.active && o.acknowledged && o.target !== "controller" ? h("button", { class: "cmd small ghost", disabled: !can("lockout_reset"), onclick: () => act("POST", "/api/alarms/reset", { rule_id: o.rule_id, target: o.target }, "reset") }, "Reset") : null));
+    const hdr = ["Sev", "Rule", "Target", "Message", "Condition", "Ack", "Latch/reset", "First", "Last", "Value", ""];
+    mount("v-alarms",
+      h("div", { class: "card" }, h("h2", null, "Open alarm occurrences"), h("p", { class: "muted" }, "Acknowledging never clears a condition or resets a lockout."),
+        h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.open.map(occRow)))),
+      h("div", { class: "card" }, h("h2", null, "Commands (incl. rejected / uncertain)"),
+        h("table", null, h("thead", null, h("tr", null, ["Time", "Actor", "Target", "Desired", "Origin", "Outcome", "Detail"].map(x => h("th", null, x)))),
+          h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
+            h("td", null, c.origin), h("td", null, pill(c.outcome, c.outcome === "READBACK_CONFIRMED" ? "ok" : c.outcome === "REJECTED" ? "warn" : "bad")), h("td", { class: "muted" }, c.detail || "")))))),
+      h("div", { class: "card" }, h("h2", null, "Events"),
+        h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc)), h("td", null, e.kind), h("td", null, e.actor || ""),
+          h("td", { class: "mono" }, JSON.stringify(e.payload).slice(0, 200))))))),
+      h("div", { class: "card" }, h("h2", null, "Alarm history (closed)"),
+        h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.history.map(occRow)))));
+  };
+
+  // ------------------------------------------------ settings
+  VIEWS.settings = async function () {
+    if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
+    const s = await api("GET", "/api/settings"), c = s.config;
+    S.settingsLoaded = true;
+    const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
+    const userForm = can("user_admin") ? (() => {
+      const u = h("input", { placeholder: "username" }), p = h("input", { type: "password", placeholder: "initial password (12+)" });
+      const r = h("select", null, ["viewer", "operator", "admin"].map(x => h("option", { value: x }, x)));
+      const cm = h("input", { type: "checkbox" });
+      return h("div", null, tbl(["User", "Role", "Commissioning", "Disabled", "Must change pw"], (s.users || []).map(x => [x.username, x.role, x.commissioning ? "yes" : "no", x.disabled ? "yes" : "no", x.must_change_password ? "yes" : "no"])),
+        h("div", { class: "row" }, u, p, r, h("label", null, h("span", null, "commissioning"), cm),
+          h("button", { class: "small", onclick: () => act("POST", "/api/users", { username: u.value, password: p.value, role: r.value, commissioning: cm.checked }, "user created") }, "Create user")));
+    })() : h("p", { class: "muted" }, "User administration requires the admin role.");
+    mount("v-settings",
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
+          h("dt", null, "Software"), h("dd", null, s.software_version), h("dt", null, "Python"), h("dd", null, s.python), h("dt", null, "Platform"), h("dd", null, s.platform),
+          h("dt", null, "Config"), h("dd", null, `${c.config_id}@${c.config_version} (${c.profile})`))),
+        h("div", { class: "card" }, h("h2", null, "Storage & backup"), h("dl", { class: "kv" },
+          h("dt", null, "DB size"), h("dd", null, (s.storage.db_bytes / 1048576).toFixed(2) + " MiB"), h("dt", null, "Free disk"), h("dd", null, (s.storage.free_bytes / 1073741824).toFixed(2) + " GiB"),
+          h("dt", null, "Retention"), h("dd", null, `${s.storage.retention_days} days (${s.storage.retention_provenance})`)),
+          h("button", { class: "cmd small", disabled: !can("backup"), onclick: () => act("POST", "/api/backup", undefined, "backup created") }, "Create backup now")),
+        h("div", { class: "card" }, h("h2", null, "Production status"), h("dl", { class: "kv" }, ...Object.entries(s.production_fields).flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)])),
+          h("p", { class: "muted" }, s.commissioning_evidence))),
+      h("div", { class: "card" }, h("h2", null, "Buses"), tbl(["Bus", "Kind", "Port", "Serial", "Poll s"], c.buses.map(b => [b.bus_id, b.kind, b.port, `${b.serial.baudrate} ${b.serial.bytesize}${b.serial.parity}${b.serial.stopbits}`, b.poll_interval_s]))),
+      h("div", { class: "card" }, h("h2", null, "Inventory"), tbl(["Device", "Bus", "Addr", "Model", "SKU", "Variant", "Revision evidence", "Firmware evidence"], c.devices.map(d => [d.device_uid, d.bus_id, d.address, d.model, d.sku, d.hardware_variant, d.revision_evidence || "none", d.firmware_evidence || "none"]))),
+      h("div", { class: "card" }, h("h2", null, "Scaling profiles"), tbl(["Profile", "Ver", "Status", "Raw range", "Eng range", "Valid raw"], c.scaling_profiles.map(p => [p.profile_id, p.version, p.status, `${p.raw_low}..${p.raw_high} ${p.input_unit}`, `${p.eng_low}..${p.eng_high} ${p.unit}`, `${p.valid_raw_min}..${p.valid_raw_max}`]))),
+      h("div", { class: "card" }, h("h2", null, "Alarm thresholds"), tbl(["Rule", "Kind", "Point", "Threshold", "Hysteresis", "Debounce s", "Severity", "Latch", "Provenance"], c.alarm_rules.map(r => [r.rule_id, r.kind, r.point, r.threshold, r.hysteresis, r.debounce_s, r.severity, r.latch, r.provenance]))),
+      h("div", { class: "card" }, h("h2", null, "Virtual mapping (SIMULATED) / physical mapping"), tbl(["Point", "Signal", "Note"], c.virtual_mapping.map(m => [m.point, m.signal, m.note])),
+        h("p", null, "Physical mapping: ", c.physical_mapping.length ? "" : "empty — no approved wiring or topology.")),
+      h("div", { class: "card" }, h("h2", null, "Users and roles"), userForm,
+        h("p", { class: "muted" }, "Proposed role rights: viewer reads; operator commands simulation and acknowledges; admin manages accounts/config. Commissioning is a separate flag that additionally needs an isolated setup and an expiring server-side lease. Production assignments need owner approval.")),
+      h("div", { class: "card" }, h("h2", null, "Change my password"), (() => {
+        const o = h("input", { type: "password", placeholder: "current" }), n = h("input", { type: "password", placeholder: "new (12+)" });
+        return h("div", { class: "row" }, o, n, h("button", { class: "small", onclick: async () => { const r = await act("POST", "/api/auth/password", { old_password: o.value, new_password: n.value }); if (r) showLogin(); } }, "Change"));
+      })()));
+  };
+
+  // ---------------------------------------------------------------- boot
+  api("GET", "/api/auth/session").then(afterLogin).catch(() => showLogin());
+})();

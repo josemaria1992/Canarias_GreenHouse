@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AquaCrop Greenhouse</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<div id="banner" class="banner sim" role="status" aria-live="polite">SIMULATION — DEMO MODEL</div>
+<div id="stale" class="stale hidden" role="alert">CONNECTION LOST — values below are STALE (<span id="stale-age">0</span> s old). Commands disabled.</div>
+
+<section id="login-view" class="login hidden">
+  <form id="login-form" class="card narrow">
+    <h1>AquaCrop greenhouse</h1>
+    <label>Username <input name="username" autocomplete="username" required maxlength="32"></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+    <button type="submit">Log in</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</section>
+
+<section id="pwchange-view" class="login hidden">
+  <form id="pw-form" class="card narrow">
+    <h2>Change password</h2>
+    <p class="muted">Your account requires a new password before you can operate.</p>
+    <label>Current password <input name="old" type="password" required autocomplete="current-password"></label>
+    <label>New password (12+ characters) <input name="new" type="password" required minlength="12" autocomplete="new-password"></label>
+    <button type="submit">Change password</button>
+    <p id="pw-error" class="error"></p>
+  </form>
+</section>
+
+<div id="app" class="hidden">
+  <header class="topbar">
+    <nav id="nav">
+      <a href="#overview">Overview</a>
+      <a href="#twin">Digital twin</a>
+      <a href="#io">I/O test bench</a>
+      <a href="#control">Control</a>
+      <a href="#trends">Trends</a>
+      <a href="#alarms">Alarms &amp; events</a>
+      <a href="#settings">Settings</a>
+    </nav>
+    <div class="who"><span id="who"></span> <button id="logout" class="ghost">Log out</button></div>
+  </header>
+  <div id="statusline" class="statusline"></div>
+  <main>
+    <section id="v-overview" class="view"></section>
+    <section id="v-twin" class="view"></section>
+    <section id="v-io" class="view"></section>
+    <section id="v-control" class="view"></section>
+    <section id="v-trends" class="view"></section>
+    <section id="v-alarms" class="view"></section>
+    <section id="v-settings" class="view"></section>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+</div>
+<script src="/static/chart.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

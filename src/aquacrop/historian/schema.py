@@ -19,7 +19,8 @@ CREATE TABLE sim_runs (run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seed I
     config_id TEXT NOT NULL, config_version TEXT NOT NULL, started_utc TEXT NOT NULL, provenance TEXT NOT NULL,
     reason TEXT);
 CREATE TABLE cycles (cycle_pk INTEGER PRIMARY KEY, cycle_id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT,
-    sim_s REAL, persisted_utc TEXT NOT NULL, n_points INTEGER NOT NULL);
+    sim_s REAL, persisted_utc TEXT NOT NULL, n_points INTEGER NOT NULL,
+    cadence_s REAL, cadence_basis TEXT);
 CREATE TABLE samples (id INTEGER PRIMARY KEY, cycle_pk INTEGER NOT NULL REFERENCES cycles(cycle_pk),
     point_id TEXT NOT NULL, acquired_utc TEXT NOT NULL, persisted_utc TEXT NOT NULL, sequence INTEGER NOT NULL,
     quality TEXT NOT NULL, reason TEXT, raw_value REAL, raw_type TEXT, raw_unit TEXT, value REAL, unit TEXT,

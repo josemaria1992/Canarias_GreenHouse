@@ -171,6 +171,7 @@ class HistorianSettings(_Strict):
     db_path: str = "var/aquacrop.sqlite3"
     acquisition_interval_s: float = Field(default=3.0, ge=0.2)    # real wall-time cadence
     sim_history_stride_s: float = Field(default=1.0, gt=0)         # simulation-time cadence
+    sim_history_min_wall_interval_s: float = Field(default=0.5, gt=0)  # caps write rate at high speed
     retention_days: float | None = 7.0      # DEMO proposal; production policy TBD
     db_budget_bytes: int = 2 * 1024**3
     free_space_reserve_bytes: int = 1024**3

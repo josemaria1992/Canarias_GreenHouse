@@ -141,7 +141,8 @@ class Historian:
                                         (run_id, self.session_id, seed, self.cfg.config_id, self.cfg.config_version,
                                          utc_iso(), provenance, reason)))
 
-    def write_cycle(self, cycle_id: str, samples: list[Sample], *, run_id: str | None, sim_s: float | None) -> None:
+    def write_cycle(self, cycle_id: str, samples: list[Sample], *, run_id: str | None, sim_s: float | None,
+                    cadence_s: float | None = None, cadence_basis: str | None = None) -> None:
         persisted = utc_iso()
         rows = [(s.point_id, _iso(s.acquired_utc), persisted, s.sequence, s.quality.value, s.reason, _num(s.raw_value),
                  type(s.raw_value).__name__ if s.raw_value is not None else None, s.raw_unit, _num(s.value), s.unit,
@@ -150,8 +151,9 @@ class Historian:
                  _num(s.last_good_value), _iso(s.last_good_utc)) for s in samples]
 
         def op(c: sqlite3.Connection):
-            cur = c.execute("INSERT INTO cycles(cycle_id,session_id,run_id,sim_s,persisted_utc,n_points)"
-                            " VALUES(?,?,?,?,?,?)", (cycle_id, self.session_id, run_id, sim_s, persisted, len(rows)))
+            cur = c.execute("INSERT INTO cycles(cycle_id,session_id,run_id,sim_s,persisted_utc,n_points,cadence_s,"
+                            "cadence_basis) VALUES(?,?,?,?,?,?,?,?)", (cycle_id, self.session_id, run_id, sim_s,
+                                                                      persisted, len(rows), cadence_s, cadence_basis))
             pk = cur.lastrowid
             c.executemany("INSERT INTO samples(cycle_pk,point_id,acquired_utc,persisted_utc,sequence,quality,reason,"
                           "raw_value,raw_type,raw_unit,value,unit,calibration_ref,origin,source_profile,config_version,"
@@ -161,7 +163,8 @@ class Historian:
         self.submit(op, droppable=True)
 
     def cycle(self, run, samples: list[Sample]) -> None:  # SimulationRuntime HistorySink
-        self.write_cycle(f"{run.run_id}:{run.tick}", samples, run_id=run.run_id, sim_s=run.sim_s)
+        self.write_cycle(f"{run.run_id}:{run.tick}", samples, run_id=run.run_id, sim_s=run.sim_s,
+                         cadence_s=run.history_stride_s, cadence_basis="SIMULATION_TIME")
 
     def alarms(self, occurrences: list[AlarmOccurrence]) -> None:
         if not occurrences:

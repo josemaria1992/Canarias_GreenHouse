@@ -92,6 +92,7 @@ class SimulationRuntime:
         self._prev_valid: dict[str, Any] = {}
         self._cycle = 0
         self.stride_ticks = max(1, int(round(cfg.historian.sim_history_stride_s / self.params.dt_s)))
+        self._next_history_tick = self.stride_ticks
         self.invariant_failures: list[InvariantFailure] = []
         self.max_abs_residual_L = 0.0
         self.events: list[dict] = []   # recent events for UI (bounded); durable copy goes to audit
@@ -280,6 +281,18 @@ class SimulationRuntime:
         self._record("ACQ_STALL", actor, {"stalled": self.acquisition_stalled})
         self._event("ACQUISITION_STALL" if stalled else "ACQUISITION_RESUMED", {}, actor)
 
+    @property
+    def history_stride_s(self) -> float:
+        return self.stride_ticks * self.params.dt_s
+
+    def set_history_stride(self, stride_s: float, reason: str) -> None:
+        """Change the simulation-time history cadence explicitly (never a silent omission)."""
+        ticks = max(1, int(round(stride_s / self.params.dt_s)))
+        if ticks != self.stride_ticks:
+            self.stride_ticks = ticks
+            self._next_history_tick = self.tick + ticks
+            self._event("HISTORY_STRIDE_CHANGED", {"stride_sim_s": self.history_stride_s, "reason": reason}, "system")
+
     def schedule(self, at_s: float, kind: str, actor: str, payload: dict) -> None:
         """Queue a scenario input to be applied before the tick at simulated time `at_s`."""
         tick = int(round(at_s / self.params.dt_s))
@@ -402,7 +415,8 @@ class SimulationRuntime:
             self._acquisition_age_alarm()
             self._plausibility()
             self.controller.tick(self.sim_s, self.view())
-            if self.history is not None and self.tick % self.stride_ticks == 0:
+            if self.history is not None and self.tick >= self._next_history_tick:
+                self._next_history_tick = self.tick + self.stride_ticks
                 self.history.cycle(self, list(self.samples.values()))
                 self.history.alarms(self.alarms.take_dirty())
             r = self.plant.ledger_residual_L()
