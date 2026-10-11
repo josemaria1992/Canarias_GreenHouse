@@ -63,7 +63,8 @@ class SimulationRuntime:
     def __init__(self, cfg: InstallationConfig, *, audit: AuditSink | None = None,
                  history: HistorySink | None = None, session_id: str = "session_local",
                  run_id: str | None = None, source: SignalSource = SignalSource.TWIN,
-                 seed: int | None = None):
+                 seed: int | None = None,
+                 start_permitted: Callable[[], tuple[bool, str | None]] | None = None):
         if cfg.twin is None:
             raise ValueError("configuration has no twin section")
         self.cfg = cfg
@@ -82,6 +83,8 @@ class SimulationRuntime:
         self.commands = CommandService(cfg, self.backend, self.audit, self._policy, lambda: self.controller.state)
         self.controller = Controller(self.params, issue=self._issue_signal, alarms=self.alarms,
                                      emit=self._event, mapped_outputs_on=self._mapped_on)
+        self.start_permitted = start_permitted or (lambda: (True, None))
+        self.controller.start_permitted = self.start_permitted
         self.journal: list[JournalEntry] = []
         self._seq = 0
         self._scheduled: list[tuple[int, int, str, str, dict]] = []
@@ -142,6 +145,10 @@ class SimulationRuntime:
 
     def _policy(self, cmd: OutputCommand) -> str | None:
         st, ph = self.controller.state, self.controller.phase
+        if cmd.desired:
+            ok, why = self.start_permitted()
+            if not ok:
+                return f"new starts inhibited: {why}"
         if cmd.origin in (CommandOrigin.CONTROLLER, CommandOrigin.SYSTEM):
             return None
         if st == ControllerState.AUTO:

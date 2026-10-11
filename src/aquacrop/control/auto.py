@@ -59,6 +59,7 @@ class Controller:
     alarms: AlarmEngine
     emit: Callable[[str, dict, str | None], None]
     mapped_outputs_on: Callable[[], list[str]]       # signals whose virtual DO coil is ON
+    start_permitted: Callable[[], tuple[bool, str | None]] = lambda: (True, None)  # durable audit/storage
     state: ControllerState = ControllerState.STOPPED
     phase: Phase = Phase.IDLE
     phase_since_s: float = 0.0
@@ -225,6 +226,7 @@ class Controller:
         if self.phase == Phase.PRECHECK:
             perm = {
                 "config_valid": True,
+                "durable_audit_ok": self.start_permitted()[0],
                 "reservoir_volume_ok": (obs.get("reservoir.level_transmitter") or 0) >= a.min_reservoir_L,
                 "low_level_inactive": not obs.get("reservoir.low_level"),
                 "required_observations_healthy": True,
