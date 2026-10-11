@@ -1,0 +1,41 @@
+# TEST FIXTURE ONLY. A HARDWARE_READ_ONLY profile pointed at the in-memory `aquafake://` serial bus
+# from tests/fakes. The VERIFIED scaling below is a test stand-in, not commissioning evidence.
+schema_version: 1
+config_id: hw-fake
+config_version: "test-1"
+profile: HARDWARE_READ_ONLY
+label: "REAL — READ ONLY (test double bus)"
+buses:
+  - bus_id: rs485_a
+    kind: rtu
+    port: "aquafake://BUSNAME"
+    port_evidence: "test double"
+    serial: {baudrate: 9600, parity: N, bytesize: 8, stopbits: 1, timeout_s: 0.05, read_retries: 1}
+    poll_interval_s: 0.2
+devices:
+  - device_uid: relay_A
+    bus_id: rs485_a
+    address: 1
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: "26517"
+  - device_uid: analog_A
+    bus_id: rs485_a
+    address: 2
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: "25821"
+    hardware_variant: STANDARD
+    ai:
+      1: {mode: "3", scaling: test_level}
+scaling_profiles:
+  - profile_id: test_level
+    version: 1
+    status: VERIFIED
+    input_unit: uA
+    raw_low: 4000
+    raw_high: 20000
+    eng_low: 0
+    eng_high: 100
+    unit: "%"
+    valid_raw_min: 3800
+    valid_raw_max: 20500
+    evidence: "test fixture"

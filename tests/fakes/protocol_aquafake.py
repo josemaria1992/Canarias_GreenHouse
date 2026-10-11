@@ -17,7 +17,7 @@ BUSES: dict[str, "FakeBus"] = {}
 
 
 def crc(data: bytes) -> bytes:
-    return struct.pack("<H", FramerRTU.compute_CRC(data))
+    return struct.pack(">H", FramerRTU.compute_CRC(data))
 
 
 class FakeDevice:

@@ -161,6 +161,7 @@ class CommandOrigin(str, enum.Enum):
     SCENARIO = "SCENARIO"
     REPLAY = "REPLAY"
     SYSTEM = "SYSTEM"             # stop / fault sequences
+    BENCH = "BENCH"               # operator command under an armed bench lease (real coil)
 
 
 class Outcome(str, enum.Enum):

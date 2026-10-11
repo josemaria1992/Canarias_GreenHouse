@@ -34,5 +34,5 @@ aquacrop = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg", "configs/*.yaml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-q"
