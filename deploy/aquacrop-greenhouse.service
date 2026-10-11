@@ -1,0 +1,47 @@
+# AquaCrop greenhouse platform — systemd unit (Raspberry Pi OS / Debian).
+# Install: see docs/operations/service.md. Paths assume a release layout
+#   /opt/aquacrop/releases/<version>/venv  with /opt/aquacrop/current -> releases/<version>
+# The unit never enables writes: a restart always comes up STOPPED (simulation) or
+# REAL — READ ONLY (hardware profile). Bench leases are in memory only and are never restored.
+[Unit]
+Description=AquaCrop greenhouse platform
+Documentation=file:///opt/aquacrop/current/docs/operations/service.md
+# Local acquisition, simulation and local login must not wait for the network (no network-online).
+After=local-fs.target time-sync.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=aquacrop
+Group=aquacrop
+# Serial access only through the dialout group; no root.
+SupplementaryGroups=dialout
+# Private environment: AQUACROP_CONFIG only. There are no write/bench switches to set here.
+EnvironmentFile=/etc/aquacrop/aquacrop.env
+WorkingDirectory=/var/lib/aquacrop
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop serve --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop --host 127.0.0.1 --port 8000 --log-level warning
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+# Hardening
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aquacrop
+StateDirectory=aquacrop
+StateDirectoryMode=0700
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Bounded logs go to journald; size limits are set in journald.conf (see docs/operations/service.md).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

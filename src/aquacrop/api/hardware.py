@@ -129,7 +129,7 @@ class HardwareService:
         arm, end = historian_persistence(hist)
         self.gate = BenchGate(cfg, session_id, arm, end, self._preflight,
                               lambda kind, payload, actor: hist.event(kind, payload, actor=actor), monotonic)
-        self.commands = CommandService(cfg, self.backend, hist, self.gate.authorize, lambda: ControllerState.STOPPED)
+        self.commands = CommandService(cfg, self.backend, hist, self._policy, lambda: ControllerState.STOPPED)
         self.workers = {b.bus_id: BusWorker(b.bus_id, b.poll_interval_s, self.poll_bus, monotonic=monotonic)
                         for b in cfg.buses}
         self._sync_authorizer()
@@ -234,6 +234,15 @@ class HardwareService:
             self.backend.relay_modes[uid] = modes
             if not modes.all_normal:
                 return f"{uid}: relay modes {modes.describe()} are not all NORMAL"
+        return None
+
+    def _policy(self, cmd: OutputCommand) -> str | None:
+        if (why := self.gate.authorize(cmd)) is not None:
+            return why
+        if cmd.desired:
+            ok, why = self.hist.can_accept_starts()
+            if not ok:
+                return f"storage not durable ({why}): ON refused"
         return None
 
     def _sync_authorizer(self) -> None:

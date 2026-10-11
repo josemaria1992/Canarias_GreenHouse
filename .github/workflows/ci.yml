@@ -1,0 +1,80 @@
+# CI for the AquaCrop platform. Software checks only: nothing here touches hardware, and a green
+# run is not hardware or commissioning evidence.
+name: ci
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+        python: ["3.11", "3.12", "3.13"]
+        include:
+          - os: ubuntu-24.04-arm      # ARM64 Linux, closest hosted match to the CM4 (not a CM4)
+            python: "3.11"
+          - os: ubuntu-24.04-arm
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install locked dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pip install --no-deps -e .
+          python -m pip check
+      - name: Tests
+        run: python -m pytest -q -p no:warnings
+      - name: Headless demo verification
+        run: |
+          python -m aquacrop demo verify --config demo-48 --seed 42
+          python -m aquacrop demo verify --config demo-24 --seed 42
+      - name: Simulation never loads serial libraries
+        shell: python
+        run: |
+          import sys, aquacrop.cli, aquacrop.api.app
+          aquacrop.cli.build_parser()
+          bad = [m for m in sys.modules if m.split(".")[0] in ("serial", "pymodbus")]
+          assert not bad, bad
+
+  wheel:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m build --wheel -o dist .
+      - name: Install wheel outside the source tree and exercise it
+        shell: bash
+        run: |
+          W="$RUNNER_TEMP/wheeltest"
+          python -m venv "$W"
+          PY="$W/bin/python"; [ -x "$PY" ] || PY="$W/Scripts/python.exe"
+          "$PY" -m pip install --require-hashes -r requirements.lock
+          "$PY" -m pip install --no-deps dist/*.whl
+          "$PY" -m pip check
+          cp scripts/check_installed_wheel.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP" && "$PY" check_installed_wheel.py
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-24.04'
+        with:
+          name: wheel
+          path: dist/*.whl

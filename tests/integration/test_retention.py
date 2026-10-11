@@ -1,5 +1,6 @@
 """AT-OPS-02 (v1->v2 migration), AT-OPS-03 (storage pressure, archive, retention)."""
 import gzip
+from pathlib import Path
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -44,7 +45,7 @@ def test_archive_verify_and_tamper_detection(tmp_path, cfg24):
     assert verify_archive(a["path"], a["manifest_sha256"])["ok"]
     with pytest.raises(FileExistsError):
         create_archive(h, lo, hi, tmp_path / "arch")
-    p = tmp_path / "arch" / a["path"].split("/")[-1] / "samples.csv.gz"
+    p = Path(a["path"]) / "samples.csv.gz"
     with gzip.open(p, "at") as f:
         f.write("tampered\n")
     v = verify_archive(a["path"], a["manifest_sha256"])

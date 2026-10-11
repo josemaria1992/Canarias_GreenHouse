@@ -515,3 +515,23 @@ def test_physical_edges_overrun_and_gaps_are_events(fake_bus, tmp_path):
     svc.stop()
     hist.close()
     assert bus.write_frames() == []
+
+
+def test_bench_on_refused_when_storage_degraded(fake_bus, tmp_path):
+    from aquacrop.api.hardware import HardwareService
+    from aquacrop.historian.writer import Historian
+    cfg, bus, relay, ai = fake_bus
+    hist = Historian(tmp_path / "h.sqlite3", cfg, "sess-s")
+    svc = HardwareService(cfg, hist, "sess-s")
+    svc.start()
+    lease = svc.arm(principal(), confirmation=CONFIRMATION_PHRASE, setup_description="isolated bench test",
+                    allowlist=["relay_A.DO1"], duration_s=600)
+    hist.fail_writes = True                       # every commit now fails (disk error)
+    with pytest.raises(Exception):
+        hist.flush()
+    rec = svc.bench_command(principal(), target="relay_A.DO1", desired=True, reason="t", lease_id=lease.lease_id)
+    assert rec.outcome == Outcome.REJECTED and "storage" in rec.detail
+    assert bus.write_frames() == []
+    hist.fail_writes = False
+    svc.stop()
+    hist.close()

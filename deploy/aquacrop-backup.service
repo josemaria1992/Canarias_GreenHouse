@@ -1,0 +1,19 @@
+# One consistent backup (SQLite backup API) with manifest, then verification. Local only;
+# the off-device destination is TBD (owner policy). Runs alongside the server without stopping it.
+[Unit]
+Description=AquaCrop historian backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=aquacrop
+Group=aquacrop
+EnvironmentFile=/etc/aquacrop/aquacrop.env
+WorkingDirectory=/var/lib/aquacrop
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop backup create --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop --destination /var/lib/aquacrop/backups
+ExecStartPost=/opt/aquacrop/current/venv/bin/python -m aquacrop backup verify --backup /var/lib/aquacrop/backups
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/aquacrop
