@@ -34,3 +34,5 @@ scaling_profiles: []
 virtual_mapping: []
 physical_mapping: []
 alarm_rules: []
+historian:
+  db_path: aquacrop-hardware.sqlite3     # never share a database with the simulation profile

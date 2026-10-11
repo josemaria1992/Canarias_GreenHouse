@@ -18,6 +18,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -25,7 +26,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .. import __version__
 from ..config.catalog import CATALOG
 from ..config.schema import InstallationConfig
-from ..domain.model import ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
+from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
 from ..historian.backup import create_backup
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
@@ -118,6 +119,23 @@ class ScenarioIn(Body):
     name: str
 
 
+class BenchArmIn(Body):
+    confirmation: str = Field(max_length=64)
+    setup_description: str = Field(max_length=500)
+    allowlist: list[str] = Field(max_length=64)
+    duration_s: int
+
+
+class BenchCommandIn(Body):
+    backend: Literal["REAL_BENCH"]
+    config_version: str
+    lease_id: str = Field(max_length=64)
+    target: str
+    desired: bool
+    request_id: str = Field(min_length=8, max_length=64)
+    reason: str = Field(default="bench test", max_length=200)
+
+
 class UserIn(Body):
     username: str
     password: str
@@ -138,6 +156,16 @@ def _escape_csv(v):
     return v
 
 
+def _check_namespace(hist: Historian, cfg: InstallationConfig, session_id: str) -> None:
+    """One database per profile: simulated history and limits never mix with a real installation."""
+    rows = hist.query("SELECT DISTINCT profile, config_id FROM process_sessions WHERE session_id != ?", (session_id,))
+    other = sorted({r["profile"] for r in rows} - {cfg.profile.value})
+    if other:
+        hist.close()
+        raise ValueError(f"database {hist.db_path} belongs to profile(s) {', '.join(other)}; "
+                         f"use a separate state directory or db_path for {cfg.profile.value}")
+
+
 def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_host: str = "127.0.0.1",
                session_id: str | None = None) -> FastAPI:
     state_dir = Path(state_dir)
@@ -151,21 +179,35 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     accounts = Accounts(hist, load_or_create_secret(state_dir / "secret.key"),
                         idle_minutes=sec.session_idle_minutes, absolute_hours=sec.session_absolute_hours)
     limiter = RateLimiter()
-    svc = SimulationService(cfg, hist, session_id)
+    _check_namespace(hist, cfg, session_id)
+    is_sim = cfg.profile == AccessPolicy.SIMULATED
+    if is_sim:
+        svc = SimulationService(cfg, hist, session_id)
+    elif cfg.profile == AccessPolicy.HARDWARE_READ_ONLY:
+        from .hardware import HardwareService   # loads pymodbus only for a real profile
+        svc = HardwareService(cfg, hist, session_id)
+    else:
+        hist.close()
+        raise ValueError(f"profile {cfg.profile.value} is not served by this release")
     if reconciled:
         hist.event("COMMANDS_RECONCILED", {"request_ids": reconciled}, actor="system")
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = asyncio.create_task(svc.run_forever())
+        task = asyncio.create_task(svc.run_forever()) if is_sim else None
+        if not is_sim:
+            svc.start()
         hist.event("PROCESS_STARTED", {"session_id": session_id, "config_id": cfg.config_id,
                                        "profile": cfg.profile.value, "version": __version__}, actor="system")
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            else:
+                await run_in_threadpool(svc.stop)   # releases ports; sends nothing
             # Shutdown issues no output commands; it only records the event and closes storage.
             hist.event("PROCESS_STOPPING", {"session_id": session_id}, actor="system")
             hist.close()
@@ -214,6 +256,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         raise HTTPException(status, reason)
 
     PUBLIC = {"/api/health", "/api/auth/login"}
+    SIM_ONLY = ("/api/twin", "/api/scenarios", "/api/io", "/api/controller")   # and their sub-paths
+    SIM_ONLY_EXACT = {"/api/commands"}                                          # /api/commands/history is shared
 
     @app.middleware("http")
     async def auth_gate(request: Request, call_next):
@@ -244,6 +288,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             if not limiter.hit(f"mut:{p.session_hash}", sec.mutation_rate_per_minute):
                 return deny(429, "rate limit", p.username)
         request.state.principal = p
+        if not is_sim and (path in SIM_ONLY_EXACT or any(path == x or path.startswith(x + "/") for x in SIM_ONLY)):
+            return JSONResponse({"detail": f"simulation-only endpoint; this installation is {cfg.profile.value}"},
+                                status_code=409)
+        if is_sim and path.startswith("/api/bench/") and request.method in MUTATING:
+            if path != "/api/bench/lease/revoke" and not p.can(Perm.BENCH_ARM):
+                return deny(403, "commissioning permission required", p.username)
+            return JSONResponse({"detail": "bench writes are unavailable in a SIMULATED profile; the hardware "
+                                           "read-only profile is required, and bench endpoints never target "
+                                           "simulation"}, status_code=409)
         return await call_next(request)
 
     def require(perm: Perm):
@@ -257,6 +310,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     def rt():
         return svc.runtime
+
+    def _samples() -> dict:
+        return rt().samples if is_sim else svc.samples
+
+    def _health(uid: str):
+        return rt().backend.health(uid) if is_sim else svc.backend.health(uid)
+
+    def _alarm_engine():
+        return rt().alarms if is_sim else svc.alarms
 
     # ------------------------------------------------------------------ static UI
     @app.get("/", include_in_schema=False)
@@ -297,6 +359,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.post("/api/auth/logout")
     async def logout(response: Response, p: Principal = Depends(require(Perm.READ))):
         accounts.revoke(p.session_hash, "logout")
+        if not is_sim:
+            svc.gate.session_ended(p.session_hash)
         response.delete_cookie(COOKIE, path="/")
         hist.event("LOGOUT", {}, actor=p.username)
         return {"ok": True}
@@ -316,6 +380,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             raise HTTPException(422, str(e))
         response.delete_cookie(COOKIE, path="/")
         hist.event("PASSWORD_CHANGED", {"sessions_revoked": True}, actor=p.username)
+        if not is_sim:
+            svc.gate.session_ended(p.session_hash)
         return {"ok": True, "detail": "password changed; all sessions revoked, log in again"}
 
     @app.get("/api/openapi.json", include_in_schema=False)
@@ -332,12 +398,14 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     def _freshness() -> dict:
         now = datetime.now(timezone.utc)
-        ages = [(now - s.acquired_utc).total_seconds() for s in rt().samples.values()]
+        ages = [(now - s.acquired_utc).total_seconds() for s in list(_samples().values())]
         return {"server_utc": now.isoformat(), "newest_sample_age_s": min(ages) if ages else None,
                 "oldest_sample_age_s": max(ages) if ages else None}
 
     @app.get("/api/status")
     async def status(p: Principal = Depends(require(Perm.READ))):
+        if not is_sim:
+            return _hw_status()
         r = rt()
         ok_store, why = hist.can_accept_starts()
         devs = {}
@@ -367,6 +435,34 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "freshness": _freshness(), "physical_writes": "IMPOSSIBLE (simulation backend)",
                 "live_control": "UNAVAILABLE in this release"}
 
+    def _devices_view() -> dict:
+        devs = {}
+        for d in cfg.devices:
+            h = _health(d.device_uid)
+            devs[d.device_uid] = {"bus_id": d.bus_id, "address": d.address, "model": d.model.value,
+                                  "online": h.online, "consecutive_failures": h.consecutive_failures,
+                                  "last_ok_utc": h.last_ok_utc.isoformat() if h.last_ok_utc else None,
+                                  "last_error": h.last_error}
+        return devs
+
+    def _hw_status() -> dict:
+        ok_store, why = hist.can_accept_starts()
+        alarms = list(svc.alarms.open.values())
+        lease = svc.lease_view()
+        return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
+                "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
+                "timezone": cfg.site.timezone, "controller": None, "twin": None,
+                "devices": _devices_view(), "relay_modes": svc.relay_mode_view(), "bench_lease": lease,
+                "storage": hist.storage() | {"ok": ok_store, "reason": why},
+                "historian": {k: v for k, v in hist.health.items()}, "acquisition_task": svc.task_health(),
+                "alarms": {"active": sum(o.active for o in alarms),
+                           "unacknowledged": sum(not o.acknowledged for o in alarms),
+                           "reset_required": sum(o.reset_required for o in alarms)},
+                "freshness": _freshness(),
+                "physical_writes": "BENCH LEASE ARMED (allowlisted coils only)" if lease else
+                                   "NONE (read-only: no bench lease armed)",
+                "live_control": "UNAVAILABLE in this release"}
+
     # ------------------------------------------------------------------ points / twin
     def _point_meta(pid: PointId) -> dict:
         dev = cfg.device(pid.device_uid)
@@ -374,7 +470,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         meta = {"id": str(pid), "device_uid": dev.device_uid, "bus_id": dev.bus_id, "kind": pid.kind.value,
                 "channel": pid.channel, "register_address": pid.register_address,
                 "label": dev.label_for(pid), "model": dev.model.value,
-                "mapping": {"signal": m.signal, "provenance": "SIMULATED"} if m else None}
+                "mapping": ({"signal": m.signal, "provenance": "SIMULATED"} if m and is_sim else None)}
         if pid.kind == PointKind.AI:
             ch = dev.ai_channel(pid.channel)
             meta |= {"mode": ch.mode.name, "scaling": ch.scaling, "hardware_variant": dev.hardware_variant.value}
@@ -390,15 +486,16 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/points")
     async def points(p: Principal = Depends(require(Perm.READ))):
-        r = rt()
+        samples = _samples()
         groups = []
         for d in cfg.devices:
-            pts = [_point_meta(x) | {"sample": _sample(r.samples.get(str(x)))} for x in d.point_ids()]
-            h = r.backend.health(d.device_uid)
+            pts = [_point_meta(x) | {"sample": _sample(samples.get(str(x)))} for x in d.point_ids()]
+            h = _health(d.device_uid)
             groups.append({"device_uid": d.device_uid, "label": d.label, "model": CATALOG[d.model].vendor_name,
                            "sku": d.sku, "bus_id": d.bus_id, "address": d.address, "online": h.online,
                            "last_error": h.last_error, "points": pts})
-        return {"freshness": _freshness(), "source": r.backend.source.value, "devices": groups}
+        return {"freshness": _freshness(), "source": rt().backend.source.value if is_sim else "REAL",
+                "devices": groups}
 
     @app.get("/api/twin")
     async def twin(p: Principal = Depends(require(Perm.READ))):
@@ -519,19 +616,32 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     # ------------------------------------------------------------------ alarms / events
     @app.get("/api/alarms")
     async def alarms(p: Principal = Depends(require(Perm.READ)), limit: int = Query(200, ge=1, le=1000)):
-        r = rt()
         hist_rows = hist.query("SELECT json FROM alarm_occurrences WHERE closed=1 ORDER BY updated_utc DESC LIMIT ?",
                                (limit,))
-        return {"open": [o.to_dict() for o in r.alarms.open.values()],
+        return {"open": [o.to_dict() for o in list(_alarm_engine().open.values())],
                 "history": [json.loads(x[0]) for x in hist_rows]}
 
     @app.post("/api/alarms/ack")
     async def ack(body: AlarmRefIn, p: Principal = Depends(require(Perm.ALARM_ACK))):
+        if not is_sim:
+            return _guard(lambda: _hw_alarm("ack", p.username, body))
         return _guard(lambda: rt().acknowledge(p.username, body.rule_id, body.target).to_dict())
 
     @app.post("/api/alarms/reset")
     async def alarm_reset(body: AlarmRefIn, p: Principal = Depends(require(Perm.LOCKOUT_RESET))):
+        if not is_sim:
+            return _guard(lambda: _hw_alarm("reset", p.username, body))
         return _guard(lambda: rt().reset_alarm(p.username, body.rule_id, body.target).to_dict())
+
+    def _hw_alarm(action: str, user: str, body: AlarmRefIn) -> dict:
+        with svc.lock:
+            occ = svc.alarms.open.get((body.rule_id, body.target))
+            if occ is None:
+                raise KeyError(f"no open alarm {body.rule_id}/{body.target}")
+            out = (svc.alarms.acknowledge if action == "ack" else svc.alarms.reset)(occ.occurrence_id, user)
+            dirty = svc.alarms.take_dirty()
+        hist.alarms(dirty)
+        return out.to_dict()
 
     def _range(start: str | None, end: str | None, default_minutes: int = 30) -> tuple[str, str]:
         e = datetime.fromisoformat(end) if end else datetime.now(timezone.utc)
@@ -555,7 +665,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             o.pop("payload_json")
             if not p.can(Perm.EXPORT_AUDIT) and o["kind"] in ("LOGIN", "LOGOUT", "REQUEST_REJECTED"):
                 o["payload"] = {"redacted": True}
-        return {"events": out, "truncated": len(rows) > limit, "recent_runtime": rt().events[-50:]}
+        return {"events": out, "truncated": len(rows) > limit, "recent_runtime": rt().events[-50:] if is_sim else []}
 
     @app.get("/api/commands/history")
     def command_history(p: Principal = Depends(require(Perm.READ)), limit: int = Query(200, ge=1, le=2000)):
@@ -742,6 +852,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                               cur[0]["commissioning"] if body.commissioning is None else body.commissioning)
         if body.disabled is not None:
             accounts.set_disabled(username, body.disabled)
+        if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username and \
+                (body.disabled or body.commissioning is False or body.role is not None):
+            svc.revoke(f"user changed by {p.username}", p.username)
         hist.event("USER_UPDATED", {"username": username} | body.model_dump(mode="json", exclude_none=True),
                    actor=p.username)
         return {"ok": True}
@@ -749,6 +862,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.post("/api/users/{username}/revoke-sessions")
     def revoke_sessions(username: str, p: Principal = Depends(require(Perm.USER_ADMIN))):
         accounts.revoke_user_sessions(username, f"revoked by {p.username}")
+        if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
+            svc.revoke(f"sessions revoked by {p.username}", p.username)
         hist.event("SESSIONS_REVOKED", {"username": username}, actor=p.username)
         return {"ok": True}
 
@@ -760,9 +875,42 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         hist.event("BACKUP_CREATED", man, actor=p.username)
         return man
 
+    # ------------------------------------------------------------------ bench (real, read-only profile)
+    @app.get("/api/bench")
+    async def bench_state(p: Principal = Depends(require(Perm.READ))):
+        if is_sim:
+            return {"available": False, "reason": "SIMULATED profile: bench writes do not exist here"}
+        from ..control.bench import CONFIRMATION_PHRASE, MAX_LEASE_S, MIN_LEASE_S
+        return {"available": True, "lease": svc.lease_view(), "relay_modes": svc.relay_mode_view(),
+                "confirmation_phrase": CONFIRMATION_PHRASE, "duration_range_s": [MIN_LEASE_S, MAX_LEASE_S],
+                "relay_outputs": [str(x) for x in cfg.all_points() if x.kind == PointKind.DO],
+                "can_arm": p.can(Perm.BENCH_ARM)}
+
     @app.post("/api/bench/lease")
-    async def bench_lease(p: Principal = Depends(require(Perm.BENCH_ARM))):
-        raise HTTPException(409, "bench writes are unavailable in a SIMULATED profile; the hardware read-only "
-                                 "profile is required, and this endpoint never targets simulation")
+    async def bench_arm(body: BenchArmIn, p: Principal = Depends(require(Perm.BENCH_ARM))):
+        from ..control.bench import BenchRefused
+        try:
+            lease = await run_in_threadpool(lambda: svc.arm(p, confirmation=body.confirmation,
+                                                            setup_description=body.setup_description,
+                                                            allowlist=body.allowlist, duration_s=body.duration_s))
+        except BenchRefused as e:
+            raise HTTPException(409, str(e))
+        return lease.public(svc._mono())
+
+    @app.post("/api/bench/lease/revoke")
+    async def bench_revoke(p: Principal = Depends(require(Perm.READ))):
+        # Any signed-in user may end a lease early: ending only stops further writes and sends nothing.
+        return {"revoked": svc.revoke(f"revoked by {p.username}", p.username)}
+
+    @app.post("/api/bench/command")
+    async def bench_command(body: BenchCommandIn, p: Principal = Depends(require(Perm.BENCH_ARM))):
+        if body.config_version != cfg.config_version:
+            raise HTTPException(409, "configuration version mismatch")
+        rec = await run_in_threadpool(lambda: svc.bench_command(p, target=body.target, desired=body.desired,
+                                                                reason=body.reason, lease_id=body.lease_id,
+                                                                request_id=body.request_id))
+        return {"request_id": rec.command.request_id, "outcome": rec.outcome.value, "detail": rec.detail,
+                "readback": rec.readback, "history": [(t.isoformat(), o.value, d) for t, o, d in rec.history],
+                "note": "coil readback is not actuator proof"}
 
     return app

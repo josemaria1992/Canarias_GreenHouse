@@ -73,6 +73,8 @@
   // ---------------------------------------------------------------- auth
   function showLogin() {
     $("app").classList.add("hidden"); $("pwchange-view").classList.add("hidden"); $("login-view").classList.remove("hidden");
+    const b = $("banner"); b.textContent = "Operating mode is shown after sign-in"; b.className = "banner neutral";
+    S.armPanel = null;
   }
   async function afterLogin(sess) {
     S.csrf = sess.csrf_token; S.user = sess.username; S.perms = sess.permissions || [];
@@ -123,7 +125,9 @@
       S.lastOk = Date.now(); S.cfgVersion = S.status.config_version; S.tz = S.status.timezone;
       setStale(false);
       renderBanner();
-      const fn = VIEWS[S.view]; if (fn) await fn();
+      const ae = document.activeElement;   // don't rebuild a view while the user is typing in it
+      const typing = ae && ae.closest && ae.closest("#v-" + S.view) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
+      const fn = VIEWS[S.view]; if (fn && !typing) await fn();
     } catch (e) {
       if (String(e.message) !== "not authenticated") setStale(true);
     } finally { busy = false; }
@@ -144,6 +148,13 @@
     const st = S.status;
     const b = $("banner"); b.textContent = st.banner;
     b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
+    const real = st.profile !== "SIMULATED";
+    document.querySelectorAll('#nav a[href="#twin"], #nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real));
+    if (real) {
+      $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${st.physical_writes}` +
+        ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
+      return;
+    }
     const t = st.twin, c = st.controller;
     $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · controller ${c.state}/${c.phase}` +
       ` · twin ${t.activity} ${t.speed}× sim ${t.sim_s.toFixed(1)} s · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
@@ -153,7 +164,88 @@
   // ---------------------------------------------------------------- views
   const VIEWS = {};
 
+  function isReal() { return S.status && S.status.profile !== "SIMULATED"; }
+  function devTable(st) {
+    return h("table", null, h("thead", null, h("tr", null, ["Device", "Bus/address", "Health", "Failures", "Last error", "Last OK age"].map(x => h("th", null, x)))),
+      h("tbody", null, Object.entries(st.devices).map(([k, d]) => h("tr", null, h("td", null, k), h("td", null, d.bus_id + " @" + d.address),
+        h("td", null, d.online ? pill("online", "ok") : pill("FAILED", "bad")), h("td", null, String(d.consecutive_failures)),
+        h("td", { class: "mono" }, d.last_error || ""), h("td", null, d.last_ok_utc ? age(d.last_ok_utc) : "never")))));
+  }
+
+  async function hwOverview() {
+    const st = S.status, al = await api("GET", "/api/alarms"), lease = st.bench_lease;
+    mount("v-overview",
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
+          h("dt", null, "Profile"), h("dd", null, st.profile),
+          h("dt", null, "Physical writes"), h("dd", null, lease ? pill(st.physical_writes, "bad") : pill(st.physical_writes, "ok")),
+          h("dt", null, "Bus workers"), h("dd", null, st.acquisition_task.ok ? pill("polling", "ok") : pill(st.acquisition_task.state, "bad")),
+          h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad")),
+          h("dt", null, "Live control"), h("dd", null, st.live_control))),
+        h("div", { class: "card" }, h("h2", null, "Relay channel modes"),
+          h("table", null, h("tbody", null, Object.entries(st.relay_modes).map(([k, m]) => h("tr", null, h("td", null, k),
+            h("td", { class: "mono" }, m ? m.join(" ") : "not read"),
+            h("td", null, m && m.every(x => x === "NORMAL") ? pill("all NORMAL", "ok") : pill("bench writes blocked", "warn"))))))),
+        h("div", { class: "card" }, h("h2", null, `Active alarms (${al.open.length})`),
+          al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
+            h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"))))) : h("p", { class: "muted" }, "None"))),
+      h("div", { class: "card" }, h("h2", null, "Devices (each polled and reported independently)"), devTable(st)));
+  }
+
+  async function hwIO() {
+    const d = await api("GET", "/api/points"), b = await api("GET", "/api/bench"), lease = b.lease;
+    const allowed = new Set(lease ? lease.allowlist : []);
+    const bench = (target, desired) => act("POST", "/api/bench/command", { backend: "REAL_BENCH", config_version: S.cfgVersion,
+      lease_id: lease.lease_id, target, desired, request_id: rid(), reason: "bench test" })
+      .then(r => r && toast(`REAL ${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, r.outcome !== "READBACK_CONFIRMED"));
+    const groups = d.devices.map(g => h("div", { class: "card" },
+      h("div", { class: "row" }, h("h3", null, `${g.device_uid} — ${g.model} (SKU ${g.sku}) · ${g.bus_id} @ ${g.address}`),
+        g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad")),
+      h("table", null, h("thead", null, h("tr", null, ["Point", "Label", "Zero-based addr", "Mode", "Raw", "Scaled", "Quality/origin", "Detail", "Age", "Bench"].map(x => h("th", null, x)))),
+        h("tbody", null, g.points.map(p => {
+          const s = p.sample || {};
+          const ctl = p.kind === "DO" && allowed.has(p.id) && b.can_arm ? h("span", null,
+            h("button", { class: "cmd small danger", onclick: () => bench(p.id, true) }, "ON"), " ",
+            h("button", { class: "cmd small ghost", onclick: () => bench(p.id, false) }, "OFF")) : null;
+          return h("tr", null, h("td", { class: "mono" }, p.id), h("td", null, p.label || ""),
+            h("td", { class: "mono" }, "0x" + p.register_address.toString(16).padStart(4, "0")), h("td", null, p.mode || ""),
+            h("td", { class: "mono" }, s.raw == null ? "—" : String(s.raw) + (s.raw_unit && s.raw_unit !== "bool" ? " " + s.raw_unit : "")),
+            h("td", { class: "mono" }, s.value == null ? "—" : num(s.value) + (s.unit ? " " + s.unit : "")),
+            h("td", null, qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
+            h("td", { class: "muted" }, s.reason || ""), h("td", null, age(s.acquired_utc)), h("td", null, ctl));
+        })))));
+    let panel;
+    if (lease) {
+      panel = h("div", { class: "card armed" }, h("h2", null, "BENCH WRITES ARMED"),
+        h("p", null, `Lease for ${lease.username}, ${Math.round(lease.remaining_s)} s left. Allowlist: ${lease.allowlist.join(", ")}.`),
+        h("p", null, `Setup: ${lease.setup_description}`),
+        h("p", { class: "muted" }, "Coil readback is not actuator proof. Ending the lease sends nothing; outputs stay as they are."),
+        h("button", { class: "cmd danger", onclick: () => act("POST", "/api/bench/lease/revoke", {}, "lease ended") }, "End lease now"));
+    } else if (b.can_arm && S.armPanel) {
+      panel = S.armPanel;                  // keep typed values and ticked boxes across polls
+    } else if (b.can_arm) {
+      const conf = h("input", { placeholder: b.confirmation_phrase, autocomplete: "off", style: "width:320px" });
+      const setup = h("input", { placeholder: "describe the isolated bench setup", style: "width:420px" });
+      const dur = h("input", { type: "number", min: b.duration_range_s[0], max: b.duration_range_s[1], value: 600, style: "width:90px" });
+      const boxes = b.relay_outputs.map(id => ({ id, el: h("input", { type: "checkbox" }) }));
+      panel = h("div", { class: "card" }, h("h2", null, "Arm a bench lease (commissioning)"),
+        h("p", null, "Only on an isolated bench with every production load disconnected. Writes go to real relays."),
+        h("div", { class: "row" }, ...boxes.map(x => h("label", { class: "mono" }, x.el, " ", x.id))),
+        h("div", { class: "row" }, h("label", null, "Type: ", h("strong", null, b.confirmation_phrase), " ", conf)),
+        h("div", { class: "row" }, setup, h("label", null, "Duration (s) ", dur)),
+        h("button", { class: "cmd danger", onclick: () => act("POST", "/api/bench/lease", { confirmation: conf.value, setup_description: setup.value,
+          allowlist: boxes.filter(x => x.el.checked).map(x => x.id), duration_s: Number(dur.value) }, "lease armed") }, "Arm lease"));
+      S.armPanel = panel;
+    } else {
+      panel = h("div", { class: "card" }, h("strong", null, "REAL — READ ONLY."), " ",
+        h("span", { class: "muted" }, "Bench writes need a user with the commissioning permission to arm a lease."));
+    }
+    if (lease || !b.can_arm) S.armPanel = null;
+    mount("v-io", panel, groups);
+  }
+
   VIEWS.overview = async function () {
+    if (isReal()) return hwOverview();
     const st = S.status, tw = await api("GET", "/api/twin"), pl = tw.snapshot.plant;
     const devRows = Object.entries(st.devices).map(([k, d]) => h("tr", null, h("td", null, k), h("td", null, d.bus_id + " @" + d.address),
       h("td", null, d.online ? pill("online", "ok") : pill("FAILED", "bad")), h("td", { class: "mono" }, d.last_error || ""),
@@ -241,6 +333,7 @@
   }
 
   VIEWS.twin = async function () {
+    if (isReal()) return mount("v-twin", h("div", { class: "card" }, "The digital twin is available in the simulation profile only."));
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
     const tc = (action, extra) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), action);
@@ -280,6 +373,7 @@
 
   // ------------------------------------------------ I/O bench
   VIEWS.io = async function () {
+    if (isReal()) return hwIO();
     const d = await api("GET", "/api/points");
     const ioTest = d.source === "IO_TEST";
     const groups = d.devices.map(g => {
@@ -325,6 +419,7 @@
 
   // ------------------------------------------------ control
   VIEWS.control = async function () {
+    if (isReal()) return mount("v-control", h("div", { class: "card" }, "The controller exists only in simulation in this release."));
     const c = await api("GET", "/api/controller"), d = await api("GET", "/api/points");
     const st = s => act("POST", "/api/controller/state", { target: s }, s);
     const mapped = d.devices.flatMap(g => g.points).filter(p => p.kind === "DO" && p.mapping);

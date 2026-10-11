@@ -106,17 +106,23 @@ def cmd_serve(args) -> int:
         print("refusing to bind a non-loopback interface over plain HTTP. Bind 127.0.0.1 and publish through the "
               "documented TLS reverse proxy (or Tailscale Serve), then pass --behind-tls-proxy.", file=sys.stderr)
         return 2
-    if cfg.profile.value != "SIMULATED":
-        print("this build serves the SIMULATED profile; hardware read-only acquisition uses `diagnostics read` "
-              "until the hardware service lands (milestone 3)", file=sys.stderr)
+    if cfg.profile.value not in ("SIMULATED", "HARDWARE_READ_ONLY"):
+        print(f"profile {cfg.profile.value} is not served by this release", file=sys.stderr)
         return 2
+    if cfg.profile.value == "HARDWARE_READ_ONLY":
+        print("REAL — READ ONLY: polling only; bench writes need a commissioning user to arm a lease in the UI",
+              file=sys.stderr)
     try:
         locks = acquire_installation(sd, cfg)
     except OwnershipError as e:
         print(str(e), file=sys.stderr)
         return 4
     try:
-        app = create_app(cfg, state_dir=sd, bind_host=args.host if not args.behind_tls_proxy else "0.0.0.0")
+        try:
+            app = create_app(cfg, state_dir=sd, bind_host=args.host if not args.behind_tls_proxy else "0.0.0.0")
+        except Exception as e:   # e.g. wrong pymodbus version, database of another profile
+            print(f"cannot start: {e}", file=sys.stderr)
+            return 3
         uvicorn.run(app, host=args.host, port=args.port, workers=1, log_level=args.log_level,
                     proxy_headers=args.behind_tls_proxy, forwarded_allow_ips="127.0.0.1" if args.behind_tls_proxy else None)
     finally:
@@ -305,11 +311,8 @@ def build_parser() -> argparse.ArgumentParser:
     mg.add_argument("--legacy-db", required=True)
     mg.set_defaults(fn=cmd_migrate_v01)
 
-    try:
-        from .drivers.diagnostics import add_parser as add_diag
-        add_diag(sub)
-    except ImportError:
-        pass
+    from .drivers.diagnostics import add_parser as add_diag   # light: pymodbus loads only when run
+    add_diag(sub)
     return p
 
 

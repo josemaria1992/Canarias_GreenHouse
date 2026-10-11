@@ -13,6 +13,7 @@ body { margin: 0; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, s
 .banner { position: sticky; top: 0; z-index: 20; padding: 6px 16px; font-weight: 700; letter-spacing: .04em; color: #fff; text-align: center; }
 .banner.sim { background: var(--sim); }
 .banner.real { background: var(--real); }
+.banner.neutral { background: #555; }
 .banner.armed { background: var(--bad); }
 .stale { position: sticky; top: 30px; z-index: 19; background: #ffd27a; color: #3a2600; padding: 6px 16px; font-weight: 700; text-align: center; }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -22,6 +23,7 @@ nav a.active { background: var(--accent); color: #fff; }
 main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; overflow-x: auto; }
+.card.armed { border: 2px solid var(--bad); }
 .card h2, .card h3 { margin: 0 0 8px; font-size: 15px; }
 .narrow { max-width: 360px; margin: 10vh auto; display: flex; flex-direction: column; gap: 10px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
