@@ -1,0 +1,98 @@
+# SIMULATED DEMO fixture: 24 virtual points. Every quantity is a synthetic proposal,
+# not an engineering fact. Physical mapping is intentionally empty.
+schema_version: 1
+config_id: demo-24
+config_version: "2026-10-11.1"
+profile: SIMULATED
+label: "SIMULATION — DEMO MODEL (24 virtual points)"
+site:
+  name: "AquaCrop greenhouse (Malmö) — DEMO"
+  timezone: Europe/Stockholm
+  facts:
+    footprint: "approx. 90 x 45 m (owner brief 2026-10-11)"
+    channels: "13 hydroponic channels, two sectors (owner brief)"
+    topology: "TBD — requires operator confirmation"
+buses:
+  - bus_id: bus_sim_1
+    kind: virtual
+    poll_interval_s: 3.0
+devices:
+  - device_uid: relay_A
+    bus_id: bus_sim_1
+    address: 1
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: "26517"
+    label: "DEMO relay module A (virtual)"
+    do:
+      1: {label: "DEMO pump P1 command"}
+      2: {label: "DEMO pump P2 command"}
+      3: {label: "DEMO pump P3 command"}
+      4: {label: "DEMO sector S1 valve command"}
+      5: {label: "DEMO sector S2 valve command"}
+      6: {label: "DEMO reservoir fill valve command"}
+    di:
+      1: {label: "DEMO pump P1 run feedback"}
+      2: {label: "DEMO pump P2 run feedback"}
+      3: {label: "DEMO pump P3 run feedback"}
+      4: {label: "DEMO valve S1 open limit"}
+      5: {label: "DEMO valve S2 open limit"}
+      6: {label: "DEMO reservoir high-level switch"}
+      7: {label: "DEMO reservoir low-level switch"}
+      8: {label: "DEMO return tank high-level switch"}
+  - device_uid: analog_A
+    bus_id: bus_sim_1
+    address: 2
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: "25821"
+    hardware_variant: STANDARD
+    label: "DEMO analog module A (virtual)"
+    ai:
+      1: {label: "DEMO reservoir level transmitter", mode: "3", scaling: demo_level_reservoir}
+      2: {label: "DEMO sector S1 flow transmitter", mode: "3", scaling: demo_flow}
+      3: {label: "DEMO sector S2 flow transmitter", mode: "3", scaling: demo_flow}
+      4: {label: "DEMO return tank level transmitter", mode: "3", scaling: demo_level_return}
+scaling_profiles:
+  - {profile_id: demo_level_reservoir, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 1000, unit: L, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic demo transmitter span"}
+  - {profile_id: demo_level_return, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 200, unit: L, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic demo transmitter span"}
+  - {profile_id: demo_flow, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 30, unit: L/min, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic demo transmitter span"}
+virtual_mapping:
+  - {point: relay_A.DO1, signal: pump.P1.cmd}
+  - {point: relay_A.DO2, signal: pump.P2.cmd}
+  - {point: relay_A.DO3, signal: pump.P3.cmd}
+  - {point: relay_A.DO4, signal: valve.S1.cmd}
+  - {point: relay_A.DO5, signal: valve.S2.cmd}
+  - {point: relay_A.DO6, signal: valve.FILL.cmd, note: "explicit demo fill path for overflow scenario"}
+  - {point: relay_A.DI1, signal: pump.P1.running}
+  - {point: relay_A.DI2, signal: pump.P2.running}
+  - {point: relay_A.DI3, signal: pump.P3.running}
+  - {point: relay_A.DI4, signal: valve.S1.open_limit}
+  - {point: relay_A.DI5, signal: valve.S2.open_limit}
+  - {point: relay_A.DI6, signal: reservoir.high_level}
+  - {point: relay_A.DI7, signal: reservoir.low_level}
+  - {point: relay_A.DI8, signal: return_tank.high_level}
+  - {point: analog_A.AI1, signal: reservoir.level_transmitter}
+  - {point: analog_A.AI2, signal: sector.S1.flow_transmitter}
+  - {point: analog_A.AI3, signal: sector.S2.flow_transmitter}
+  - {point: analog_A.AI4, signal: return_tank.level_transmitter}
+physical_mapping: []
+alarm_rules:
+  - {rule_id: RESERVOIR_LEVEL_LOW, kind: LOW, point: analog_A.AI1, threshold: 100, hysteresis: 10, severity: WARNING}
+  - {rule_id: RESERVOIR_LEVEL_HIGH, kind: HIGH, point: analog_A.AI1, threshold: 950, hysteresis: 10, severity: WARNING}
+  - {rule_id: RESERVOIR_HIGH_SWITCH, kind: DI_ACTIVE, point: relay_A.DI6, severity: CRITICAL, latch: true, debounce_s: 0.5}
+  - {rule_id: RESERVOIR_LOW_SWITCH, kind: DI_ACTIVE, point: relay_A.DI7, severity: CRITICAL, debounce_s: 0.5}
+  - {rule_id: RETURN_TANK_HIGH_SWITCH, kind: DI_ACTIVE, point: relay_A.DI8, severity: WARNING, debounce_s: 0.5}
+twin:
+  provenance: DEMO
+  seed: 42
+historian:
+  db_path: var/demo-24.sqlite3
+  acquisition_interval_s: 3.0
+  sim_history_stride_s: 1.0
+  retention_days: 7
+  retention_provenance: DEMO

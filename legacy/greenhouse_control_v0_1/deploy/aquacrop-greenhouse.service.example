@@ -1,0 +1,25 @@
+# Replace EVERY <...> placeholder before installation. Example only.
+# sudo cp this file /etc/systemd/system/aquacrop-greenhouse.service
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now aquacrop-greenhouse
+[Unit]
+Description=AquaCrop greenhouse controller (prototype)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<LINUX_USERNAME>
+Group=<LINUX_GROUPNAME>
+WorkingDirectory=<FULL_APPLICATION_DIRECTORY>
+EnvironmentFile=<ABSOLUTE_PATH_TO_PRIVATE_ENV_FILE>
+ExecStart=<FULL_APPLICATION_DIRECTORY>/.venv/bin/python -m greenhouse --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+UMask=0077
+# To talk to /dev/ttyUSB* or /dev/ttyAMA*, grant this specific user access
+# to the relevant serial device with a suitable Linux group/udev rule.
+
+[Install]
+WantedBy=multi-user.target

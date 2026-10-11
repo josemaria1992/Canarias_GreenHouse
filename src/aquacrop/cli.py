@@ -9,11 +9,26 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .domain.model import new_id
+
+
+BUILTIN_CONFIGS = ("demo-48", "demo-24", "hardware-read-only.example")
+
+
+def resolve_config_path(path: str) -> Path:
+    """A filesystem path, or the name of a packaged fixture (works from an installed wheel)."""
+    p = Path(path)
+    if p.exists():
+        return p
+    if path in BUILTIN_CONFIGS:
+        from importlib import resources
+        return Path(str(resources.files("aquacrop") / "configs" / f"{path}.yaml"))
+    raise FileNotFoundError(f"config {path} not found (built-in names: {', '.join(BUILTIN_CONFIGS)})")
 
 
 def _cfg(path: str):
     from .config import load_config
-    return load_config(path)
+    return load_config(resolve_config_path(path))
 
 
 def _state_dir(args) -> Path:
@@ -45,7 +60,7 @@ def cmd_users_bootstrap(args) -> int:
     from .security.auth import Accounts, Role, load_or_create_secret
     cfg = _cfg(args.config)
     sd = _state_dir(args)
-    h = Historian(_db_path(cfg, sd), cfg, "cli_bootstrap")
+    h = Historian(_db_path(cfg, sd), cfg, new_id("cli_bootstrap"))
     try:
         acc = Accounts(h, load_or_create_secret(sd / "secret.key"), idle_minutes=30, absolute_hours=12)
         if acc.count_users() and not args.additional:
@@ -201,6 +216,33 @@ def cmd_backup_restore(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------------------------ v0.1 migration
+def cmd_migrate_v01(args) -> int:
+    from .historian.legacy_v01 import import_legacy
+    from .historian.writer import Historian
+    from .ownership import OwnershipError, OwnerLock, lock_name
+    cfg = _cfg(args.config)
+    sd = _state_dir(args)
+    try:
+        lk = OwnerLock(sd / lock_name("config", cfg.config_id)).acquire()
+    except OwnershipError:
+        print("stop the running server before migrating", file=sys.stderr)
+        return 4
+    h = Historian(_db_path(cfg, sd), cfg, new_id("cli_migrate"))
+    try:
+        res = import_legacy(args.legacy_db, h, sd / "backups")
+        h.event("LEGACY_V01_IMPORTED", {k: v for k, v in res.items() if k != "settings_recorded_not_applied"},
+                actor="cli")
+        print(json.dumps(res, indent=2))
+        return 0
+    except (ValueError, FileExistsError) as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+    finally:
+        h.close()
+        lk.release()
+
+
 # ------------------------------------------------------------------------------------------ parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aquacrop", description=f"AquaCrop greenhouse platform {__version__}")
@@ -216,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     v = c.add_parser("validate")
     v.add_argument("--config", required=True)
     v.set_defaults(fn=cmd_config_validate)
+    # (`--config` everywhere accepts a path or a packaged fixture name: demo-48, demo-24)
 
     u = sub.add_parser("users").add_subparsers(dest="sub", required=True)
     b = u.add_parser("bootstrap", help="create the first admin; no default credentials exist")
@@ -256,6 +299,11 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--config")
     br.add_argument("--state-dir", default="var")
     br.set_defaults(fn=cmd_backup_restore)
+
+    mg = sub.add_parser("migrate-v01", help="backup-first import of a v0.1 greenhouse.sqlite3")
+    common(mg)
+    mg.add_argument("--legacy-db", required=True)
+    mg.set_defaults(fn=cmd_migrate_v01)
 
     try:
         from .drivers.diagnostics import add_parser as add_diag
