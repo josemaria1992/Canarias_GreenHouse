@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 MIGRATIONS: dict[int, tuple[str, str]] = {
     1: ("initial AquaCrop v0.2 schema", """
@@ -53,6 +53,11 @@ CREATE TABLE bench_leases (lease_id TEXT PRIMARY KEY, username TEXT NOT NULL, se
     process_session_id TEXT NOT NULL, config_version TEXT NOT NULL, allowlist_json TEXT NOT NULL,
     loads_disconnected_confirmation TEXT NOT NULL, setup_description TEXT NOT NULL, created_utc TEXT NOT NULL,
     expires_utc TEXT NOT NULL, revoked_utc TEXT, revoke_reason TEXT);
+"""),
+    2: ("archive register for retention (prune only what is archived and verified)", """
+CREATE TABLE archives (archive_id TEXT PRIMARY KEY, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+    path TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, samples INTEGER NOT NULL, events INTEGER NOT NULL,
+    created_utc TEXT NOT NULL, verified_utc TEXT);
 """),
 }
 

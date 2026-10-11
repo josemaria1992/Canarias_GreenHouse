@@ -123,7 +123,7 @@ def test_migration_backup_first_and_no_downgrade(tmp_path):
     p = tmp_path / "m.sqlite3"
     con = connect(p)
     con.execute("CREATE TABLE legacy(x)")  # pre-existing data => backup must be taken
-    assert migrate(con, p) == [1]
+    assert migrate(con, p) == list(range(1, CURRENT_VERSION + 1))
     assert schema_version(con) == CURRENT_VERSION
     bk = con.execute("SELECT backup_path FROM migrations WHERE version=1").fetchone()[0]
     assert bk and (tmp_path / "backups").exists()

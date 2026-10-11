@@ -492,3 +492,26 @@ def test_at_mb_07_backoff_stops_traffic_then_recovers(fake_bus):
     ai.fault = None
     clock.t = h.backoff_until_monotonic + 0.01
     assert be.read_inputs("analog_A").ok and be.health("analog_A").consecutive_failures == 0
+
+
+def test_physical_edges_overrun_and_gaps_are_events(fake_bus, tmp_path):
+    from aquacrop.api.hardware import HardwareService
+    from aquacrop.historian.writer import Historian
+    cfg, bus, relay, ai = fake_bus
+    hist = Historian(tmp_path / "h.sqlite3", cfg, "sess-e")
+    svc = HardwareService(cfg, hist, "sess-e")
+    svc.poll_bus("rs485_a")
+    relay.di[1] = True
+    svc.poll_bus("rs485_a")
+    relay.fault = ai.fault = "timeout"
+    svc.poll_bus("rs485_a")
+    hist.wait_idle()
+    ev = {r["kind"]: r["payload_json"] for r in hist.query("SELECT kind, payload_json FROM events")}
+    assert "relay_A.DI2" in ev["DI_EDGE"] and "not_before_utc" in ev["DI_EDGE"]
+    assert "OBSERVATION_GAP" in ev
+    assert "POLL_OVERRUN" in ev           # timeouts with retries exceed the 0.2 s test interval
+    n = hist.query("SELECT count(*) FROM cycles")[0][0]
+    assert n == 3
+    svc.stop()
+    hist.close()
+    assert bus.write_frames() == []

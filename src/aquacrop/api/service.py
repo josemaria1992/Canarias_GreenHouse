@@ -7,6 +7,7 @@ from collections import deque
 
 from ..config.schema import InstallationConfig
 from ..domain.model import utcnow
+from ..historian.retention import evaluate_storage_alarm
 from ..historian.writer import Historian
 from ..twin.clock import SimClock
 from ..twin.runtime import SimulationRuntime
@@ -14,6 +15,7 @@ from ..twin.scenarios import presets, with_twin_overrides
 
 DRIVE_PERIOD_S = 0.05
 MAX_FAILURES_PER_10_MIN = 5
+STORAGE_CHECK_S = 5.0
 
 
 class SimulationService:
@@ -99,12 +101,17 @@ class SimulationService:
 
     async def _drive(self) -> None:
         last = time.monotonic()
+        next_storage_check = last
         while True:
             await asyncio.sleep(DRIVE_PERIOD_S)
             now = time.monotonic()
             self.task["heartbeat_monotonic"] = now
             self.clock.advance_wall(now - last)
             last = now
+            if now >= next_storage_check:   # wall-time check, independent of simulation speed/pause
+                next_storage_check = now + STORAGE_CHECK_S
+                evaluate_storage_alarm(self.hist, self.runtime.alarms, self.runtime.sim_s)
+                self.hist.alarms(self.runtime.alarms.take_dirty())
 
     def task_health(self) -> dict:
         hb = self.task["heartbeat_monotonic"]

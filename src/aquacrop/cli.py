@@ -205,9 +205,9 @@ def cmd_backup_restore(args) -> int:
     from .ownership import OwnershipError, OwnerLock, lock_name
     target = Path(args.target)
     if target.exists():
-        if not args.maintenance:
-            print("target exists. Restore to a new instance first; overwriting requires --maintenance with the "
-                  "server stopped.", file=sys.stderr)
+        if not args.maintenance or not args.config:
+            print("target exists. Restore to a new instance first; overwriting requires --maintenance and --config "
+                  "(to prove the server is stopped).", file=sys.stderr)
             return 2
         if args.config:
             cfg = _cfg(args.config)
@@ -220,6 +220,53 @@ def cmd_backup_restore(args) -> int:
     res = restore_backup(args.backup, target, allow_existing=args.maintenance)
     print(json.dumps(res, indent=2, default=str))
     return 0
+
+
+# ------------------------------------------------------------------------------------------ archive / retention
+def _maintenance_historian(args, actor: str):
+    """Open the installation's database only while no server owns it."""
+    from .historian.writer import Historian
+    from .ownership import OwnershipError, OwnerLock, lock_name
+    cfg = _cfg(args.config)
+    sd = _state_dir(args)
+    try:
+        lk = OwnerLock(sd / lock_name("config", cfg.config_id)).acquire()
+    except OwnershipError:
+        raise SystemExit("stop the running server first (archive/retention are maintenance operations)")
+    return Historian(_db_path(cfg, sd), cfg, new_id(actor)), lk
+
+
+def cmd_archive_create(args) -> int:
+    from .historian.retention import create_archive
+    h, lk = _maintenance_historian(args, "cli_archive")
+    try:
+        res = create_archive(h, args.start, args.end, args.destination)
+        print(json.dumps(res, indent=2))
+        return 0
+    except (ValueError, FileExistsError) as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+    finally:
+        h.close()
+        lk.release()
+
+
+def cmd_archive_verify(args) -> int:
+    from .historian.retention import verify_archive
+    v = verify_archive(args.archive)
+    print(json.dumps({k: v[k] for k in ("ok", "problems")}, indent=2))
+    return 0 if v["ok"] else 1
+
+
+def cmd_retention_apply(args) -> int:
+    from .historian.retention import apply_retention
+    h, lk = _maintenance_historian(args, "cli_retention")
+    try:
+        print(json.dumps(apply_retention(h, dry_run=args.dry_run), indent=2))
+        return 0
+    finally:
+        h.close()
+        lk.release()
 
 
 # ------------------------------------------------------------------------------------------ v0.1 migration
@@ -305,6 +352,22 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--config")
     br.add_argument("--state-dir", default="var")
     br.set_defaults(fn=cmd_backup_restore)
+
+    ar = sub.add_parser("archive").add_subparsers(dest="sub", required=True)
+    ac = ar.add_parser("create", help="export a UTC range of samples+events with checksummed manifest")
+    common(ac)
+    ac.add_argument("--start", required=True, help="ISO time with offset, inclusive")
+    ac.add_argument("--end", required=True, help="ISO time with offset, exclusive")
+    ac.add_argument("--destination", required=True)
+    ac.set_defaults(fn=cmd_archive_create)
+    av = ar.add_parser("verify")
+    av.add_argument("--archive", required=True)
+    av.set_defaults(fn=cmd_archive_verify)
+    rt = sub.add_parser("retention").add_subparsers(dest="sub", required=True)
+    ra = rt.add_parser("apply", help="prune archived samples older than an APPROVED retention window")
+    common(ra)
+    ra.add_argument("--dry-run", action="store_true")
+    ra.set_defaults(fn=cmd_retention_apply)
 
     mg = sub.add_parser("migrate-v01", help="backup-first import of a v0.1 greenhouse.sqlite3")
     common(mg)

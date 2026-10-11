@@ -24,6 +24,7 @@ from ..control.bench import BenchGate, close_stale_leases, historian_persistence
 from ..control.commands import CommandService
 from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Outcome, OutputCommand, PointKind, Sample,
                             new_id, utcnow)
+from ..historian.retention import evaluate_storage_alarm
 from ..historian.writer import Historian
 from ..io.modbus_backend import ModbusBackend
 from ..io.sampling import AcqContext
@@ -132,6 +133,8 @@ class HardwareService:
         self.workers = {b.bus_id: BusWorker(b.bus_id, b.poll_interval_s, self.poll_bus, monotonic=monotonic)
                         for b in cfg.buses}
         self._sync_authorizer()
+        self._prev_valid: dict[str, tuple[bool, datetime]] = {}
+        self._clock_ref: tuple[float, float] | None = None   # (monotonic, wall epoch) for jump detection
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -148,6 +151,8 @@ class HardwareService:
 
     # ------------------------------------------------------------------ acquisition
     def poll_bus(self, bus_id: str) -> None:
+        t0 = self._mono()
+        self._check_clock()
         got: list[Sample] = []
         status: dict[str, tuple[bool, str | None]] = {}
         for d in self.cfg.devices:
@@ -165,16 +170,58 @@ class HardwareService:
                 got += self.backend.unavailable(d.device_uid, ri.error or "device read failed", (PointKind.DO,)).samples
             status[d.device_uid] = (ok, err)
         with self.lock:
+            edges = self._edges(got, self.cfg.bus(bus_id).poll_interval_s)
             for s in got:
                 self.samples[s.point_id] = s
             self.alarms.evaluate_devices(status, None)
             self.alarms.evaluate_samples(self.samples, self._mono(), None)
+            evaluate_storage_alarm(self.hist, self.alarms)
             dirty = self.alarms.take_dirty()
         cycle_id = got[0].cycle_id if got else new_id("cyc")
         self.hist.write_cycle(f"{bus_id}:{cycle_id}", got, run_id=None, sim_s=None,
                               cadence_s=self.cfg.bus(bus_id).poll_interval_s, cadence_basis="WALL")
         if dirty:
             self.hist.alarms(dirty)
+        for kind, payload in edges:
+            self.hist.event(kind, payload, actor=None)
+        took = self._mono() - t0
+        if took > self.cfg.bus(bus_id).poll_interval_s:
+            self.hist.event("POLL_OVERRUN", {"bus_id": bus_id, "cycle_s": round(took, 3),
+                                             "interval_s": self.cfg.bus(bus_id).poll_interval_s}, actor="system")
+
+    def _edges(self, got: list[Sample], interval_s: float) -> list[tuple[str, dict]]:
+        """Physical DI/DO edges = differences between consecutive valid observations. The change
+        happened somewhere between the two acquisition times; that window is recorded."""
+        out = []
+        for s in got:
+            if s.raw_unit != "bool" and s.raw_value is not None:
+                continue
+            prev = self._prev_valid.get(s.point_id)
+            if s.quality.value not in ("GOOD", "OVERRIDDEN"):
+                if prev is not None:
+                    out.append(("OBSERVATION_GAP", {"point": s.point_id, "reason": s.reason,
+                                                    "last_valid_utc": prev[1].isoformat()}))
+                self._prev_valid.pop(s.point_id, None)
+                continue
+            if prev is not None and prev[0] != s.value:
+                kind = "DO_EDGE" if ".DO" in s.point_id else "DI_EDGE"
+                out.append((kind, {"point": s.point_id, "from": prev[0], "to": s.value, "origin": "REAL",
+                                   "not_before_utc": prev[1].isoformat(), "not_after_utc": s.acquired_utc.isoformat(),
+                                   "resolution_s": interval_s,
+                                   "note": "polled observation; actual change time is within the window"}))
+            self._prev_valid[s.point_id] = (bool(s.value), s.acquired_utc)
+        return out
+
+    def _check_clock(self) -> None:
+        """Record wall-clock steps (NTP corrections, RTC-less boot) against the monotonic clock."""
+        mono, wall = self._mono(), time.time()
+        if self._clock_ref is not None:
+            dm, dw = mono - self._clock_ref[0], wall - self._clock_ref[1]
+            if abs(dw - dm) > 2.0:
+                self.hist.event("WALL_CLOCK_STEP", {"step_s": round(dw - dm, 3), "backward": dw < dm,
+                                                    "note": "timing uses the monotonic clock; UTC stamps "
+                                                            "around this point are uncertain"}, actor="system")
+        self._clock_ref = (mono, wall)
 
     # ------------------------------------------------------------------ bench
     def _preflight(self, devices: set[str]) -> str | None:
