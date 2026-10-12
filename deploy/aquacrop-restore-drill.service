@@ -1,0 +1,27 @@
+# Monthly restore drill: restores the newest local backup into a SEPARATE scratch directory and checks
+# integrity_check, foreign_key_check, schema version and objects, row counts, first/last-row fingerprints
+# and the application's own startup and queries; the report goes to backups/restore-drills/ and is shown
+# in Settings. A full restore needs room for a whole database (about 8 GiB at one year) plus 20 %. That
+# does not fit on the 32 GB eMMC next to the live database while keeping the free-space reserve, so the
+# drill runs only when an approved scratch destination is mounted at /var/lib/aquacrop-drill (a USB disk
+# or the off-device backup host: an open owner decision). Without it the unit is skipped, and Settings
+# shows the drill as due.
+[Unit]
+Description=AquaCrop historian restore drill
+After=local-fs.target
+ConditionPathIsDirectory=/var/lib/aquacrop-drill
+
+[Service]
+Type=oneshot
+User=aquacrop
+Group=aquacrop
+EnvironmentFile=/etc/aquacrop/aquacrop.env
+WorkingDirectory=/var/lib/aquacrop
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop backup verify --backup /var/lib/aquacrop/backups --full --scratch-dir /var/lib/aquacrop-drill --config ${AQUACROP_CONFIG} --report-dir /var/lib/aquacrop/backups/restore-drills
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/aquacrop /var/lib/aquacrop-drill

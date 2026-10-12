@@ -141,3 +141,164 @@ def test_cli_backup_keep_and_refusal(tmp_path, cfg24):
                      str(tmp_path / "bk"), "--keep", "1"]) == 0
     assert cli.main(["backup", "verify", "--backup", str(tmp_path / "bk"), "--full"]) == 0
     assert cli.main(["storage", "report", "--config", "demo-24", "--state-dir", str(tmp_path)]) == 0
+
+
+# ---------------------------------------------------------------------------------------- R3 (owner review)
+from aquacrop.historian import backup as bk_mod   # noqa: E402
+from aquacrop.historian.backup import (BackupAborted, BackupFailed, latest_drill,  # noqa: E402
+                                       verify_backup as _verify)
+
+
+def _leftovers(d):
+    return sorted(p.name for p in d.iterdir() if p.name.endswith(".partial"))
+
+
+def test_concurrent_backups_restore_to_their_own_snapshot(live, tmp_path, cfg24):
+    """Manifest facts (counts, fingerprints, schema) and the dump come from one read transaction while
+    the historian keeps writing: a full restore of each matches its manifest exactly."""
+    h, rt = live
+    stop = threading.Event()
+
+    def writer():
+        while not stop.is_set():
+            rt.run_for(60)
+            h.event("BURST", {"n": 1})
+    t = threading.Thread(target=writer)
+    t.start()
+    try:
+        mans = [create_backup(h.db_path, tmp_path / "bk") for _ in range(2)]
+    finally:
+        stop.set()
+        t.join()
+    for m in mans:
+        v = _verify(m["path"], full=True, scratch_dir=tmp_path / "scratch", cfg=h.cfg)
+        assert v["ok"], v["integrity"]
+        f = v["full"]
+        assert f["facts"]["foreign_key_violations"] == 0 and f["facts"]["schema_version"] == m["schema_version"]
+        assert f["smoke"]["ok"] and f["smoke"]["historian_started"]
+    assert mans[0]["row_counts"] != mans[1]["row_counts"]          # the writer really ran in between
+
+
+def test_failed_verification_publishes_nothing_and_keeps_earlier_backups(live, tmp_path, monkeypatch):
+    h, rt = live
+    dest = tmp_path / "bk"
+    good = create_backup(h.db_path, dest)
+    monkeypatch.setattr(bk_mod, "_verify_sql_gz", lambda path, man, **kw: {
+        "ok": False, "checksum_ok": True, "integrity": "simulated verification failure", "counts": {}})
+    with pytest.raises(BackupFailed, match="not published"):
+        create_backup(h.db_path, dest, keep=1)
+    assert [p.name for p in list_backups(dest)] == [good["file"]]   # rotation never ran
+    assert _leftovers(dest) == [] and len(list(dest.glob("*.manifest.json"))) == 1
+    monkeypatch.undo()
+    assert _verify(dest)["ok"]
+
+
+def test_running_out_of_space_while_writing_aborts_cleanly(live, tmp_path, monkeypatch):
+    h, rt = live
+    dest = tmp_path / "bk"
+    good = create_backup(h.db_path, dest)
+    calls = {"n": 0}
+    real = bk_mod._free_bytes
+
+    def shrinking(path):
+        calls["n"] += 1
+        return real(path) if calls["n"] <= 2 else 10 * 2**20       # preflight and first check pass, then 10 MiB
+    monkeypatch.setattr(bk_mod, "_free_bytes", shrinking)
+    monkeypatch.setattr(bk_mod, "BACKUP_CHECK_S", 0.0)
+    with pytest.raises(BackupAborted, match="below the reserve"):
+        create_backup(h.db_path, dest, reserve_bytes=2**30)
+    assert [p.name for p in list_backups(dest)] == [good["file"]] and _leftovers(dest) == []
+
+
+def test_interrupted_backup_leaves_nothing_behind(live, tmp_path, monkeypatch):
+    h, rt = live
+    dest = tmp_path / "bk"
+    calls = {"n": 0}
+
+    def enospc(path):
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise OSError(28, "No space left on device")
+        return 1 << 50
+    monkeypatch.setattr(bk_mod, "_free_bytes", enospc)
+    monkeypatch.setattr(bk_mod, "BACKUP_CHECK_S", 0.0)
+    with pytest.raises(OSError):
+        create_backup(h.db_path, dest)
+    assert list(dest.iterdir()) == []
+
+
+def test_wal_growth_cancels_the_long_reader(live, tmp_path):
+    h, rt = live
+    h.event("X", {})
+    h.wait_idle()
+    with pytest.raises(BackupAborted, match="WAL"):
+        create_backup(h.db_path, tmp_path / "bk", wal_abort_bytes=1)
+    assert list((tmp_path / "bk").iterdir()) == []
+
+
+def test_stale_partials_and_unpublished_files_are_never_listed_and_get_cleaned(live, tmp_path):
+    h, rt = live
+    dest = tmp_path / "bk"
+    dest.mkdir()
+    old = time.time() - 7 * 3600
+    for name in ("aquacrop-20260101T000000Z.sql.gz.partial", "aquacrop-20260101T000001Z.sql.gz",
+                 "aquacrop-20260101T000002Z.sql.gz"):
+        (dest / name).write_bytes(b"x")
+    for name in ("aquacrop-20260101T000000Z.sql.gz.partial", "aquacrop-20260101T000001Z.sql.gz"):
+        os.utime(dest / name, (old, old))
+    assert list_backups(dest) == []                                  # no manifest: not a backup
+    m = create_backup(h.db_path, dest)
+    assert sorted(m["cleaned_stale"]) == ["aquacrop-20260101T000000Z.sql.gz.partial",
+                                          "aquacrop-20260101T000001Z.sql.gz"]
+    assert (dest / "aquacrop-20260101T000002Z.sql.gz").exists()      # recent: may still be in progress
+    assert [p.name for p in list_backups(dest)] == [m["file"]]
+
+
+def test_restore_drill_catches_tampering_that_keeps_counts_and_checksum(live, tmp_path, cfg24):
+    """A dump edited so that row counts still match and the manifest checksum is re-signed passes the
+    stream check but fails the restore drill (foreign keys, fingerprints)."""
+    h, rt = live
+    man = create_backup(h.db_path, tmp_path / "bk")
+    p = tmp_path / "bk" / man["file"]
+    text = gzip.decompress(p.read_bytes()).decode("utf-8")
+    first = text.index('INSERT INTO "samples" VALUES(1,1,')
+    text = text[:first] + 'INSERT INTO "samples" VALUES(1,999999,' + text[first + len('INSERT INTO "samples" VALUES(1,1,'):]
+    p.write_bytes(gzip.compress(text.encode("utf-8")))
+    mf = manifest_path(p)
+    m = json.loads(mf.read_text(encoding="utf-8"))
+    m["sha256"] = _sha256(p)
+    mf.write_text(json.dumps(m), encoding="utf-8")
+    assert _verify(p)["ok"]                                          # stream, statements and counts look fine
+    v = _verify(p, full=True, scratch_dir=tmp_path / "scratch", cfg=cfg24, report_dir=tmp_path / "drills")
+    assert not v["ok"] and "foreign_key_check" in v["integrity"] and "fingerprints differ" in v["integrity"]
+    d = latest_drill(tmp_path / "drills")
+    assert d["ok"] is False and d["utc"]
+
+
+def test_restore_drill_needs_scratch_space_and_keeps_the_reserve(live, tmp_path, monkeypatch):
+    h, rt = live
+    man = create_backup(h.db_path, tmp_path / "bk")
+    monkeypatch.setattr(bk_mod, "_free_bytes", lambda path: 1)
+    v = _verify(man["path"], full=True, scratch_dir=tmp_path / "scratch")
+    assert not v["ok"] and "not enough scratch space" in v["integrity"]
+    assert not any((tmp_path / "scratch").iterdir())
+    with pytest.raises(BackupRefused):
+        restore_backup(man["path"], tmp_path / "r.sqlite3", reserve_bytes=2**30)
+    assert not (tmp_path / "r.sqlite3").exists()
+
+
+def test_safety_copy_before_a_migration_needs_room_for_the_whole_database(live, tmp_path):
+    h, rt = live
+    with pytest.raises(BackupRefused, match="safety copy"):
+        backup_to(sqlite3.connect(h.db_path), tmp_path / "pre" / "pre-migrate.sqlite3", reserve_bytes=1 << 60)
+    assert not list((tmp_path / "pre").iterdir())
+
+
+def test_cli_restore_drill_writes_a_report(live, tmp_path, cfg24):
+    from aquacrop import cli
+    h, rt = live
+    create_backup(h.db_path, tmp_path / "bk")
+    assert cli.main(["backup", "verify", "--backup", str(tmp_path / "bk"), "--full", "--scratch-dir",
+                     str(tmp_path / "scratch"), "--config", "demo-24", "--report-dir", str(tmp_path / "drills")]) == 0
+    d = latest_drill(tmp_path / "drills")
+    assert d["ok"] is True and "application smoke test" in d["integrity"]

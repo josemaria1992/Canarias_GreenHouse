@@ -186,22 +186,35 @@ def cmd_demo_verify(args) -> int:
 
 # ------------------------------------------------------------------------------------------ backup
 def cmd_backup_create(args) -> int:
-    from .historian.backup import BackupRefused, create_backup
+    from .historian.backup import BackupAborted, BackupFailed, BackupRefused, create_backup
     cfg = _cfg(args.config)
+    h = cfg.historian
     try:
         man = create_backup(_db_path(cfg, _state_dir(args)), args.destination, config_id=cfg.config_id,
                             config_version=cfg.config_version, keep=args.keep,
-                            reserve_bytes=cfg.historian.free_space_reserve_bytes)
+                            reserve_bytes=h.free_space_reserve_bytes, wal_abort_bytes=h.wal_reader_abort_bytes,
+                            max_seconds=h.backup_max_seconds)
     except BackupRefused as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 3
-    print(json.dumps(man, indent=2))
+    except (BackupAborted, BackupFailed) as e:
+        print(f"FAILED (nothing published; earlier backups kept): {e}", file=sys.stderr)
+        return 1
+    print(json.dumps({k: v for k, v in man.items() if k != "fingerprints"}, indent=2))
     return 0
 
 
 def cmd_backup_verify(args) -> int:
+    """Without --full: checksum, stream and row counts. With --full: the restore drill (restore into
+    --scratch-dir, integrity/foreign keys/schema/counts/fingerprints, application smoke test)."""
+    from .config.schema import HistorianSettings
     from .historian.backup import verify_backup
-    v = verify_backup(args.backup, full=args.full, scratch_dir=args.scratch_dir)
+    cfg = _cfg(args.config) if args.config else None
+    reserve = (cfg.historian if cfg else HistorianSettings()).free_space_reserve_bytes
+    v = verify_backup(args.backup, full=args.full, scratch_dir=args.scratch_dir, reserve_bytes=reserve, cfg=cfg,
+                      report_dir=args.report_dir)
+    if not args.verbose and isinstance(v.get("manifest"), dict):
+        v["manifest"] = {k: x for k, x in v["manifest"].items() if k != "fingerprints"}
     print(json.dumps(v, indent=2, default=str))
     return 0 if v["ok"] else 1
 
@@ -242,7 +255,14 @@ def cmd_backup_restore(args) -> int:
             except OwnershipError:
                 print("the installation is running; stop it before a maintenance restore", file=sys.stderr)
                 return 4
-    res = restore_backup(args.backup, target, allow_existing=args.maintenance)
+    from .config.schema import HistorianSettings
+    from .historian.backup import _same_device
+    # The free-space reserve protects the live database's disk; a restore elsewhere only needs room.
+    reserve = (_cfg(args.config).historian if args.config else HistorianSettings()).free_space_reserve_bytes
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if _state_dir(args).exists() and not _same_device(target.parent, _state_dir(args)):
+        reserve = 0
+    res = restore_backup(args.backup, target, allow_existing=args.maintenance, reserve_bytes=reserve)
     print(json.dumps(res, indent=2, default=str))
     return 0
 
@@ -391,8 +411,15 @@ def build_parser() -> argparse.ArgumentParser:
     bc.set_defaults(fn=cmd_backup_create)
     bv = bk.add_parser("verify")
     bv.add_argument("--backup", required=True)
-    bv.add_argument("--full", action="store_true", help="also restore into a scratch DB and run integrity_check")
-    bv.add_argument("--scratch-dir", default=None, help="where --full restores (needs room for one database)")
+    bv.add_argument("--full", action="store_true",
+                    help="restore drill: restore into a scratch DB, check integrity, foreign keys, schema, counts, "
+                         "fingerprints and run the application smoke test")
+    bv.add_argument("--scratch-dir", default=None,
+                    help="where --full restores (needs room for one database plus 20 %%; on the live database's "
+                         "disk the free-space reserve must also remain)")
+    bv.add_argument("--config", default=None, help="also start the historian on the restored copy with this config")
+    bv.add_argument("--report-dir", default=None, help="write a restore-drill report (JSON) here")
+    bv.add_argument("--verbose", action="store_true", help="include the per-table fingerprints in the output")
     bv.set_defaults(fn=cmd_backup_verify)
     br = bk.add_parser("restore")
     br.add_argument("--backup", required=True)

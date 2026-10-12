@@ -911,12 +911,14 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     backup_lock = threading.Lock()
 
     def _run_backup(user: str) -> None:
+        h = cfg.historian
         try:
             hist.wait_idle()
             man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
-                                config_version=cfg.config_version,
-                                reserve_bytes=cfg.historian.free_space_reserve_bytes)
-            hist.event("BACKUP_CREATED", {k: v for k, v in man.items() if k != "row_counts"}, actor=user)
+                                config_version=cfg.config_version, reserve_bytes=h.free_space_reserve_bytes,
+                                wal_abort_bytes=h.wal_reader_abort_bytes, max_seconds=h.backup_max_seconds)
+            hist.event("BACKUP_CREATED", {k: v for k, v in man.items() if k not in ("row_counts", "fingerprints")},
+                       actor=user)
             backup_job["last"] = {"ok": True, "file": man["file"], "bytes": man["bytes"]}
         except Exception as e:   # refused for space, or failed: recorded, never silent
             hist.event("BACKUP_FAILED", {"error": str(e)}, actor=user)
@@ -937,7 +939,22 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/backup")
     def backup_state(p: Principal = Depends(require(Perm.READ))):
-        return backup_job
+        """Local backups, the latest restore drill and the off-device copy (an owner decision)."""
+        from ..historian.backup import latest_drill, list_backups
+        dest = state_dir / "backups"
+        local = [b for b in list_backups(dest) if b.name.endswith(".sql.gz")] if dest.exists() else []
+        drill = latest_drill(dest / "restore-drills")
+        due = None
+        if drill and drill.get("utc"):
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(drill["utc"])
+            due = age.days >= cfg.historian.restore_drill_interval_days
+        return backup_job | {
+            "destination": str(dest), "local_count": len(local), "keep": cfg.historian.backup_keep,
+            "local_bytes": sum(b.stat().st_size for b in local), "newest": local[-1].name if local else None,
+            "restore_drill": drill, "restore_drill_due": True if drill is None else due,
+            "restore_drill_interval_days": cfg.historian.restore_drill_interval_days,
+            "off_device": "NOT CONFIGURED: the off-device backup destination is an open owner decision; local "
+                          "backups do not survive loss of this device"}
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")

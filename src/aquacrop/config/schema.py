@@ -195,6 +195,14 @@ class HistorianSettings(_Strict):
     free_space_warning_bytes: int = Field(default=4 * GIB, ge=0)     # low disk: WARNING
     free_space_reserve_bytes: int = Field(default=2 * GIB, ge=0)     # CRITICAL: new starts and ON refused
     snapshot_floor_bytes: int = Field(default=512 * 1024**2, ge=0)   # periodic snapshots pause below this
+    # WAL: about 64 MiB at rest after a checkpoint reset (journal_size_limit); it grows while a long
+    # reader holds an old snapshot. Above the warning: STORAGE_CAPACITY warning and retention pruning
+    # defers; above the abort size: long readers (backup, restore drill) cancel themselves.
+    wal_warning_bytes: int = Field(default=256 * 1024**2, gt=0)
+    wal_reader_abort_bytes: int = Field(default=1 * GIB, gt=0)
+    backup_keep: int = Field(default=7, ge=1)                        # local compressed backups kept
+    backup_max_seconds: float = Field(default=3 * 3600.0, gt=0)      # a backup running longer aborts
+    restore_drill_interval_days: int = Field(default=30, ge=1)       # full restore drill cadence
 
     @model_validator(mode="after")
     def _check(self) -> "HistorianSettings":
@@ -202,6 +210,8 @@ class HistorianSettings(_Strict):
             raise ValueError(f"recording_interval_s must be one of {RECORDING_INTERVALS_S}")
         if not self.snapshot_floor_bytes <= self.free_space_reserve_bytes <= self.free_space_warning_bytes:
             raise ValueError("free-space thresholds must satisfy snapshot_floor <= reserve <= warning")
+        if self.wal_warning_bytes > self.wal_reader_abort_bytes:
+            raise ValueError("wal_warning_bytes must not exceed wal_reader_abort_bytes")
         return self
 
 

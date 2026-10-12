@@ -126,7 +126,7 @@ class Historian:
         self.session_id = session_id
         self.backend_name = backend_name
         con = connect(self.db_path)
-        self.applied_migrations = migrate(con, self.db_path)
+        self.applied_migrations = migrate(con, self.db_path, reserve_bytes=cfg.historian.free_space_reserve_bytes)
         self._con = con
         self._read_lock = threading.Lock()
         self._read = connect(self.db_path)
