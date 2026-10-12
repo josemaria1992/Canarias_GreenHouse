@@ -98,6 +98,7 @@ def test_hw_acquisition_keeps_its_rate_and_snapshots_are_separate_and_complete(h
     svc.start()
     time.sleep(2.6)
     polls = svc.workers["rs485_a"].polls
+    svc.stop()                                 # freeze the counts before comparing them
     hist.wait_idle()
     cycles = hist.query("SELECT cycle_pk, cycle_id, cadence_s, cadence_basis, n_points FROM cycles")
     # Polling stays at 0.2 s (about 13 polls in 2.6 s) while the historian wrote about 5 snapshots.
