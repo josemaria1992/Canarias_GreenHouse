@@ -46,6 +46,8 @@
   `scripts/stress_concurrency.py` (WAL and responsiveness under long readers).
 
 ### Fixed
+- Login and request rate limits use a sliding 60 s window. The fixed per-minute window allowed up
+  to twice the limit across a minute boundary, and made the login test fail when it straddled one.
 - The capacity check on every poll read the oldest and newest sample times with one full index
   scan (2.4 s on a one-year database), which kept the WAL from resetting and deferred retention;
   it now uses two indexed lookups. Found by the concurrency stress run.

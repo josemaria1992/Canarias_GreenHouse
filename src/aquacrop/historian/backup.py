@@ -319,7 +319,7 @@ def create_backup(db_path: str | Path, destination: str | Path, *, config_id: st
         watch.check(force=True)
         if {t: dumped.get(t, 0) for t in tables} != counts:
             raise BackupFailed(f"dump row counts {dumped} differ from the snapshot {counts}")
-        with open(tmp, "rb") as f:
+        with open(tmp, "r+b") as f:                       # Windows needs write access to flush to disk
             os.fsync(f.fileno())
         manifest = {"format": FORMAT_SQL_GZ, "file": out.name, "sha256": _sha256(tmp), "bytes": tmp.stat().st_size,
                     "created_utc": stamp, "schema_version": int(ver_row[0]) if ver_row else None,

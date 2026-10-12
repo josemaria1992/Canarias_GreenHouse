@@ -52,6 +52,19 @@ def test_health_is_minimal_and_status_needs_auth(env):
     assert c.get("/docs").status_code == 404
 
 
+def test_rate_limit_window_slides_across_minute_boundaries():
+    """A fixed per-minute window would allow twice the limit around a boundary (and made the login
+    test depend on when it ran); the sliding window allows `limit` hits in any 60 s."""
+    from aquacrop.security.auth import RateLimiter
+    t = [59.5]
+    lim = RateLimiter(clock=lambda: t[0])
+    assert all(lim.hit("k", 3) for _ in range(3))
+    t[0] = 60.5                                                   # next calendar minute
+    assert not lim.hit("k", 3) and lim.hit("other", 3)
+    t[0] = 119.6                                                  # 60 s after the first hits
+    assert lim.hit("k", 3) and lim.hit("k", 3) and lim.hit("k", 3) and not lim.hit("k", 3)
+
+
 def test_login_failures_and_rate_limit(env):
     app, c = env
     assert c.post("/api/auth/login", json={"username": "oper1", "password": "wrong password!!"},
@@ -271,13 +284,16 @@ def test_trend_gap_flags_from_recorded_cadence(env_dense):
     c.post("/api/twin/control", json={"action": "acq_stall"}, headers=hdr)  # no new acquisitions
     rt = app.state.svc.runtime
     app.state.hist.wait_idle()
-    tr = c.get("/api/trends?points=analog_A.AI1").json()["series"]["analog_A.AI1"]
+    # One series: a wall-time snapshot also lands here when the test straddles a minute boundary
+    url = "/api/trends?points=analog_A.AI1&basis=SIMULATION_TIME"
+    tr = c.get(url).json()["series"]["analog_A.AI1"]
     assert len(tr) >= 3 and not any(r[8] for r in tr[1:])  # continuous cadence => no gaps
     # simulate a missing cycle by deleting one row: the next row must be flagged as a gap
     h = app.state.hist
-    mid = h.query("SELECT id FROM samples WHERE point_id='analog_A.AI1' ORDER BY id")[1][0]
+    mid = h.query("SELECT s.id FROM samples s JOIN cycles c ON c.cycle_pk=s.cycle_pk WHERE s.point_id='analog_A.AI1' "
+                  "AND c.cadence_basis='SIMULATION_TIME' ORDER BY s.id")[1][0]
     h.submit(lambda con: con.execute("DELETE FROM samples WHERE id=?", (mid,)), wait=True)
-    tr = c.get("/api/trends?points=analog_A.AI1").json()["series"]["analog_A.AI1"]
+    tr = c.get(url).json()["series"]["analog_A.AI1"]
     assert tr[1][8] is True
 
 
