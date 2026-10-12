@@ -32,7 +32,8 @@ from .schema import utc_iso
 
 SAMPLE_COLS = ["id", "point_id", "acquired_utc", "persisted_utc", "sequence", "quality", "reason", "raw_value",
                "raw_type", "raw_unit", "value", "unit", "calibration_ref", "origin", "source_profile",
-               "config_version", "device_uid", "bus_id", "session_id", "sim_run_id", "sim_s", "override_json"]
+               "config_version", "device_uid", "bus_id", "session_id", "sim_run_id", "sim_s", "override_json",
+               "last_good_value", "last_good_utc"]   # a STALE row's value is null; its last good reading is here
 EVENT_COLS = ["id", "utc", "kind", "actor", "session_id", "run_id", "sim_s", "payload_json"]
 
 
@@ -206,12 +207,24 @@ class RetentionTask:
         self.held = why
         self.hist.event("RETENTION_HELD", {"reason": why}, actor="system")
 
+    def _newest_prior_record(self) -> str | None:
+        """Newest time written by an earlier process: snapshots, events, commands and the process
+        register, so a history with audit records but no snapshot (or paused snapshots) is guarded too."""
+        sid = self.hist.session_id
+        rows = self.hist.query(
+            "SELECT (SELECT persisted_utc FROM cycles WHERE session_id != ? ORDER BY cycle_pk DESC LIMIT 1), "
+            "(SELECT utc FROM events WHERE coalesce(session_id, '') != ? ORDER BY utc DESC LIMIT 1), "
+            "(SELECT intent_utc FROM commands WHERE session_id != ? ORDER BY intent_utc DESC LIMIT 1), "
+            "(SELECT max(coalesce(ended_utc, started_utc)) FROM process_sessions WHERE session_id != ?)",
+            (sid, sid, sid, sid))[0]
+        stamps = [r for r in rows if r]
+        return max(stamps, key=lambda t: datetime.fromisoformat(t)) if stamps else None
+
     def _check_clock(self) -> None:
         mono, wall = self._mono(), self._wall()
         if not self._started_check_done:
             self._started_check_done = True
-            newest = self.hist.query("SELECT max(persisted_utc) FROM cycles WHERE session_id != ?",
-                                     (self.hist.session_id,))[0][0]
+            newest = self._newest_prior_record()
             if newest:
                 gap_s = wall - datetime.fromisoformat(newest).timestamp()
                 if gap_s < -300:

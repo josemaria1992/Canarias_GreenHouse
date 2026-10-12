@@ -26,7 +26,7 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-211 tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and the
+212 tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and the
 installed wheel passes 13/13 from outside the repository. A simulated 400-day history at 60 s
 confirmed the one-year size, the rolling window and the compressed backup, verify and restore.
 GitHub CI runs Ubuntu, Windows, macOS and ARM64 on every pull request. Item by item:

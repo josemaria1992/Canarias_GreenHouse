@@ -2,8 +2,8 @@
 
 **Environment:** Linux x86_64 container, Python 3.13.16 (also 3.11.15 and 3.12.13), pymodbus
 3.11.3, FastAPI 0.143, SQLite WAL. **Run:** 2026-10-12 (historian update, ADR-0008), software
-0.2.0.dev0, tested at commit `f50c99f` (only documentation changed after). The 2026-10-11 run was at `0ce4842` (183 tests).
-**Results:** `python -m pytest`: 211 passed on 3.13, 3.12 and 3.11; `pip check` clean on each.
+0.2.0.dev0, tested at commit `TESTED_COMMIT`. The 2026-10-11 run was at `0ce4842` (183 tests).
+**Results:** `python -m pytest`: 212 passed on 3.13 locally and on 3.11, 3.12 and 3.13 in GitHub CI; `pip check` clean.
 `demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`. Installed-wheel check
 (`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement (`scripts/measure_storage.py
 --days 400`): `operations/measurements/2026-10-12-storage-48pt-60s-400d.json`.
@@ -94,7 +94,7 @@ NOT RUN (could run, has not).
 | AT-RET-01 rolling window boundary at exactly 365 days | PASS | `integration/test_retention.py::test_rolling_window_boundary_is_exactly_365_days` |
 | AT-RET-02 pruning in batches through the writer; dry run and `DEMO` delete nothing | PASS | `test_prune_runs_in_small_batches`, `test_dry_run_and_demo_policy_delete_nothing` |
 | AT-RET-03 over budget never deletes inside the window | PASS | `test_over_budget_is_a_warning_and_nothing_inside_the_window_is_deleted` |
-| AT-RET-04 clock guard holds retention until acknowledged | PASS | `test_retention_holds_when_clock_is_far_past_the_newest_record_until_acknowledged`, `test_retention_holds_on_forward_clock_step_and_on_clock_behind_records` |
+| AT-RET-04 clock guard holds retention until acknowledged, also for a history without snapshots | PASS | `test_retention_holds_when_clock_is_far_past_the_newest_record_until_acknowledged`, `test_retention_holds_for_a_history_without_snapshots`, `test_retention_holds_on_forward_clock_step_and_on_clock_behind_records` |
 | AT-RET-05 size levels off once the window is full (freed pages reused) | PASS (desktop) | `scripts/measure_storage.py`, 400 simulated days: 8.03 GiB at day 365, 8.05 GiB at day 400, sample count constant at 25,228,800 |
 | AT-CAP-01 low disk, reserve, snapshot floor and write failure have defined effects | PASS | `test_capacity_levels_low_disk_reserve_and_snapshot_floor`, `test_write_failure_is_critical_and_inhibits_starts` |
 | AT-CAP-02 capacity visible: projection, thresholds, growth | PASS | `test_projection_of_the_365_day_size_is_reported`, `storage report`; headless Chromium: Overview storage line and Settings card (recording, retention, history held, DB size, projection, thresholds) |

@@ -165,6 +165,25 @@ def test_retention_holds_when_clock_is_far_past_the_newest_record_until_acknowle
     assert not task.running
 
 
+def test_retention_holds_for_a_history_without_snapshots(h):
+    """An earlier process that wrote events and commands but no snapshot (stopped within its first
+    minute, or snapshots paused on a full disk) still anchors the clock check."""
+    ts = iso(NOW - timedelta(days=400))
+
+    def audit_only(c):
+        c.execute("INSERT INTO events(utc,kind,session_id,payload_json) VALUES(?,'DI_EDGE','old','{}')", (ts,))
+        c.execute("INSERT INTO commands(request_id,actor,target,desired,origin,issued_utc,expires_utc,"
+                  "expected_config_version,priority,backend,session_id,intent_utc,outcome) VALUES('c1','u',"
+                  "'relay_A.DO1',1,'BENCH',?,?,'v',5,'MODBUS','old',?,'READBACK_CONFIRMED')", (ts, ts, ts))
+    h.submit(audit_only, wait=True)
+    assert counts(h)["cycles"] == 0
+    clk = FakeClock(NOW.timestamp())
+    task = RetentionTask(h, wall=clk.w, monotonic=clk.m)
+    task.tick(AlarmEngine(h.cfg))
+    assert task.held and "400 days" in task.held and not task.running
+    assert counts(h)["commands"] == 1 and h.query("SELECT count(*) FROM events WHERE kind='DI_EDGE'")[0][0] == 1
+
+
 def test_retention_holds_on_forward_clock_step_and_on_clock_behind_records(h):
     seed(h, NOW - timedelta(minutes=5), tag="recent")
     clk = FakeClock(NOW.timestamp())
@@ -252,6 +271,9 @@ def test_archive_verify_and_tamper_detection(tmp_path, cfg24):
     a = create_archive(h, lo, hi, tmp_path / "arch")
     assert a["files"]["samples.csv.gz"]["rows"] == h.query("SELECT count(*) FROM samples")[0][0] == 3 * 24
     assert verify_archive(a["path"], a["manifest_sha256"])["ok"]
+    with gzip.open(Path(a["path"]) / "samples.csv.gz", "rt", encoding="utf-8") as f:
+        header = f.readline().strip().split(",")
+    assert header[-2:] == ["last_good_value", "last_good_utc"]   # STALE rows keep their last good reading
     with pytest.raises(FileExistsError):
         create_archive(h, lo, hi, tmp_path / "arch")
     p = Path(a["path"]) / "samples.csv.gz"

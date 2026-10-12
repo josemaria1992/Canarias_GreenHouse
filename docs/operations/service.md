@@ -149,7 +149,8 @@ counts and the cutoff. Open alarms, users, process sessions and the schema/migra
 registers are kept. Freed pages are reused, so the file stops growing after the first year.
 
 Retention trusts the system clock only after a check. If at start the clock is more than 30 days
-past (or behind) the newest stored record, or it steps forward by more than an hour while running,
+past (or behind) the newest record an earlier run stored (snapshot, event, command or process start
+and stop), or it steps forward by more than an hour while running,
 retention holds and raises `RETENTION_HELD` (WARNING). Check the date and time, then acknowledge the
 alarm; that releases it (`RETENTION_RELEASED`).
 
@@ -159,7 +160,8 @@ python -m aquacrop archive create --config C --state-dir S --start 2026-10-01T00
 python -m aquacrop archive verify --archive /var/lib/aquacrop/archive/archive-...
 ```
 
-An archive (gzip CSV of samples and events with a checksummed manifest) is the way to keep history
+An archive (gzip CSV of samples, including the last good value of `STALE` rows, and events, with a
+checksummed manifest) is the way to keep history
 beyond 365 days; create it before the range leaves the window and copy it off the device (destination
 TBD, owner policy). Archives
 and `retention apply` need the server stopped. A configuration with `retention_provenance: DEMO`
