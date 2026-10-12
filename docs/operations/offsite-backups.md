@@ -11,7 +11,7 @@ Application backups are not motor safety. Nothing here stops equipment.
 
 ## 1. Owner decisions before activation
 
-Recorded from the owner's messages of 2026-10-12 19:19 and 19:20 UTC. Values that identify people
+Recorded from the owner's messages of 2026-10-12 19:19, 19:20 and 19:38 UTC. Values that identify people
 or grant access (the account's address, the sharing link, the drive id) are kept in the site record
 outside this public repository.
 
@@ -21,7 +21,7 @@ outside this public repository.
 | USB reader | not specified | any USB mass-storage reader; record `lsusb` and `/dev/disk/by-id` on CP-00 |
 | Filesystem | ext4 | label `AQUACROP-BK` (proposal) |
 | Mount path | not specified | `/media/aquacrop-sd` (proposal) |
-| OneDrive account | the owner's account, signed in with the owner's institutional e-mail address (address in the site record) | whether that address is a personal Microsoft account or a work/school account decides how rclone reaches the folder (section 3.1) |
+| OneDrive account | the owner's **personal** Microsoft account (signed in with the owner's institutional e-mail address; address in the site record) | none: a personal account can reach the shared folder (section 3.1, way 1 or 2) |
 | Folder | `AQUACROP_DATOS_CANARIAS` in a colleague's **personal** OneDrive (onedrive.live.com), shared with the owner | the colleague shares it with the owner's address with edit rights; set the remote to it (section 3.1) |
 | Who authorizes | the account holder (the owner) signs in once | the sign-in itself |
 | Recovery key escrow | a printed copy of the crypt password and salt in a sealed envelope | print it when the keys are generated; store it away from the controller (section 4) |
@@ -29,8 +29,8 @@ outside this public repository.
 
 Space: 7 copies (about 3.5 GiB at one year) plus 10 GiB drill space plus 1 GiB headroom fit the
 64 GB card with room to spare. In the cloud, 42 copies need about 20 GiB at one year, counted
-against the **folder owner's** OneDrive quota (a free personal OneDrive has 5 GB; Microsoft 365
-Personal/Family 1 TB), not the owner's.
+against the **folder owner's** OneDrive quota, not the owner's. The folder owner's plan has 1 TB
+(owner, 2026-10-12), so the copies use about 2 % of it.
 
 ## 2. SD card
 

@@ -1,7 +1,8 @@
 # ADR-0012 SD-card daily backups and encrypted OneDrive copies
 Status: proposed 2026-10-12 (owner request of 2026-10-12 16:01 UTC); implemented and shipped
 **disabled**. Owner choices recorded 2026-10-12 19:19 UTC: a 64 GB ext4 card, the folder
-`AQUACROP_DATOS_CANARIAS` in a colleague's personal OneDrive shared with the owner's account, a sealed
+`AQUACROP_DATOS_CANARIAS` in a colleague's personal OneDrive (1 TB plan) shared with the owner's
+personal Microsoft account, a sealed
 printed copy of the crypt keys, and the proposed copy policy. Activation still needs the card's
 enrolment and the rclone remote on the controller (`docs/operations/offsite-backups.md` sections 1-5).
 Resolves the "off-device backup destination TBD" item of ADR-0008.

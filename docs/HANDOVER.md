@@ -72,9 +72,9 @@ eMMC and SQLite database (ADR-0008).
    **ADR-0012** (SD card and OneDrive); all three are "proposed".
 2. **Activate off-device backups**: the owner chose a 64 GB ext4 card, the shared folder
    `AQUACROP_DATOS_CANARIAS` (a colleague's personal OneDrive), a sealed printed key copy and the
-   7 / 30 + 12 copy policy (2026-10-12). Still open: whether the owner's address is a personal
-   Microsoft account (decides how rclone reaches the folder), the folder owner's storage plan
-   (about 20 GiB needed), then enrolment and rclone setup on the controller.
+   7 / 30 + 12 copy policy; rclone signs in with the owner's personal Microsoft account; the folder
+   owner's plan has 1 TB (2026-10-12). Left: the colleague shares the folder by name with edit
+   rights, then card enrolment and rclone setup on the controller (on site, with the hardware).
    `operations/offsite-backups.md` sections 1 and 3.1.
 3. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
    future-dated records are now resolved by the administrator's quarantine (ADR-0011).
