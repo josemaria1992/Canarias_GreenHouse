@@ -132,10 +132,17 @@ def _used_bytes(con: sqlite3.Connection) -> int:
     return (con.execute("PRAGMA page_count").fetchone()[0] - con.execute("PRAGMA freelist_count").fetchone()[0]) * page
 
 
+def _table_counts(con: sqlite3.Connection) -> dict[str, int]:
+    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE "
+                                        "'sqlite_%' ORDER BY name")]
+    return {t: con.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0] for t in tables}
+
+
 def backup_to(con: sqlite3.Connection, dest: str | Path, *, reserve_bytes: int = 0) -> Path:
     """Full single-file copy through the SQLite backup API (pre-migration and legacy-import safety
     copies). It needs room for the whole database: refused if that would take free disk below
-    `reserve_bytes`."""
+    `reserve_bytes`. The copy is verified before it is published: `integrity_check`, the same schema
+    objects and the same row count in every table as the source snapshot it was taken from."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     need = int(_used_bytes(con) * SCRATCH_FACTOR)
@@ -148,8 +155,24 @@ def backup_to(con: sqlite3.Connection, dest: str | Path, *, reserve_bytes: int =
         tmp.unlink()
     out = sqlite3.connect(str(tmp))
     try:
-        con.backup(out)
+        own = not con.in_transaction
+        if own:
+            con.execute("BEGIN")        # one read snapshot for the copy and the facts it is checked against
+        try:
+            want = {"counts": _table_counts(con), "schema": _schema_digest(_schema_objects(con))}
+            con.backup(out)
+        finally:
+            if own:
+                con.execute("COMMIT")
         out.execute("PRAGMA journal_mode=DELETE")
+        got = {"counts": _table_counts(out), "schema": _schema_digest(_schema_objects(out))}
+        integrity = out.execute("PRAGMA integrity_check").fetchone()[0]
+        problems = ([f"integrity_check: {integrity}"] if integrity != "ok" else [])
+        problems += ["schema objects differ from the source"] if got["schema"] != want["schema"] else []
+        problems += [f"{t}: {got['counts'].get(t)} rows, source {n}" for t, n in want["counts"].items()
+                     if got["counts"].get(t) != n]
+        if problems:
+            raise BackupRefused("safety copy failed verification: " + "; ".join(problems))
     except BaseException:
         out.close()
         tmp.unlink(missing_ok=True)

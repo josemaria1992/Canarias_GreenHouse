@@ -163,6 +163,40 @@ OneDrive account was used.**
 | AT-OFF-11 status in the API and Settings; policy confirmation administrator only, audited | PASS | `test_api_shows_state_and_policy_confirmation_is_admin_only`; headless Chromium: Settings card with a simulated card and an offline queue, policy confirmation |
 | AT-OFF-12 the physical card in its USB reader on the CM4, the owner's OneDrive account, token refresh, throughput, the escrow test | BLOCKED | card and folder chosen 2026-10-12; needs the hardware, the folder shared with the signing-in account, and the rclone setup on the controller (CP-00) |
 
+## Pre-hardware release: installation model (PH) and process controllers (PC)
+
+Gates from the owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` (12 Oct 2026). Configuration
+`installation-48` (SIMULATED), ADR-0013 and ADR-0014. **Everything here runs on the synthetic twin
+with DEMO dynamics and a synthetic chemistry fixture. None of it is physical verification.** Scenario
+names refer to `src/aquacrop/twin/installation_scenarios.py`; each runs as
+`tests/acceptance/test_installation_pc.py::test_scenario[<name>]` and in `demo verify --config
+installation-48` (42/42 PASS: 40 scenarios plus determinism and replay, 48-point I/O round trip,
+isolation and inventory checks). The UI, OP, BK and DL gates follow in later pull requests.
+
+| ID | Status | Evidence |
+|---|---|---|
+| PH-01 fixture: 20,000 L main, three 5,000 L stocks, about 5,000 L sump, 2 main + 2 return + 3 dosing pumps, nine valve duties, no agitator or third main pump | PASS | `acceptance/test_installation_ph.py::test_ph01_fixture_facts` |
+| PH-02 S1 = channels 1-6, S2 = 7-13; 52 outlets as adjustable distribution, not electric valves | PASS | `test_ph02_sectors_and_outlets` |
+| PH-03 volume conservation over five tanks, channel retained water, transit, additions, consumption and spill; retained depth kept after a sector stops; saturation, source-empty, simultaneous flows | PASS | `test_ph03_ledger_closes_under_simultaneous_flows`, `test_ph03_retained_depth_preserved_after_sector_stops`, `test_ph03_source_empty_is_unmet_demand_not_invented_water`, `test_ph03_saturated_transmitter_is_flagged_and_plant_untouched`; every scenario asserts the ledger residual |
+| PH-04 48 unique points, each injectable on the I/O test source; module inventories and quality visible; unmapped channels testable without invented coupling | PASS | `test_ph04_all_48_points_round_trip_on_io_test`, `test_ph04_processes_refuse_io_test_source_and_raw_twin_commands` |
+| PH-05 typed raw/scaled AI, 4-20 mA, out-of-range/NaN/stale/unavailable; DI edges; all 16 DO with audited outcomes; no ownership leak between plant and I/O test | PASS | `test_ph05_stale_unavailable_and_edges`, `test_ph05_controller_commands_are_audited_with_process_and_recipe`, `test_ph05_no_ownership_leak_after_stop_and_reset`, `test_ph04_all_48_points_round_trip_on_io_test` |
+| PH-06 same seed, recipe and actions replay; pause, step and speed do not change integration order or the wall-time historian cadence | PASS | `test_ph06_replay_reproduces_state`, `test_ph06_speed_pause_and_step_do_not_change_results`; wall-time cadence: `integration/test_recording.py::test_sim_records_on_wall_time_whatever_the_speed` (recorder shared by both topologies; run on the demo fixture) |
+| PH-07 recipe validation (units, ordered thresholds, usable capacity, finite values, positive maxima, incompatible endpoints); draft, activate, version and rollback persisted and audited; active recipe immutable, changes apply next cycle | PASS | `test_ph07_validation_catches_missing_fields_and_ranges`, `test_ph07_validation_catches_unsafe_orderings`, `test_ph07_lifecycle_audited_immutable_rollback`, `test_ph07_recipe_change_applies_next_cycle`, `integration/test_api_installation.py::test_recipe_roles_validation_and_persistence` |
+| PH-08 missing calibration, mixing or mapping never inherits DEMO values; a profile or recipe change never enables hardware writes | PASS | `test_ph08_demo_preset_only_in_simulation_and_not_the_owner_example`, `test_ph08_real_profile_cannot_carry_simulated_drive_adapter_or_twin`, `test_ph08_installation_labels_are_demo`, `test_pc08_mixing_readiness_is_not_verified_on_a_physical_profile` |
+| PC-01 two full alternating cycles P1/S1 then P2/S2, 300 s each; edited durations apply next cycle; never both pumps selected | PASS | scenarios `irrigation_alternation`, `recipe_edit_next_cycle` |
+| PC-02 stop, verified stopped, old valve closed, new pump selected, new valve open, at least 1 s lead, start, run and flow verified; missing stop feedback forbids selection | PASS | scenarios `irrigation_alternation` (event order checked), `manual_irrigation_operator_pump`, `vfd_stop_feedback_missing`, `sector_valve_stuck_closed`, `contactor_welded`, `contactor_no_close`, `drive_no_run` |
+| PC-03 MANUAL selects either main pump under the same interlocks; AUTO rejects leftover manual ownership; restart begins stopped without actuation | PASS | scenario `manual_irrigation_operator_pump`; `test_pc03_restart_begins_stopped_and_auto_rejects_leftover_outputs` |
+| PC-04 low main level latches one refill batch; A, B and water overlap and stop independently; chatter makes no duplicate batch | PASS | scenario `refill_ec_target`; `test_pc04_level_chatter_and_repeated_samples_latch_one_batch` (chatter shorter than the debounce, chatter during a batch, no new batch until the level passes trigger + hysteresis) |
+| PC-05 refill runs while irrigation and return stay enabled; flows coordinated without unaccounted overflow | PASS | scenario `refill_concurrency`; `test_pc05_a_process_cannot_command_another_process_equipment`, `test_pc05_unrelated_mode_change_does_not_touch_other_processes` |
+| PC-06 FIXED_VOLUMES with EC validation and EC_TARGET with A:B ratio: explicit selection, distinct completion, bounds, traceability; an unset target cannot become production-ready | PASS | scenarios `refill_ec_target`, `refill_fixed_volumes`, `refill_fixed_ec_out_of_band`; `test_ph07_validation_catches_missing_fields_and_ranges` |
+| PC-07 synthetic acid to an adjustable target near pH 6 with bounded steps and settling; already in band, undershoot, stale probe, wrong/no response, batch maximum; no base actuator | PASS (synthetic fixture) | scenarios `acid_to_target`, `acid_already_in_band`, `acid_undershoot`, `acid_no_response`, `acid_batch_limit`, `acid_ph_unavailable` |
+| PC-08 no real mixing method: physical dosing readiness blocked with a reason; chemistry labelled and versioned; no linear pH averaging; no fictitious agitator | PASS | `test_pc08_mixing_readiness_is_not_verified_on_a_physical_profile`; fixture id `synthetic-carbonate-ec-v1` in every snapshot; `InstallationFacts.agitators` fixed at 0 |
+| PC-09 stock empty, stock not prepared, no flow and transfer timeout stop the affected paths; water filling never asserts readiness; acknowledgement audited and invalidated by a defined stock change | PASS | scenarios `refill_stock_not_prepared`, `refill_stock_empty`, `refill_transfer_no_flow`, `refill_transfer_timeout`, `stock_fill_invalidates`; `test_pc09_stock_acknowledgement_is_audited_and_invalidated_by_level_rise`, `test_pc09_readiness_survives_restart_through_its_store` |
+| PC-10 return on sump thresholds, respects main high level and sump low level, shows the duty policy; both pumps exercised; no inferred failover or rotation | PASS | scenarios `return_alternation`, `return_pump_no_flow` |
+| PC-11 sump high with the main tank full alarms and holds the transfer; pump and valve faults propagate as defined; safe responses logged | PASS | scenario `sump_high_main_full`; the fault scenarios under PC-12 |
+| PC-12 a fault stops and locks out; ack alone cannot reset; reset while the fault is active fails; a healthy reset does not restart; a deliberate restart succeeds under the same role rules locally and remotely | PASS | scenarios `vfd_trip_recovery`, `safety_chain_open`, `main_pump_no_flow`, `sector_valve_stuck_open`, `main_level_open_loop`, `stale_acquisition`, `module_timeout`, `main_source_empty`, `main_low_low`; `test_pc12_ack_reset_restart_are_distinct`, `test_pc12_storage_fault_inhibits_new_starts`, `test_pc12_stop_all_brings_every_output_off`; roles: `integration/test_api_installation.py` (one API for local and remote) |
+| PC-13 bounded MANUAL fills, transfers and doses honour quantity, time, capacity and arbitration; a stale required sensor disables the operation with an actionable reason | PASS | scenarios `manual_bounds_rejected`, `raw_command_refused`, `stale_acquisition` |
+
 ## Milestone 5: hardware arrival
 
 | ID | Status | Evidence |
@@ -175,7 +209,10 @@ OneDrive account was used.**
 | Area | State in this release |
 |---|---|
 | Physical AUTO / live control | Does not exist; no flag enables it |
-| Hydraulic topology, wiring, VFD, probes, recipes, safe-state matrix | TBD — requires operator confirmation |
+| Hydraulic topology | Tank sizes, equipment counts, sectors and channel geometry confirmed by the owner (2026-10-12); dynamics, switch levels and spans are DEMO |
+| Wiring, VFD interface, probes, production recipes, safe-state matrix | TBD — requires operator confirmation; the 48-point allocation and the cause-and-effect table are proposals (ADR-0013, `model/signal_budget.md`, `model/cause_and_effect.md`) |
+| Process controllers (irrigation, return, refill, acid, stock fills) | Simulation only; mixing readiness is NOT_VERIFIED on any physical profile, so dosing cannot run there (ADR-0014) |
+| Chemistry | Synthetic fixture `synthetic-carbonate-ec-v1` for qualitative controller tests; not calibrated |
 | Calibration | None verified; real profiles refuse non-VERIFIED scaling |
 | AI channel modes on real modules | UNKNOWN until CP-01/CP-02; values stay UNSCALED |
 | Shadow / what-if | Not served (ADR-0002) |

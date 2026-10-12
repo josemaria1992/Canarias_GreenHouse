@@ -402,6 +402,39 @@ def test_v1_database_migrates_to_v2_backup_first(tmp_path):
     con.close()
 
 
+def _v1_db(path):
+    con = connect(path)
+    con.execute("BEGIN")
+    for stmt in [s for s in MIGRATIONS[1][1].split(";") if s.strip()]:
+        con.execute(stmt)
+    con.execute("INSERT INTO schema_meta VALUES('schema_version','1')")
+    con.execute("INSERT INTO events(utc,kind,payload_json) VALUES('2026-10-01T00:00:00+00:00','OLD','{}')")
+    con.execute("COMMIT")
+    return con
+
+
+def test_pre_migration_copy_is_verified_or_nothing_migrates(tmp_path, monkeypatch):
+    from aquacrop.historian import backup as bk
+    con = _v1_db(tmp_path / "old.sqlite3")
+    real = bk._table_counts
+    calls = []
+
+    def short_copy(c):                       # the copy (second call) misses a row
+        out = real(c)
+        calls.append(out)
+        if len(calls) == 2:
+            out = dict(out, events=out["events"] - 1)
+        return out
+    monkeypatch.setattr(bk, "_table_counts", short_copy)
+    with pytest.raises(bk.BackupRefused, match="failed verification: events"):
+        migrate(con, tmp_path / "old.sqlite3")
+    assert schema_version(con) == 1                  # nothing migrated
+    assert not [p for p in (tmp_path / "backups").iterdir()]   # no unverified copy left behind
+    monkeypatch.setattr(bk, "_table_counts", real)
+    assert migrate(con, tmp_path / "old.sqlite3") == [2, 3]
+    con.close()
+
+
 def test_cli_archive_and_retention_require_stopped_server(tmp_path, cfg24):
     from aquacrop import cli
     from aquacrop.ownership import OwnerLock, lock_name

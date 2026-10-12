@@ -212,6 +212,31 @@ def test_ph06_replay_reproduces_state(icfg):
     assert r.state_hash() == a.state_hash()
 
 
+def test_ph06_speed_pause_and_step_do_not_change_results(icfg):
+    from aquacrop.twin.clock import SimClock
+    hashes = []
+    for speed in (1, 10, 60):
+        rt = make_runtime(icfg, seed=7)
+        rt.schedule(0, "PROCESS_REQUEST", "t", {"process": "IRRIGATION", "target": "AUTO"})
+        clk = SimClock(rt)
+        clk.set_speed(speed)
+
+        def until(tick):
+            while rt.tick < tick:
+                clk.advance_wall(min(0.05, (tick - rt.tick) * rt.params.dt_s / speed))
+        if speed == 10:                 # a pause and single steps in the middle change nothing
+            until(300)
+            clk.pause()
+            assert clk.advance_wall(5.0) == 0
+            for _ in range(3):
+                clk.step_once()
+            clk.resume()
+        until(900)
+        assert rt.tick == 900
+        hashes.append(rt.state_hash())
+    assert len(set(hashes)) == 1
+
+
 # ------------------------------------------------------------------------------------------ PH-07
 def _store(simulated=True):
     return RecipeStore(MemoryRecipeBackend(), {"MAIN": 20000, "SUMP": 5000, "A": 5000, "B": 5000, "ACID": 5000},

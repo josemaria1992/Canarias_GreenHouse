@@ -45,6 +45,10 @@ def main() -> int:
     r = subprocess.run([py, "-m", "aquacrop", "demo", "verify", "--config", "demo-24", "--seed", "42"],
                        capture_output=True, text=True, timeout=900)
     check("demo verify demo-24", r.returncode == 0, r.stdout.strip().splitlines()[-1] if r.stdout else r.stderr[-200:])
+    r = subprocess.run([py, "-m", "aquacrop", "demo", "verify", "--config", "installation-48", "--seed", "42"],
+                       capture_output=True, text=True, timeout=900)
+    check("demo verify installation-48", r.returncode == 0,
+          r.stdout.strip().splitlines()[-1] if r.stdout else r.stderr[-200:])
     pw = secrets.token_urlsafe(18)
     r = subprocess.run([py, "-m", "aquacrop", "users", "bootstrap", "--config", "demo-48", "--state-dir", "st",
                         "--username", "admin", "--password-stdin"], input=pw + "\n", capture_output=True, text=True)

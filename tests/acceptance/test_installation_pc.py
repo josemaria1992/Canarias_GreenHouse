@@ -66,6 +66,48 @@ def test_pc03_restart_begins_stopped_and_auto_rejects_leftover_outputs(icfg):
     assert not ok and "outputs still ON" in msg
 
 
+# ------------------------------------------------------------------------------------------ PC-04 latch
+def test_pc04_level_chatter_and_repeated_samples_latch_one_batch(icfg):
+    """Demo preset: trigger 8,000 L, debounce 10 s, re-arm above 9,000 L, final level 15,000 L. The main
+    level is overridden at the transmitter (raw uA, DEMO span 0-20,000 L)."""
+    rt = make_runtime(icfg)
+    refill = rt.sup.by_id["REFILL"]
+    ok, why = rt.process_request("t", "REFILL", CS.AUTO)
+    assert ok, why
+
+    def level(litres):
+        rt.set_override("t", "analog_A.AI1", int(round(4000 + 16000 * litres / 20000)), "PC-04 level")
+
+    def chatter():
+        for i in range(10):                      # each dip is shorter than the debounce
+            level(7900 if i % 2 == 0 else 8100)
+            rt.run_for(4)
+
+    chatter()
+    assert refill.batch is None and refill.batches == []
+    level(7900)
+    rt.run_for(30)                               # repeated samples below the trigger latch one batch
+    assert refill.batch is not None
+    first = refill.batch["batch_id"]
+    chatter()                                    # chatter while the batch runs changes nothing
+    assert refill.batch["batch_id"] == first
+    level(15000)                                 # water reaches the final level; the batch ends
+    while refill.batch is not None:
+        rt.step()
+    level(8500)                                  # above the trigger, below the re-arm level
+    rt.run_for(20)
+    assert not refill.armed
+    chatter()
+    level(7900)
+    rt.run_for(30)
+    assert [b["batch_id"] for b in refill.batches] == [first] and refill.batch is None
+    assert len([e for e in rt.events if e["kind"] == "REFILL_BATCH_STARTED"]) == 1
+    level(9200)                                  # above trigger + hysteresis: re-arms
+    rt.run_for(5)
+    assert refill.armed and refill.batch is None
+    assert any(e["kind"] == "REFILL_REARMED" for e in rt.events)
+
+
 # ------------------------------------------------------------------------------------------ PC-05 ownership
 def test_pc05_a_process_cannot_command_another_process_equipment(icfg):
     rt = make_runtime(icfg)

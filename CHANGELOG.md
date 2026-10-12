@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased (2026-10-12): installation model and process controllers (ADR-0013, ADR-0014)
+
+Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists and no flag enables it.
+
+### Added
+- `installation` twin topology and the `installation-48` configuration: the owner's installation
+  (20,000 L main tank, stock tanks A, B and acid of 5,000 L, a sump of about 5,000 L, two main pumps
+  on one shared drive selected by K1/K2, two return pumps, three transfer pumps, nine valve duties,
+  13 channels with retained water and 52 hand-adjusted outlets). Facts are OWNER_CONFIRMED; every
+  dynamic, switch level and span is DEMO.
+- A volume ledger over every tank, channel and pipe (additions, consumption, spill, unmet demand)
+  checked every scan, and a labelled synthetic pH/EC fixture (`synthetic-carbonate-ec-v1`) for
+  qualitative controller tests. It is not a calibrated chemical model.
+- A proposed 48-point allocation (`docs/model/signal_budget.md`): the drive run command is bound to
+  a drive adapter (SIMULATED in the twin, NOT_CONFIGURED on hardware) because 16 DO are one short;
+  missing feedbacks are handled explicitly and listed with owner options.
+- Seven process controllers (irrigation, return, refill, acid, three stock fills) with their own
+  modes, phases, permissives and fault latches; a supervisor and an equipment arbiter; separate
+  acknowledge, reset and restart; bounded MANUAL operations; raw DO commands refused on the twin.
+- Irrigation alternates P1/S1 and P2/S2 with the owner's changeover sequence and holds the valve and
+  selection when the drive does not confirm stop. Refill latches one batch per low level and runs
+  water and nutrients concurrently (fixed volumes with EC validation, or EC target keeping the A:B
+  ratio). Acid lowers pH only, in bounded steps with settling and response checks. Return follows
+  sump thresholds and the main-tank inhibit, with an alarm when the sump is high and the main tank
+  full.
+- Versioned recipes (draft, validate, activate, roll back) with units in field names; a labelled
+  DEMO preset for simulation only (deliberately not the owner's illustrative example). Operator
+  stock-preparation acknowledgements, invalidated by a fill or an uncovered level rise.
+- Historian schema v3 (`recipes`, `recipe_activations`, `stock_readiness`), migrated after a verified
+  backup. API: `/api/processes`, `/api/stocks`, `/api/recipes`; permissions `PROCESS_CONTROL`,
+  `RECIPE_EDIT` (operator) and `RECIPE_ACTIVATE` (administrator, a changeable default).
+- 40 installation scenarios; `demo verify --config installation-48` (42 checks); PH and PC
+  acceptance tests; CI and the installed-wheel check run the installation verification.
+- Docs: ADR-0013, ADR-0014, `model/installation_model.md`, `model/signal_budget.md`,
+  `model/cause_and_effect.md`.
+
+### Changed
+- The simulation runtime acquires once per control period for the installation topology (the demo
+  topology still scans every tick); configuration lookups are cached.
+
 ## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 
 ### Added
