@@ -29,7 +29,7 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-251 tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and
+252 tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and
 the installed wheel passes 13/13 from outside the repository. A simulated 400-day history at 60 s
 with commands, alarms and device faults measured the one-year size, the rolling window, the WAL,
 the compressed backup and the restore drill; a concurrency stress run measured the WAL and

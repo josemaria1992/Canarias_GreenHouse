@@ -2,8 +2,8 @@
 
 **Environment:** Linux x86_64 container, Python 3.13.16 (also 3.11.15 and 3.12.13), pymodbus
 3.11.3, FastAPI 0.143, SQLite WAL. **Run:** 2026-10-12 (historian update, ADR-0008), software
-0.2.0.dev0, tested at commit `bbe528f` (only documentation changed after). The 2026-10-11 run was at `0ce4842` (183 tests).
-**Results:** `python -m pytest`: 251 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
+0.2.0.dev0, tested at commit `f0b18e2` (only documentation changed after). The 2026-10-11 run was at `0ce4842` (183 tests).
+**Results:** `python -m pytest`: 252 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
 `demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`. Installed-wheel check
 (`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
 

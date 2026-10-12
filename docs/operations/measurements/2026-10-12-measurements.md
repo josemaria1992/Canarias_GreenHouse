@@ -102,4 +102,4 @@ The first stress run (commit `c7b2ca6`) found a defect: the capacity check that 
 
 ## Test summary
 
-At commit `bbe528f` (only documentation changed after): `python -m pytest` 251 passed on Python 3.11.15, 3.12.13 and 3.13.16, `pip check` clean; `demo verify --seed 42` 21/21 PASS for `demo-48` and `demo-24`; installed-wheel check 13/13 PASS. GitHub CI results are on PR #1. All of these run on simulated or in-memory devices; none is a hardware test.
+At commit `f0b18e2` (only documentation changed after): `python -m pytest` 252 passed on Python 3.11.15, 3.12.13 and 3.13.16, `pip check` clean; `demo verify --seed 42` 21/21 PASS for `demo-48` and `demo-24`; installed-wheel check 13/13 PASS. GitHub CI results are on PR #1. All of these run on simulated or in-memory devices; none is a hardware test.
