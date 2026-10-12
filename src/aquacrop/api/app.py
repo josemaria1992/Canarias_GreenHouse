@@ -11,6 +11,7 @@ import csv
 import io
 import ipaddress
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
@@ -180,6 +181,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         idle_minutes=sec.session_idle_minutes, absolute_hours=sec.session_absolute_hours)
     limiter = RateLimiter()
     _check_namespace(hist, cfg, session_id)
+    hist.record_config(cfg)
     is_sim = cfg.profile == AccessPolicy.SIMULATED
     if is_sim:
         svc = SimulationService(cfg, hist, session_id)
@@ -426,8 +428,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                          "sim_s": r.sim_s, "tick": r.tick, "source": r.backend.source.value, "scenario": svc.scenario,
                          "seed": r.seed, "acquisition_stalled": r.acquisition_stalled, "overruns": svc.clock.overruns,
                          "history_stride_sim_s": r.history_stride_s,
-                         "history_cadence_note": "simulation-time stride; wall-time acquisition interval applies to "
-                                                 "real hardware"},
+                         "history_cadence_note": "complete snapshot every history_stride_sim_s of simulated time; "
+                                                 "real installations record on wall-clock boundaries"},
                 "devices": devs, "storage": hist.storage() | {"ok": ok_store, "reason": why},
                 "historian": {k: v for k, v in hist.health.items()}, "acquisition_task": svc.task_health(),
                 "alarms": {"active": sum(o.active for o in alarms), "unacknowledged": sum(not o.acknowledged for o in alarms),
@@ -822,7 +824,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
              "production_fields": {"hydraulic_topology": "TBD — requires operator confirmation",
                                    "physical_mapping": "empty (no approved wiring)",
                                    "calibration": "none verified", "safe_state_matrix": "TBD",
-                                   "retention_policy": "DEMO proposal only"}}
+                                   "retention_policy": (f"rolling {cfg.historian.retention_days} days, snapshots every "
+                                                        f"{cfg.historian.recording_interval_s} s "
+                                                        f"({cfg.historian.retention_provenance})")}}
         if p.can(Perm.USER_ADMIN):
             d["users"] = accounts.list_users()
         return d
@@ -867,13 +871,37 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         hist.event("SESSIONS_REVOKED", {"username": username}, actor=p.username)
         return {"ok": True}
 
-    @app.post("/api/backup")
+    backup_job: dict = {"running": False, "last": None}
+    backup_lock = threading.Lock()
+
+    def _run_backup(user: str) -> None:
+        try:
+            hist.wait_idle()
+            man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
+                                config_version=cfg.config_version,
+                                reserve_bytes=cfg.historian.free_space_reserve_bytes)
+            hist.event("BACKUP_CREATED", {k: v for k, v in man.items() if k != "row_counts"}, actor=user)
+            backup_job["last"] = {"ok": True, "file": man["file"], "bytes": man["bytes"]}
+        except Exception as e:   # refused for space, or failed: recorded, never silent
+            hist.event("BACKUP_FAILED", {"error": str(e)}, actor=user)
+            backup_job["last"] = {"ok": False, "error": str(e)}
+        finally:
+            backup_job["running"] = False
+
+    @app.post("/api/backup", status_code=202)
     def backup(p: Principal = Depends(require(Perm.BACKUP))):
-        hist.wait_idle()
-        man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
-                            config_version=cfg.config_version)
-        hist.event("BACKUP_CREATED", man, actor=p.username)
-        return man
+        """A one-year database takes minutes to dump: the backup runs in the background and ends in a
+        BACKUP_CREATED or BACKUP_FAILED event."""
+        with backup_lock:
+            if backup_job["running"]:
+                raise HTTPException(409, "a backup is already running")
+            backup_job["running"] = True
+        threading.Thread(target=_run_backup, args=(p.username,), name="api-backup", daemon=True).start()
+        return {"started": True, "destination": str(state_dir / "backups")}
+
+    @app.get("/api/backup")
+    def backup_state(p: Principal = Depends(require(Perm.READ))):
+        return backup_job
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")

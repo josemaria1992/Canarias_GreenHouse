@@ -34,7 +34,9 @@ parts. Stop at the first unexpected result and record it.
 Flash and configure per `docs/installation/cm4.md`. Fill the UART table by reading one known module
 per port with `diagnostics read`. Record OS image checksum, `uname -a`, Python version,
 `pip freeze`, RTC check, and measure: poll cycle time per bus (`/api/status`), CPU load at
-48 points / 3 s, database growth over one hour.
+48 points / 3 s polling, snapshots per hour (60 expected), database growth over 24 h and the
+365-day projection (`aquacrop storage report`), free disk after installation, and the time and size
+of one backup and of `backup verify --full` (ADR-0008 budget check).
 
 ## CP-01 Module identification (read-only)
 For each module alone on the bus: photograph labels (model, SKU, revision), record the expected

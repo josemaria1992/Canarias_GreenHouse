@@ -36,3 +36,12 @@ physical_mapping: []
 alarm_rules: []
 historian:
   db_path: aquacrop-hardware.sqlite3     # never share a database with the simulation profile
+  # Owner requirements 2026-10-12 (ADR-0008). Bus polling, alarms and the dashboard keep poll_interval_s;
+  # the historian writes a complete snapshot of every point on each 60 s wall-clock boundary.
+  recording_interval_s: 60               # 300 is allowed only when the owner explicitly asks for it
+  retention_days: 365                    # rolling window; nothing inside it is deleted for space
+  retention_provenance: APPROVED
+  db_budget_bytes: 10737418240           # 10 GiB: 365 days at 60 s (~7.8 GiB measured) plus events
+  free_space_warning_bytes: 4294967296   # 4 GiB free: WARNING
+  free_space_reserve_bytes: 2147483648   # 2 GiB free: CRITICAL, new starts and ON refused
+  snapshot_floor_bytes: 536870912        # 512 MiB free: periodic snapshots pause, events still written

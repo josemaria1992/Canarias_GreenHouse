@@ -172,7 +172,7 @@ def test_F07_simulated_limits_carry_into_hardware_mode(v01, tmp_path):
 
 
 def test_F08_single_shared_basic_credential(v01, tmp_path):
-    src = (LEGACY / "greenhouse" / "app.py").read_text()
+    src = (LEGACY / "greenhouse" / "app.py").read_text(encoding="utf-8")
     assert "HTTPBasic" in src and "csrf" not in src.lower() and "role" not in src.lower()
 
 
@@ -211,5 +211,5 @@ def test_F11_background_poll_failure_unsupervised(v01, tmp_path):
 
 
 def test_F12_chart_is_index_based_and_bridges_gaps():
-    html = (LEGACY / "static" / "index.html").read_text()
+    html = (LEGACY / "static" / "index.html").read_text(encoding="utf-8")
     assert "row.quality==='OK'" in html and "n/(Math.max(1,values.length-1))" in html

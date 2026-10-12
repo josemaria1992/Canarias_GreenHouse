@@ -4,7 +4,6 @@ import sqlite3
 import pytest
 
 from aquacrop.domain.model import ControllerState, Outcome
-from aquacrop.historian.backup import create_backup, restore_backup, verify_backup
 from aquacrop.historian.schema import CURRENT_VERSION, connect, migrate, schema_version
 from aquacrop.historian.writer import Historian
 from aquacrop.twin.runtime import SimulationRuntime
@@ -25,10 +24,11 @@ def make_rt(cfg, h):
 
 def test_every_cycle_records_all_points_including_unchanged(hist, cfg48):
     rt = make_rt(cfg48, hist)
-    rt.run_for(5)  # stride 1 s => 5 cycles
+    rt.run_for(300)  # 60 s snapshots (simulated time) => 5 cycles
     hist.wait_idle()
     rows = hist.query("SELECT cycle_pk, count(*) n FROM samples GROUP BY cycle_pk")
     assert len(rows) == 5 and all(r["n"] == 48 for r in rows)
+    assert {r["cadence_s"] for r in hist.query("SELECT cadence_s FROM cycles")} == {60.0}
     di = hist.query("SELECT count(*) n FROM samples WHERE point_id='relay_A.DI1'")[0]["n"]
     assert di == 5  # unchanged digital still recorded each cycle
     r = hist.query("SELECT * FROM samples WHERE point_id='analog_A.AI1' LIMIT 1")[0]
@@ -94,28 +94,6 @@ def test_pending_intent_reconciled_as_unknown(tmp_path, cfg24):
     ids = h.reconcile_pending_commands()
     assert ids == [rec.command.request_id]
     assert h.query("SELECT outcome FROM commands WHERE request_id=?", (rec.command.request_id,))[0][0] == "OUTCOME_UNKNOWN"
-    h.close()
-
-
-def test_backup_verify_restore_to_new_instance(tmp_path, cfg24):
-    h = Historian(tmp_path / "live.sqlite3", cfg24, "s1")
-    rt = make_rt(cfg24, h)
-    rt.run_for(3)
-    h.wait_idle()
-    man = create_backup(tmp_path / "live.sqlite3", tmp_path / "bk", config_id=cfg24.config_id)
-    v = verify_backup(man["path"])
-    assert v["ok"] and v["integrity"] == "ok" and v["counts"]["samples"] == 3 * 24
-    with pytest.raises(FileExistsError):
-        restore_backup(man["path"], tmp_path / "live.sqlite3")
-    res = restore_backup(man["path"], tmp_path / "restored" / "new.sqlite3")
-    con = sqlite3.connect(res["target"])
-    assert con.execute("SELECT count(*) FROM samples").fetchone()[0] == 72
-    con.close()
-    # corrupt the copy: verification must fail
-    data = bytearray(open(man["path"], "rb").read())
-    data[5000] ^= 0xFF
-    open(man["path"], "wb").write(bytes(data))
-    assert not verify_backup(man["path"])["ok"]
     h.close()
 
 

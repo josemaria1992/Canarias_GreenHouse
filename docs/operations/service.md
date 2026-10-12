@@ -34,72 +34,136 @@ up and says so. The simulation driver has the same supervision.
 - `GET /api/health` (no sign-in): `{ok, storage_ok, acquisition_ok}` only. Suitable for a local
   watchdog: `curl -fsS http://127.0.0.1:8000/api/health`.
 - `GET /api/status` (signed in): per-device health and last error, relay modes, bus worker
-  heartbeat, historian queue depth, DB size, free disk, budget/reserve, newest data age.
+  heartbeat, snapshot recorder and retention state, historian queue depth, DB size, free disk,
+  thresholds, 365-day projection, newest data age.
 - Events worth alerting on: `POLL_OVERRUN`, `WALL_CLOCK_STEP`, `ACQUISITION_TASK_FAILED`,
-  alarms `DEVICE_COMM`, `STORAGE_PRESSURE`, `STORAGE_WRITE_FAILED`.
+  `HISTORY_SNAPSHOTS_MISSED`, `BACKUP_FAILED`; alarms `DEVICE_COMM`, `STORAGE_CAPACITY`,
+  `STORAGE_PRESSURE`, `HISTORY_SNAPSHOTS_PAUSED`, `STORAGE_WRITE_FAILED`, `RETENTION_HELD`.
 
-## Storage sizing (measured)
+## Historian recording and storage (ADR-0008)
 
-Measured 2026-10-11 on Linux x86_64 with the current schema (v2): **about 16.2 KB per 48-point
-cycle** including the two sample indexes (samples table 67 %, point/time index 18 %, time index
-13 %).
+Owner requirements of 2026-10-12: a complete snapshot of every point every **60 s**, a rolling
+**365-day** window, nothing deleted inside the window to make room. Bus polling (3 s), alarms, edges
+and the dashboard keep their own timing; edges, alarm transitions, commands and configuration
+changes are written when they happen.
 
-| Cadence | Cycles/day | Point observations/day | DB growth/day |
-|---|---:|---:|---:|
-| 48 points every 3 s | 28,800 | 1,382,400 | ≈ 445 MiB |
-| 48 points every 10 s | 8,640 | 414,720 | ≈ 134 MiB |
-| 24 points every 3 s | 28,800 | 691,200 | ≈ 225 MiB (estimate: half the rows) |
+`historian.recording_interval_s` accepts 60 or 300. Keep 60 until the owner explicitly asks for
+300 s; the change is a configuration edit plus a restart, and the restart records `CONFIG_CHANGED`
+with the old and new value.
 
-**Conflict to resolve (owner decision):** the brief's DEMO proposal of 7 days at full resolution
-needs ≈ 3.0 GiB at 48 points / 3 s, but its DEMO database budget is 2 GiB, which lasts ≈ 4.6 days.
-Options: raise the budget (the 32 GB eMMC has room), shorten full-resolution retention, poll more
-slowly, or invest in a more compact schema (moving per-cycle text columns to the cycle row is
-estimated to save roughly half; not done). Until decided, the `STORAGE_PRESSURE` warning appears
-when the budget is exceeded and nothing is deleted.
+### Measured growth (desktop, `scripts/measure_storage.py`, report in `measurements/`)
 
-eMMC headroom to plan for (32 GB nominal, ≈ 29 GiB usable): OS and packages ≈ 3–4 GiB, journald cap
-200 MiB, database budget, WAL up to 64 MiB after checkpoint, local backups (each a full copy of the
-database), archive exports (gzip CSV, smaller), plus room for one upgrade's release directory. 12-bit
-ADC resolution says nothing about accuracy or eMMC endurance; endurance is not measured.
+| Quantity | Measured |
+|---|---|
+| Growth while the window fills | 23.6 MB (22.5 MiB) per day, linear |
+| Database after 365 days | 8.03 GiB |
+| Database after 400 days (window full, pruned hourly) | 8.05 GiB: +18 MiB in the 35 days after the window filled (about 2% of the filling rate); freed pages are reused |
+| of which periodic samples, with their two indexes | 7.87 GiB (table 5.34 GiB, indexes 2.53 GiB) |
+| of which snapshot headers (`cycles`) | 0.08 GiB |
+| of which events (640 edges per day, hourly retention records) | 0.10 GiB |
+| Compressed backup of the one-year database | 0.48 GiB (16.7 times smaller), written in 4.7 min |
+| Backup verification (checksum, full stream, row counts) | 38 s |
+| Restore into a new database, with `integrity_check` | 8.3 min (7.79 GiB restored) |
 
-## Disk pressure and failures
+48 points, every 60 s, 400 simulated days through the real write path. Timings are from an x86
+desktop; the CM4 and its eMMC will be slower and are measured in CP-00.
 
-- Free disk below `free_space_reserve_bytes` (DEMO 1 GiB): `STORAGE_PRESSURE` CRITICAL, new starts
-  and ON commands refused (`can_accept_starts`), visible in Overview.
-- Database over `db_budget_bytes` (DEMO 2 GiB): `STORAGE_PRESSURE` WARNING.
-- A failed commit (disk full, I/O error): the whole batch rolls back, health goes degraded,
-  `STORAGE_WRITE_FAILED` CRITICAL, starts inhibited. History that could not be queued is counted
-  (`dropped_cycles`), never silently skipped. This does not stop real equipment.
+Check the real growth on the installation after a few weeks, and again before the window fills:
+
+```text
+python -m aquacrop storage report --config /etc/aquacrop/hardware-read-only.yaml --state-dir /var/lib/aquacrop
+```
+
+It is read-only and safe while the server runs. It prints the database size and used bytes, free
+disk and the thresholds, the oldest and newest record, the 365-day projection and the growth of the
+last seven days. Overview and Settings in the web UI show the same figures.
+
+### Budget on the 32 GB eMMC
+
+Usable space is an estimate: the 32 GB eMMC is about 29 GiB; after the boot partition, file-system
+overhead and the 5% root reservation about 26.5 GiB remain. The OS footprint is confirmed in CP-00.
+
+| Item | Allowance | Basis |
+|---|---|---|
+| OS, Python runtime and packages | 4.0 GiB | estimate; confirmed in CP-00 |
+| Current and previous release, wheelhouse | 1.0 GiB | estimate |
+| System journal | 0.2 GiB | `journald-aquacrop.conf` (`SystemMaxUse=200M`) |
+| Historian database (`db_budget_bytes`) | 10.0 GiB | 8.05 GiB measured for a full window, plus room for more edges, alarms and commands than the test assumed |
+| SQLite WAL | 0.06 GiB | `journal_size_limit` 64 MiB |
+| Local backups (`--keep 7`) | 4.0 GiB | 7 × 0.48 GiB measured = 3.4 GiB |
+| Free-space reserve (`free_space_reserve_bytes`) | 2.0 GiB | below it, starts, ON commands and backups are refused |
+| **Total** | **21.3 GiB** | about 5 GiB of the 26.5 GiB left unallocated |
+
+Expected free space once the window is full: about 9 to 10 GiB (warning below 4 GiB, reserve 2 GiB,
+snapshot floor 512 MiB). The superseded 2 GiB limit could not hold even two months at 60 s. Keeping
+7 uncompressed copies of the database (as before) would have needed about 56 GiB, which is why
+backups are now compressed.
+
+## Low and full disk
+
+Nothing inside the 365-day window is deleted for any of these. None of them stops equipment.
+
+| Condition | Alarm | What happens |
+|---|---|---|
+| Database over `db_budget_bytes` (10 GiB), or the 365-day projection over it, or free disk under 4 GiB | `STORAGE_CAPACITY` WARNING | Visible only. Plan space: move backups or archives off the device. |
+| Free disk under 2 GiB (`free_space_reserve_bytes`) | `STORAGE_PRESSURE` CRITICAL | New starts and ON commands refused (`can_accept_starts`). The daily backup refuses to start. |
+| Free disk under 512 MiB (`snapshot_floor_bytes`) | `HISTORY_SNAPSHOTS_PAUSED` CRITICAL | Periodic snapshots pause; each skipped one is counted and `HISTORY_SNAPSHOTS_PAUSED` is logged once. Events, commands and alarms are still written. Snapshots resume by themselves once free space is back above 2 GiB (`HISTORY_SNAPSHOTS_RESUMED` with the count). |
+| A commit fails (disk full, I/O error) | `STORAGE_WRITE_FAILED` CRITICAL | The batch rolls back, health goes degraded, starts refused. History that could not be queued is counted (`dropped_cycles`). |
+
+To recover space: copy old backups or archives off the device and delete them locally, or remove
+other files. Do not delete database rows by hand.
 
 ## Backups and restore
 
 ```text
-python -m aquacrop backup create --config C --state-dir S --destination /var/lib/aquacrop/backups
-python -m aquacrop backup verify --backup /var/lib/aquacrop/backups          # newest, or a file
+python -m aquacrop backup create --config C --state-dir S --destination /var/lib/aquacrop/backups --keep 7
+python -m aquacrop backup verify --backup /var/lib/aquacrop/backups            # newest, or a file
+python -m aquacrop backup verify --backup FILE --full --scratch-dir /tmp      # also a test restore
 python -m aquacrop backup restore --backup FILE --target /tmp/restore-test.sqlite3   # new instance first
 ```
 
-Backups use the SQLite online backup API (consistent with WAL, safe while the server runs) and
-write a manifest with SHA-256, schema and software version. Verify re-checks the checksum and runs
-`integrity_check` on the copy read-only. Restore refuses an existing target unless `--maintenance`
-and `--config` are given and the installation's owner lock shows the server is stopped. The timer
-runs a backup at 02:30 daily. Off-device backup destination and backup retention: **TBD (owner
-policy)**; until then old backups must be removed by hand.
+A backup is a gzip-compressed SQL dump of one consistent read snapshot (safe while the server runs)
+plus a manifest with SHA-256, per-table row counts, schema and software version and the history
+range. It is streamed, so no full-size temporary copy is written. `create` verifies the new file
+(checksum, whole gzip stream, every statement, row counts) before `--keep` removes the oldest
+compressed backups, and refuses to start if the estimated size would take free disk below the
+reserve. `verify --full` additionally restores into a scratch database and runs `integrity_check`
+(needs room for one database). Restore rebuilds a database from the dump and checks integrity and
+row counts before it is moved into place; it refuses an existing target unless `--maintenance` and
+`--config` are given and the installation's owner lock shows the server is stopped. Older
+single-file `.sqlite3` backups still verify and restore. Backup files are mode 0600 (they contain
+password hashes).
 
-## Archive and retention
+The timer runs `backup create --keep 7` at 02:30 daily with low CPU and I/O priority; `create`
+reports a refusal or failure as a failed unit (`systemctl --failed`). The web UI's *Create backup
+now* starts one in the background and logs `BACKUP_CREATED` or `BACKUP_FAILED`. The off-device
+destination is **TBD (owner policy)**: local copies do not survive loss of the eMMC.
+
+## Retention and archives
+
+The server applies the rolling window itself every hour (`historian.retention_check_interval_s`):
+samples, cycles, events, finished commands, closed alarm occurrences, ended bench leases and expired
+sign-in sessions older than 365 days are deleted in batches of 5,000 through the single writer, so
+recording continues between batches. Each run that deletes anything logs `RETENTION_PRUNED` with the
+counts and the cutoff. Open alarms, users, process sessions and the schema/migration/archive
+registers are kept. Freed pages are reused, so the file stops growing after the first year.
+
+Retention trusts the system clock only after a check. If at start the clock is more than 30 days
+past (or behind) the newest stored record, or it steps forward by more than an hour while running,
+retention holds and raises `RETENTION_HELD` (WARNING). Check the date and time, then acknowledge the
+alarm; that releases it (`RETENTION_RELEASED`).
 
 ```text
-python -m aquacrop archive create --config C --state-dir S --start 2026-10-01T00:00:00+00:00 --end 2026-10-02T00:00:00+00:00 --destination /var/lib/aquacrop/archive
+python -m aquacrop retention apply --config C --state-dir S --dry-run      # server stopped
+python -m aquacrop archive create --config C --state-dir S --start 2026-10-01T00:00:00+00:00 --end 2026-11-01T00:00:00+00:00 --destination /var/lib/aquacrop/archive
 python -m aquacrop archive verify --archive /var/lib/aquacrop/archive/archive-...
-python -m aquacrop retention apply --config C --state-dir S --dry-run
 ```
 
-Both archive and retention need the server stopped. An archive holds gzip CSV of samples and
-events plus a manifest (checksums, row counts, configuration and calibration references) and is
-registered in the database. `retention apply` deletes sample rows only if the policy is
-`APPROVED`, the rows are older than `retention_days`, and they lie inside a registered archive that
-still verifies. Events, commands, alarms and leases are never pruned. The shipped policy is `DEMO`,
-so it deletes nothing.
+An archive (gzip CSV of samples and events with a checksummed manifest) is the way to keep history
+beyond 365 days; create it before the range leaves the window and copy it off the device (destination
+TBD, owner policy). Archives
+and `retention apply` need the server stopped. A configuration with `retention_provenance: DEMO`
+deletes nothing.
 
 ## Crash and power-loss recovery
 

@@ -2,7 +2,7 @@
 # not an engineering fact. Physical mapping is intentionally empty.
 schema_version: 1
 config_id: demo-48
-config_version: "2026-10-11.1"
+config_version: "2026-10-12.1"
 profile: SIMULATED
 label: "SIMULATION — DEMO MODEL (48 virtual points)"
 site:
@@ -106,6 +106,8 @@ twin:
 historian:
   db_path: var/demo-48.sqlite3
   acquisition_interval_s: 3.0
-  sim_history_stride_s: 1.0
-  retention_days: 7
-  retention_provenance: DEMO
+  # Owner requirements 2026-10-12 (ADR-0008): complete snapshot every 60 s (300 s only on the owner's
+  # request), rolling 365-day window. In simulation the interval is simulated time.
+  recording_interval_s: 60
+  retention_days: 365
+  retention_provenance: APPROVED

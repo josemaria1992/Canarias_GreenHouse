@@ -11,14 +11,26 @@ from aquacrop.security.auth import Role
 ORIGIN = "http://127.0.0.1:8000"
 
 
-@pytest.fixture
-def env(tmp_path, cfg48):
-    app = create_app(cfg48, state_dir=tmp_path, bind_host="127.0.0.1")
+def _app(tmp_path, cfg):
+    app = create_app(cfg, state_dir=tmp_path, bind_host="127.0.0.1")
     acc = app.state.accounts
     acc.create_user("admin1", "correct horse battery", Role.ADMIN)
     acc.create_user("oper1", "operator password 1", Role.OPERATOR)
     acc.create_user("view1", "viewer password 12", Role.VIEWER)
-    with TestClient(app, base_url=ORIGIN) as c:
+    return app
+
+
+@pytest.fixture
+def env(tmp_path, cfg48):
+    with TestClient(app := _app(tmp_path, cfg48), base_url=ORIGIN) as c:
+        yield app, c
+
+
+@pytest.fixture
+def env_dense(tmp_path, cfg48):
+    """Simulation-only 1 s snapshot stride (simulated time) so export/trend tests get rows quickly."""
+    cfg = cfg48.model_copy(update={"historian": cfg48.historian.model_copy(update={"sim_history_stride_s": 1.0})})
+    with TestClient(app := _app(tmp_path, cfg), base_url=ORIGIN) as c:
         yield app, c
 
 
@@ -177,8 +189,8 @@ def test_static_ui_is_packaged_and_offline(env):
     assert "innerHTML" not in c.get("/static/app.js").text
 
 
-def test_csv_export_escapes_and_discloses_completeness(env):
-    app, c = env
+def test_csv_export_escapes_and_discloses_completeness(env_dense):
+    app, c = env_dense
     hdr = login(c, "admin1", PW["admin1"])
     c.post("/api/io/override", json={"point": "analog_A.AI1", "raw": 9000, "reason": "=HYPERLINK(\"x\")"}, headers=hdr)
     c.post("/api/twin/control", json={"action": "speed", "speed": 10}, headers=hdr)
@@ -210,8 +222,16 @@ def test_scenario_and_twin_controls(env):
     assert app.state.svc.runtime.tick == t + 5
 
 
-def test_history_cadence_bounded_and_labelled_at_speed(env):
+def test_default_snapshot_interval_is_60_s_of_simulated_time(env):
     app, c = env
+    hdr = login(c, "oper1", PW["oper1"])
+    assert c.get("/api/status").json()["twin"]["history_stride_sim_s"] == 60.0
+    c.post("/api/twin/control", json={"action": "speed", "speed": 60}, headers=hdr)
+    assert c.get("/api/status").json()["twin"]["history_stride_sim_s"] == 60.0  # max(60 s, 60 x 0.5 s)
+
+
+def test_history_cadence_bounded_and_labelled_at_speed(env_dense):
+    app, c = env_dense
     hdr = login(c, "oper1", PW["oper1"])
     c.post("/api/twin/control", json={"action": "speed", "speed": 60}, headers=hdr)
     st = c.get("/api/status").json()["twin"]
@@ -222,8 +242,8 @@ def test_history_cadence_bounded_and_labelled_at_speed(env):
     assert c.get("/api/status").json()["twin"]["history_stride_sim_s"] == 1.0
 
 
-def test_trend_gap_flags_from_recorded_cadence(env):
-    app, c = env
+def test_trend_gap_flags_from_recorded_cadence(env_dense):
+    app, c = env_dense
     hdr = login(c, "oper1", PW["oper1"])
     c.post("/api/twin/control", json={"action": "speed", "speed": 10}, headers=hdr)
     time.sleep(1.6)

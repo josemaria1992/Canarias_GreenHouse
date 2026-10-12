@@ -167,15 +167,38 @@ class AlarmRule(_Strict):
         return self
 
 
+RECORDING_INTERVALS_S = (60, 300)
+GIB = 1024**3
+
+
 class HistorianSettings(_Strict):
+    """What the historian records periodically and how long it keeps it (owner requirements of
+    2026-10-12, ADR-0008). Acquisition (each bus's poll_interval_s), alarm evaluation, control and
+    dashboard updates keep their own timing; events, commands and alarm transitions are written when
+    they happen, independent of the recording interval."""
     db_path: str = "var/aquacrop.sqlite3"
-    acquisition_interval_s: float = Field(default=3.0, ge=0.2)    # real wall-time cadence
-    sim_history_stride_s: float = Field(default=1.0, gt=0)         # simulation-time cadence
+    acquisition_interval_s: float = Field(default=3.0, ge=0.2)    # display hint only; buses own their poll rate
+    # Complete snapshot of every configured point (unchanged values and quality included). 60 s is the
+    # owner's active setting; 300 s is allowed but only on the owner's explicit request.
+    recording_interval_s: int = 60
+    # Simulation only: snapshot stride in simulated time. Unset = recording_interval_s.
+    sim_history_stride_s: float | None = Field(default=None, gt=0)
     sim_history_min_wall_interval_s: float = Field(default=0.5, gt=0)  # caps write rate at high speed
-    retention_days: float | None = 7.0      # DEMO proposal; production policy TBD
-    db_budget_bytes: int = 2 * 1024**3
-    free_space_reserve_bytes: int = 1024**3
-    retention_provenance: Literal["DEMO", "APPROVED"] = "DEMO"
+    retention_days: int = Field(default=365, ge=365)   # rolling window, owner-approved 2026-10-12
+    retention_provenance: Literal["DEMO", "APPROVED"] = "APPROVED"   # DEMO: nothing is ever deleted
+    retention_check_interval_s: float = Field(default=3600.0, ge=60.0, le=86400.0)
+    db_budget_bytes: int = Field(default=10 * GIB, gt=0)             # planning budget: warns, never deletes
+    free_space_warning_bytes: int = Field(default=4 * GIB, ge=0)     # low disk: WARNING
+    free_space_reserve_bytes: int = Field(default=2 * GIB, ge=0)     # CRITICAL: new starts and ON refused
+    snapshot_floor_bytes: int = Field(default=512 * 1024**2, ge=0)   # periodic snapshots pause below this
+
+    @model_validator(mode="after")
+    def _check(self) -> "HistorianSettings":
+        if self.recording_interval_s not in RECORDING_INTERVALS_S:
+            raise ValueError(f"recording_interval_s must be one of {RECORDING_INTERVALS_S}")
+        if not self.snapshot_floor_bytes <= self.free_space_reserve_bytes <= self.free_space_warning_bytes:
+            raise ValueError("free-space thresholds must satisfy snapshot_floor <= reserve <= warning")
+        return self
 
 
 class SecuritySettings(_Strict):

@@ -1,0 +1,180 @@
+{
+  "points": 48,
+  "interval_s": 60,
+  "days": 400.0,
+  "checkpoints": [
+    {
+      "day": 1,
+      "db_bytes": 23363584,
+      "used_bytes": 23363584,
+      "reusable_bytes": 0,
+      "samples": 69120,
+      "events": 640,
+      "elapsed_s": 1.6
+    },
+    {
+      "day": 7,
+      "db_bytes": 163012608,
+      "used_bytes": 163012608,
+      "reusable_bytes": 0,
+      "samples": 483840,
+      "events": 4570,
+      "elapsed_s": 11.3
+    },
+    {
+      "day": 30,
+      "db_bytes": 697921536,
+      "used_bytes": 697921536,
+      "reusable_bytes": 0,
+      "samples": 2073600,
+      "events": 19341,
+      "elapsed_s": 50.9
+    },
+    {
+      "day": 60,
+      "db_bytes": 1399734272,
+      "used_bytes": 1399734272,
+      "reusable_bytes": 0,
+      "samples": 4147200,
+      "events": 38544,
+      "elapsed_s": 105.6
+    },
+    {
+      "day": 90,
+      "db_bytes": 2101305344,
+      "used_bytes": 2101305344,
+      "reusable_bytes": 0,
+      "samples": 6220800,
+      "events": 57751,
+      "elapsed_s": 159.1
+    },
+    {
+      "day": 120,
+      "db_bytes": 2802839552,
+      "used_bytes": 2802839552,
+      "reusable_bytes": 0,
+      "samples": 8294400,
+      "events": 76857,
+      "elapsed_s": 215.0
+    },
+    {
+      "day": 150,
+      "db_bytes": 3515346944,
+      "used_bytes": 3515346944,
+      "reusable_bytes": 0,
+      "samples": 10368000,
+      "events": 96024,
+      "elapsed_s": 270.0
+    },
+    {
+      "day": 180,
+      "db_bytes": 4228534272,
+      "used_bytes": 4228534272,
+      "reusable_bytes": 0,
+      "samples": 12441600,
+      "events": 115383,
+      "elapsed_s": 326.9
+    },
+    {
+      "day": 210,
+      "db_bytes": 4941512704,
+      "used_bytes": 4941512704,
+      "reusable_bytes": 0,
+      "samples": 14515200,
+      "events": 134450,
+      "elapsed_s": 379.4
+    },
+    {
+      "day": 240,
+      "db_bytes": 5654601728,
+      "used_bytes": 5654601728,
+      "reusable_bytes": 0,
+      "samples": 16588800,
+      "events": 153804,
+      "elapsed_s": 431.4
+    },
+    {
+      "day": 270,
+      "db_bytes": 6367715328,
+      "used_bytes": 6367715328,
+      "reusable_bytes": 0,
+      "samples": 18662400,
+      "events": 173098,
+      "elapsed_s": 482.7
+    },
+    {
+      "day": 300,
+      "db_bytes": 7080751104,
+      "used_bytes": 7080751104,
+      "reusable_bytes": 0,
+      "samples": 20736000,
+      "events": 192184,
+      "elapsed_s": 534.8
+    },
+    {
+      "day": 330,
+      "db_bytes": 7793823744,
+      "used_bytes": 7793823744,
+      "reusable_bytes": 0,
+      "samples": 22809600,
+      "events": 211444,
+      "elapsed_s": 588.0
+    },
+    {
+      "day": 360,
+      "db_bytes": 8506896384,
+      "used_bytes": 8506896384,
+      "reusable_bytes": 0,
+      "samples": 24883200,
+      "events": 230679,
+      "elapsed_s": 641.1
+    },
+    {
+      "day": 365,
+      "db_bytes": 8625790976,
+      "used_bytes": 8625790976,
+      "reusable_bytes": 0,
+      "samples": 25228800,
+      "events": 233921,
+      "elapsed_s": 652.0
+    },
+    {
+      "day": 390,
+      "db_bytes": 8640040960,
+      "used_bytes": 8639184896,
+      "reusable_bytes": 856064,
+      "samples": 25228800,
+      "events": 234358,
+      "elapsed_s": 701.7
+    },
+    {
+      "day": 400,
+      "db_bytes": 8644681728,
+      "used_bytes": 8643801088,
+      "reusable_bytes": 880640,
+      "samples": 25228800,
+      "events": 234599,
+      "elapsed_s": 723.4
+    }
+  ],
+  "final_storage": {
+    "db_bytes": 8644681728,
+    "db_used_bytes": 8643801088,
+    "db_reusable_bytes": 880640,
+    "oldest_sample_utc": "2025-02-04T23:59:57.045460+00:00",
+    "newest_sample_utc": "2026-02-04T23:58:59.957020+00:00",
+    "history_span_days": 364.99933925416667
+  },
+  "backup": {
+    "bytes": 518788054,
+    "seconds": 279.5,
+    "ratio": 16.7,
+    "verify_ok": true,
+    "verify_seconds": 38.0
+  },
+  "restore": {
+    "seconds": 498.3,
+    "bytes": 8363524096,
+    "checks": "integrity_check ok, counts match"
+  }
+}

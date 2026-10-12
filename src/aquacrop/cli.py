@@ -185,19 +185,43 @@ def cmd_demo_verify(args) -> int:
 
 # ------------------------------------------------------------------------------------------ backup
 def cmd_backup_create(args) -> int:
-    from .historian.backup import create_backup
+    from .historian.backup import BackupRefused, create_backup
     cfg = _cfg(args.config)
-    man = create_backup(_db_path(cfg, _state_dir(args)), args.destination, config_id=cfg.config_id,
-                        config_version=cfg.config_version)
+    try:
+        man = create_backup(_db_path(cfg, _state_dir(args)), args.destination, config_id=cfg.config_id,
+                            config_version=cfg.config_version, keep=args.keep,
+                            reserve_bytes=cfg.historian.free_space_reserve_bytes)
+    except BackupRefused as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 3
     print(json.dumps(man, indent=2))
     return 0
 
 
 def cmd_backup_verify(args) -> int:
     from .historian.backup import verify_backup
-    v = verify_backup(args.backup)
+    v = verify_backup(args.backup, full=args.full, scratch_dir=args.scratch_dir)
     print(json.dumps(v, indent=2, default=str))
     return 0 if v["ok"] else 1
+
+
+def cmd_storage_report(args) -> int:
+    """Measured capacity of an installation's database (read-only; safe while the server runs)."""
+    import sqlite3
+
+    from .historian.writer import capacity_report
+    cfg = _cfg(args.config)
+    db = _db_path(cfg, _state_dir(args))
+    if not db.exists():
+        print(f"no database at {db}", file=sys.stderr)
+        return 2
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        rep = capacity_report(con, db, cfg, detail=True)
+    finally:
+        con.close()
+    print(json.dumps(rep, indent=2))
+    return 0
 
 
 def cmd_backup_restore(args) -> int:
@@ -341,9 +365,13 @@ def build_parser() -> argparse.ArgumentParser:
     bc = bk.add_parser("create")
     common(bc)
     bc.add_argument("--destination", required=True)
+    bc.add_argument("--keep", type=int, default=None,
+                    help="after the new backup verifies, keep only this many compressed backups")
     bc.set_defaults(fn=cmd_backup_create)
     bv = bk.add_parser("verify")
     bv.add_argument("--backup", required=True)
+    bv.add_argument("--full", action="store_true", help="also restore into a scratch DB and run integrity_check")
+    bv.add_argument("--scratch-dir", default=None, help="where --full restores (needs room for one database)")
     bv.set_defaults(fn=cmd_backup_verify)
     br = bk.add_parser("restore")
     br.add_argument("--backup", required=True)
@@ -364,10 +392,14 @@ def build_parser() -> argparse.ArgumentParser:
     av.add_argument("--archive", required=True)
     av.set_defaults(fn=cmd_archive_verify)
     rt = sub.add_parser("retention").add_subparsers(dest="sub", required=True)
-    ra = rt.add_parser("apply", help="prune archived samples older than an APPROVED retention window")
+    ra = rt.add_parser("apply", help="delete history older than the APPROVED rolling window (server stopped)")
     common(ra)
     ra.add_argument("--dry-run", action="store_true")
     ra.set_defaults(fn=cmd_retention_apply)
+    sr = sub.add_parser("storage").add_subparsers(dest="sub", required=True)
+    srr = sr.add_parser("report", help="measured database growth, projection and free-space thresholds")
+    common(srr)
+    srr.set_defaults(fn=cmd_storage_report)
 
     mg = sub.add_parser("migrate-v01", help="backup-first import of a v0.1 greenhouse.sqlite3")
     common(mg)

@@ -110,11 +110,15 @@ lockout reset, then a deliberate new AUTO request. Clearing an alarm never start
 ## Cadences
 
 - Physics: 0.1 s simulated.
-- Simulation history: every `sim_history_stride_s` simulated seconds, raised to
-  `speed × sim_history_min_wall_interval_s` at high speed so 60× does not flood SQLite. Each change
-  is recorded as a `HISTORY_STRIDE_CHANGED` event, and each stored cycle carries its cadence so
-  trend gaps are computed correctly.
-- Real hardware: `poll_interval_s` of wall time per bus, independent of the simulation.
+- Simulation history: a complete snapshot every `recording_interval_s` (60 s) of simulated time,
+  raised to `speed × sim_history_min_wall_interval_s` at high speed so the write rate stays bounded
+  (at 60× that is still 60 s). Each change is recorded as a `HISTORY_STRIDE_CHANGED` event, and each
+  stored cycle carries its cadence so trend gaps are computed correctly. Readings older than the
+  controller's 0.5 s staleness limit are stored as `STALE`. Alarm transitions, commands and DI/DO
+  edges are written when they happen. `sim_history_stride_s` can override the stride for desktop
+  evidence runs only.
+- Real hardware: `poll_interval_s` of wall time per bus for acquisition and alarms; the historian
+  snapshots every 60 s on wall-clock boundaries (ADR-0008).
 
 ## Replay
 

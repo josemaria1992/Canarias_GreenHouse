@@ -6,6 +6,7 @@ the caller waits for the commit, so an intent is durable before any side effect.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import queue
 import shutil
@@ -13,7 +14,7 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import Future
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,6 +37,69 @@ def _iso(v: datetime | None) -> str | None:
     return v.isoformat(timespec="microseconds") if v else None
 
 
+def _flatten(d: Any, prefix: str = "") -> dict[str, Any]:
+    if isinstance(d, dict):
+        out: dict[str, Any] = {}
+        for k, v in d.items():
+            out |= _flatten(v, f"{prefix}.{k}" if prefix else str(k))
+        return out
+    return {prefix: d}
+
+
+def _diff(old: dict, new: dict) -> list[dict]:
+    a, b = _flatten(old), _flatten(new)
+    out = []
+    for k in sorted(set(a) | set(b)):
+        if a.get(k, "<absent>") != b.get(k, "<absent>"):
+            out.append({"key": k, "from": str(a.get(k, "<absent>"))[:200], "to": str(b.get(k, "<absent>"))[:200]})
+    return out
+
+
+def capacity_report(con: sqlite3.Connection, db_path: Path, cfg: InstallationConfig, *,
+                    snapshots_paused: bool = False, queue_depth: int = 0, detail: bool = False) -> dict:
+    """Read-only and cheap by default (file sizes, page counts, two index lookups). `detail` adds the
+    measured growth of the last 7 days (an index range scan; meant for the `storage report` command)."""
+    files = [db_path, Path(str(db_path) + "-wal")]
+    size = sum(f.stat().st_size for f in files if f.exists())
+    du = shutil.disk_usage(db_path.parent)
+    h = cfg.historian
+    page = con.execute("PRAGMA page_size").fetchone()[0]
+    pages = con.execute("PRAGMA page_count").fetchone()[0]
+    free_pages = con.execute("PRAGMA freelist_count").fetchone()[0]
+    oldest, newest = con.execute("SELECT min(acquired_utc), max(acquired_utc) FROM samples").fetchone()
+    used = (pages - free_pages) * page
+    span_days = projected = None
+    if oldest and newest:
+        span_days = (datetime.fromisoformat(newest) - datetime.fromisoformat(oldest)).total_seconds() / 86400
+        if span_days >= 1.0:
+            projected = int(used * max(1.0, h.retention_days / span_days))
+    out = {"db_bytes": size, "db_used_bytes": used, "db_reusable_bytes": free_pages * page,
+           "free_bytes": du.free, "disk_bytes": du.total, "budget_bytes": h.db_budget_bytes,
+           "warning_free_bytes": h.free_space_warning_bytes, "reserve_bytes": h.free_space_reserve_bytes,
+           "snapshot_floor_bytes": h.snapshot_floor_bytes,
+           "over_budget": size > h.db_budget_bytes, "below_warning": du.free < h.free_space_warning_bytes,
+           "below_reserve": du.free < h.free_space_reserve_bytes,
+           "below_snapshot_floor": du.free < h.snapshot_floor_bytes,
+           "snapshots_paused": snapshots_paused, "queue_depth": queue_depth,
+           "oldest_sample_utc": oldest, "newest_sample_utc": newest, "history_span_days": span_days,
+           "projected_window_bytes": projected,
+           "projected_over_budget": projected is not None and projected > h.db_budget_bytes,
+           "recording_interval_s": h.recording_interval_s,
+           "retention_days": h.retention_days, "retention_provenance": h.retention_provenance}
+    if detail and newest:
+        since = (datetime.fromisoformat(newest) - timedelta(days=7)).isoformat(timespec="microseconds")
+        n_samples = con.execute("SELECT count(*) FROM samples WHERE acquired_utc >= ?", (since,)).fetchone()[0]
+        n_events = con.execute("SELECT count(*) FROM events WHERE utc >= ?", (since,)).fetchone()[0]
+        n_all = con.execute("SELECT count(*) FROM samples").fetchone()[0]
+        days = min(7.0, span_days or 0.0)
+        per_row = used / n_all if n_all else None
+        out["last_7_days"] = {"days_covered": days, "samples": n_samples, "events": n_events,
+                              "avg_db_bytes_per_sample_row": per_row,
+                              "estimated_growth_bytes_per_day": (n_samples * per_row / days) if days and per_row
+                              else None}
+    return out
+
+
 class StorageUnavailable(OSError):
     pass
 
@@ -56,7 +120,9 @@ class Historian:
         self._stop = threading.Event()
         self.fail_writes = False   # test hook: simulate disk/database failure
         self.health: dict[str, Any] = {"ok": True, "last_commit_utc": None, "last_error": None,
-                                       "dropped_cycles": 0, "commits": 0, "degraded_reason": None}
+                                       "dropped_cycles": 0, "commits": 0, "degraded_reason": None,
+                                       "paused_snapshots": 0}
+        self.snapshots_paused = False
         self._thread = threading.Thread(target=self._run, name="historian-writer", daemon=True)
         self._thread.start()
         self.submit(lambda c: c.execute(
@@ -66,10 +132,12 @@ class Historian:
 
     # ------------------------------------------------------------------ queue plumbing
     def submit(self, fn: Callable[[sqlite3.Connection], Any], *, wait: bool = False, timeout: float = 3.0,
-               droppable: bool = False):
+               droppable: bool = False, solo_without_fk: bool = False):
+        """Queue `fn` for the writer thread. `solo_without_fk` runs it in its own transaction with
+        foreign-key enforcement off (bulk retention deletes; the caller keeps references consistent)."""
         fut: Future = Future()
         try:
-            self._q.put((fn, fut), block=not droppable, timeout=None if droppable else timeout)
+            self._q.put((fn, fut, solo_without_fk), block=not droppable, timeout=None if droppable else timeout)
         except queue.Full:
             if droppable:
                 self.health["dropped_cycles"] += 1
@@ -85,37 +153,59 @@ class Historian:
         self.health["degraded_reason"] = reason
 
     def _run(self) -> None:
-        while not self._stop.is_set() or not self._q.empty():
-            try:
-                first = self._q.get(timeout=0.2)
-            except queue.Empty:
+        stash = None
+        while not self._stop.is_set() or not self._q.empty() or stash is not None:
+            if stash is not None:
+                first, stash = stash, None
+            else:
+                try:
+                    first = self._q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+            if first[2]:
+                self._execute([first], fk_off=True)
                 continue
             batch = [first]
             while len(batch) < 64:
                 try:
-                    batch.append(self._q.get_nowait())
+                    item = self._q.get_nowait()
                 except queue.Empty:
                     break
+                if item[2]:
+                    stash = item          # solo item runs right after this batch, in queue order
+                    break
+                batch.append(item)
+            self._execute(batch)
+
+    def _execute(self, batch: list, *, fk_off: bool = False) -> None:
+        try:
+            if self.fail_writes:
+                raise sqlite3.OperationalError("disk I/O error (simulated)")
+            if fk_off:
+                self._con.execute("PRAGMA foreign_keys=OFF")
+            self._con.execute("BEGIN IMMEDIATE")
+            results = [fn(self._con) for fn, _, _ in batch]
+            self._con.execute("COMMIT")
+            self.health.update(ok=True, last_commit_utc=utc_iso(), last_error=None, degraded_reason=None)
+            self.health["commits"] += 1
+            for (_, fut, _), r in zip(batch, results):
+                fut.set_result(r)
+        except Exception as e:  # whole batch fails together: nothing is half-written
             try:
-                if self.fail_writes:
-                    raise sqlite3.OperationalError("disk I/O error (simulated)")
-                self._con.execute("BEGIN IMMEDIATE")
-                results = [fn(self._con) for fn, _ in batch]
-                self._con.execute("COMMIT")
-                self.health.update(ok=True, last_commit_utc=utc_iso(), last_error=None, degraded_reason=None)
-                self.health["commits"] += 1
-                for (_, fut), r in zip(batch, results):
-                    fut.set_result(r)
-            except Exception as e:  # whole batch fails together: nothing is half-written
+                self._con.execute("ROLLBACK")
+            except Exception:
+                pass
+            self.health["last_error"] = repr(e)
+            self._degrade(f"historian write failed: {e!r}")
+            for _, fut, _ in batch:
+                if not fut.done():
+                    fut.set_exception(StorageUnavailable(str(e)))
+        finally:
+            if fk_off:
                 try:
-                    self._con.execute("ROLLBACK")
+                    self._con.execute("PRAGMA foreign_keys=ON")
                 except Exception:
                     pass
-                self.health["last_error"] = repr(e)
-                self._degrade(f"historian write failed: {e!r}")
-                for _, fut in batch:
-                    if not fut.done():
-                        fut.set_exception(StorageUnavailable(str(e)))
 
     def flush(self, timeout: float = 5.0) -> None:
         self.submit(lambda c: None, wait=True, timeout=timeout)
@@ -163,8 +253,39 @@ class Historian:
         self.submit(op, droppable=True)
 
     def cycle(self, run, samples: list[Sample]) -> None:  # SimulationRuntime HistorySink
-        self.write_cycle(f"{run.run_id}:{run.tick}", samples, run_id=run.run_id, sim_s=run.sim_s,
-                         cadence_s=run.history_stride_s, cadence_basis="SIMULATION_TIME")
+        if self.snapshot_permitted():
+            self.write_cycle(f"{run.run_id}:{run.tick}", samples, run_id=run.run_id, sim_s=run.sim_s,
+                             cadence_s=run.history_stride_s, cadence_basis="SIMULATION_TIME")
+
+    def snapshot(self, at: datetime, samples: list[Sample], interval_s: float) -> bool:
+        """Periodic wall-clock snapshot of every point (real installations). False if paused for disk."""
+        if not self.snapshot_permitted():
+            return False
+        self.write_cycle(f"{self.session_id}:snap:{at.isoformat()}", samples, run_id=None, sim_s=None,
+                         cadence_s=interval_s, cadence_basis="WALL")
+        return True
+
+    def snapshot_permitted(self) -> bool:
+        """Low/full-disk handling: below `snapshot_floor_bytes` free, periodic snapshots pause (counted,
+        announced once, alarmed) so events, commands and alarms keep the remaining space. Recording
+        resumes by itself once free space is back above the reserve. Nothing is deleted to make room."""
+        h = self.cfg.historian
+        free = shutil.disk_usage(self.db_path.parent).free
+        if not self.snapshots_paused and free < h.snapshot_floor_bytes:
+            self.snapshots_paused = True
+            self.event("HISTORY_SNAPSHOTS_PAUSED", {"free_bytes": free, "floor_bytes": h.snapshot_floor_bytes,
+                                                    "note": "periodic snapshots paused; events, commands and "
+                                                            "alarms are still recorded; nothing was deleted"},
+                       actor="system")
+        elif self.snapshots_paused and free >= max(h.free_space_reserve_bytes, h.snapshot_floor_bytes + 64 * 2**20):
+            self.snapshots_paused = False
+            self.event("HISTORY_SNAPSHOTS_RESUMED", {"free_bytes": free,
+                                                     "snapshots_not_written": self.health["paused_snapshots"]},
+                       actor="system")
+        if self.snapshots_paused:
+            self.health["paused_snapshots"] += 1
+            return False
+        return True
 
     def alarms(self, occurrences: list[AlarmOccurrence]) -> None:
         if not occurrences:
@@ -223,6 +344,29 @@ class Historian:
             return ids
         return self.submit(op, wait=True)
 
+    def record_config(self, cfg: InstallationConfig) -> dict:
+        """CONFIG_LOADED at every start, plus CONFIG_CHANGED (with the changed keys) when the effective
+        configuration differs from the one the previous process recorded."""
+        doc = json.loads(cfg.model_dump_json())
+        canon = json.dumps(doc, sort_keys=True, separators=(",", ":"))
+        sha = hashlib.sha256(canon.encode()).hexdigest()
+        prev = self.query("SELECT payload_json FROM events WHERE kind='CONFIG_LOADED' AND session_id != ? "
+                          "ORDER BY id DESC LIMIT 1", (self.session_id,))
+        loaded = {"config_id": cfg.config_id, "config_version": cfg.config_version, "profile": cfg.profile.value,
+                  "sha256": sha, "historian": doc.get("historian"), "config": doc}
+        self.event("CONFIG_LOADED", loaded, actor="system")
+        out = {"sha256": sha, "changed": None}
+        if prev:
+            old = json.loads(prev[0][0])
+            if old.get("sha256") != sha:
+                changes = _diff(old.get("config") or {}, doc)
+                ch = {"from_sha256": old.get("sha256"), "to_sha256": sha,
+                      "from_version": old.get("config_version"), "to_version": cfg.config_version,
+                      "changes": changes[:200], "changes_total": len(changes)}
+                self.event("CONFIG_CHANGED", ch, actor="system")
+                out["changed"] = ch
+        return out
+
     # ------------------------------------------------------------------ reads / storage health
     def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         with self._read_lock:
@@ -230,15 +374,10 @@ class Historian:
             return self._read.execute(sql, params).fetchall()
 
     def storage(self) -> dict:
-        files = [self.db_path, Path(str(self.db_path) + "-wal")]
-        size = sum(f.stat().st_size for f in files if f.exists())
-        du = shutil.disk_usage(self.db_path.parent)
-        h = self.cfg.historian
-        st = {"db_bytes": size, "free_bytes": du.free, "budget_bytes": h.db_budget_bytes,
-              "reserve_bytes": h.free_space_reserve_bytes, "over_budget": size > h.db_budget_bytes,
-              "below_reserve": du.free < h.free_space_reserve_bytes, "queue_depth": self._q.qsize(),
-              "retention_days": h.retention_days, "retention_provenance": h.retention_provenance}
-        return st
+        """Capacity picture for alarms, /api/status and `storage report`."""
+        with self._read_lock:
+            return capacity_report(self._read, self.db_path, self.cfg, snapshots_paused=self.snapshots_paused,
+                                   queue_depth=self._q.qsize())
 
     def can_accept_starts(self) -> tuple[bool, str | None]:
         st = self.storage()

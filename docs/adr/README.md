@@ -8,7 +8,7 @@
 | 0004 | One database per profile | accepted |
 | 0005 | FC0F not implemented | accepted |
 | 0006 | All eight relay modes must be NORMAL | accepted |
-| 0007 | Code kept in the project folder until a repo is named | interim |
-| 0008 | Demo retention versus demo database budget | **open, owner decision** |
+| 0007 | Repository location (Canarias_GreenHouse on GitHub) | accepted |
+| 0008 | Historian: 60 s snapshots, rolling 365 days, storage budget | accepted |
 | 0009 | No controller or twin on a real profile | accepted |
 | 0010 | Polling instead of streams | accepted |

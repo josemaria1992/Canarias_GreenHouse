@@ -38,7 +38,7 @@ def fake_bus(request):
     name = f"b{next(_bus_ids)}"
     bus = pf.bus(name)
     relay, ai = bus.add("relay", 1), bus.add("ai", 2)
-    data = yaml.safe_load((ROOT / "tests" / "fixtures" / "hw-fake.yaml").read_text())
+    data = yaml.safe_load((ROOT / "tests" / "fixtures" / "hw-fake.yaml").read_text(encoding="utf-8"))
     data["buses"][0]["port"] = f"aquafake://{name}"
     cfg = InstallationConfig.model_validate(data)
     yield cfg, bus, relay, ai

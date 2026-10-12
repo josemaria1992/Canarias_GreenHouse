@@ -20,8 +20,9 @@ from ..config.schema import InstallationConfig
 from ..control.alarms import GOOD, AlarmEngine
 from ..control.auto import Controller, ObservationView, Phase
 from ..control.commands import AuditSink, CommandService, MemoryAudit
-from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, OutputCommand, Outcome, PointId,
+from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Origin, OutputCommand, Outcome, PointId,
                             PointKind, Priority, Sample, SignalSource, new_id, utcnow)
+from ..historian.recording import complete_snapshot
 from ..io.sampling import AcqContext
 from ..io.virtual import Override, VirtualBackend
 from .observe import observe
@@ -91,7 +92,8 @@ class SimulationRuntime:
         self.samples: dict[str, Sample] = {}
         self._prev_valid: dict[str, Any] = {}
         self._cycle = 0
-        self.stride_ticks = max(1, int(round(cfg.historian.sim_history_stride_s / self.params.dt_s)))
+        h = cfg.historian
+        self.stride_ticks = max(1, int(round((h.sim_history_stride_s or h.recording_interval_s) / self.params.dt_s)))
         self._next_history_tick = self.stride_ticks
         self.invariant_failures: list[InvariantFailure] = []
         self.max_abs_residual_L = 0.0
@@ -243,7 +245,9 @@ class SimulationRuntime:
         occ = self.alarms.open.get((rule_id, target))
         if occ is None:
             raise KeyError(f"no open alarm {rule_id}/{target}")
-        return self.alarms.acknowledge(occ.occurrence_id, actor)
+        out = self.alarms.acknowledge(occ.occurrence_id, actor)
+        self.persist_alarm_transitions()
+        return out
 
     def reset_lockout(self, actor: str) -> tuple[bool, str]:
         self._record("RESET", actor, {})
@@ -259,7 +263,9 @@ class SimulationRuntime:
             raise KeyError(f"no open alarm {rule_id}/{target}")
         if target == "controller":
             raise ValueError("controller fault alarms are reset through the lockout reset")
-        return self.alarms.reset(occ.occurrence_id, actor)
+        out = self.alarms.reset(occ.occurrence_id, actor)
+        self.persist_alarm_transitions()
+        return out
 
     def set_source(self, actor: str, source: SignalSource) -> tuple[bool, str]:
         if source == self.backend.source:
@@ -371,6 +377,21 @@ class SimulationRuntime:
                                    "resolution_s": self.params.dt_s, "origin": s.origin.value}, None)
             self._prev_valid[pid] = s.value
 
+    def _snapshot(self) -> list[Sample]:
+        """Complete snapshot for the historian: every point, readings older than the controller's
+        staleness limit (simulated time) recorded as STALE rather than as current values."""
+        def stale(s: Sample) -> str | None:
+            if s.sim_time_s is not None and self.sim_s - s.sim_time_s > STALE_AFTER_SIM_S + 1e-9:
+                return f"stale: last acquired {self.sim_s - s.sim_time_s:.1f} s before the snapshot (simulated time)"
+            return None
+        return complete_snapshot(self.cfg, self.samples, now=utcnow(), ctx=self._ctx(), origin=Origin.SIMULATED,
+                                 stale_reason=stale)
+
+    def persist_alarm_transitions(self) -> None:
+        """Alarm transitions are written when they happen, not at the next snapshot."""
+        if self.history is not None and self.alarms.take_transitioned():
+            self.history.alarms(self.alarms.take_dirty())
+
     def _acquisition_age_alarm(self) -> None:
         ages = [self.sim_s - s.sim_time_s for s in self.samples.values() if s.sim_time_s is not None]
         if ages and max(ages) > STALE_AFTER_SIM_S + 1e-9:
@@ -417,8 +438,11 @@ class SimulationRuntime:
             self.controller.tick(self.sim_s, self.view())
             if self.history is not None and self.tick >= self._next_history_tick:
                 self._next_history_tick = self.tick + self.stride_ticks
-                self.history.cycle(self, list(self.samples.values()))
+                self.history.cycle(self, self._snapshot())
                 self.history.alarms(self.alarms.take_dirty())
+                self.alarms.take_transitioned()
+            else:
+                self.persist_alarm_transitions()
             r = self.plant.ledger_residual_L()
             self.max_abs_residual_L = max(self.max_abs_residual_L, abs(r))
             if abs(r) > LEDGER_TOL_ABS_L + LEDGER_TOL_PER_TICK_L * self.tick:

@@ -63,6 +63,8 @@ class Quality(str, enum.Enum):
     UNAVAILABLE = "UNAVAILABLE"        # acquisition failed; value is null
     INVALID = "INVALID"                # acquired, but out of range / unscalable
     UNSCALED = "UNSCALED"              # raw only: unknown mode/revision or no verified scaling
+    STALE = "STALE"                    # historian snapshot: acquisition did not refresh the point in time;
+                                       # value is null, the old reading is kept only as last_good_*
 
 
 class PointKind(str, enum.Enum):

@@ -7,7 +7,7 @@ from collections import deque
 
 from ..config.schema import InstallationConfig
 from ..domain.model import utcnow
-from ..historian.retention import evaluate_storage_alarm
+from ..historian.retention import RetentionTask, evaluate_storage_alarm
 from ..historian.writer import Historian
 from ..twin.clock import SimClock
 from ..twin.runtime import SimulationRuntime
@@ -30,6 +30,7 @@ class SimulationService:
         self.scenario: str | None = None
         self.task = {"state": "NOT_STARTED", "heartbeat_monotonic": None, "failures": deque(maxlen=20),
                      "last_error": None, "restarts": 0}
+        self.retention = RetentionTask(hist)
         self.new_run("process start", restore_alarms=True)
 
     # ------------------------------------------------------------------ runs
@@ -65,13 +66,13 @@ class SimulationService:
 
     def effective_stride_s(self, speed: int) -> float:
         h = self.base_cfg.historian
-        return max(h.sim_history_stride_s, speed * h.sim_history_min_wall_interval_s)
+        return max(h.sim_history_stride_s or h.recording_interval_s, speed * h.sim_history_min_wall_interval_s)
 
     def apply_speed(self, speed: int) -> None:
         self.clock.set_speed(speed)
         self.runtime.set_history_stride(self.effective_stride_s(speed),
-                                        f"speed {speed}x: history cadence = max(configured stride, speed x min wall "
-                                        "interval) to bound database write rate")
+                                        f"speed {speed}x: snapshot interval = max(recording interval, speed x min "
+                                        "wall interval) in simulated time, to bound the database write rate")
 
     # ------------------------------------------------------------------ supervised driver
     async def run_forever(self) -> None:
@@ -110,12 +111,13 @@ class SimulationService:
             last = now
             if now >= next_storage_check:   # wall-time check, independent of simulation speed/pause
                 next_storage_check = now + STORAGE_CHECK_S
+                self.retention.tick(self.runtime.alarms, self.runtime.sim_s)
                 evaluate_storage_alarm(self.hist, self.runtime.alarms, self.runtime.sim_s)
-                self.hist.alarms(self.runtime.alarms.take_dirty())
+                self.runtime.persist_alarm_transitions()
 
     def task_health(self) -> dict:
         hb = self.task["heartbeat_monotonic"]
         age = None if hb is None else time.monotonic() - hb
         ok = self.task["state"] == "RUNNING" and age is not None and age < 2.0
         return {"state": self.task["state"], "heartbeat_age_s": age, "ok": ok, "restarts": self.task["restarts"],
-                "last_error": self.task["last_error"]}
+                "last_error": self.task["last_error"], "retention": self.retention.view()}
