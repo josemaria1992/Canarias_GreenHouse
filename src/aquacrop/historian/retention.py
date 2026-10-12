@@ -493,11 +493,16 @@ class RetentionTask:
         administrator separately confirms the date and the proposed cutoff."""
         with self._lock:
             self._started_check_done = True
-            if self.held is None:
-                self._hold("TIMESTAMPS_QUARANTINED", f"timestamps were quarantined ({quarantine_id}); confirm the "
-                           "date and the proposed cutoff to resume deletion", self._wall())
-            else:
-                self.held = self.held | {"quarantine_id": quarantine_id}
+            reason = (f"timestamps were quarantined ({quarantine_id}); an administrator must confirm the date and "
+                      "the proposed cutoff to resume deletion")
+            prev = self.held
+            if prev is not None:
+                # The quarantine supersedes the clock hold it answers (its reason, such as stored records
+                # being later than the clock, no longer describes the trusted history); the hold continues.
+                reason += f" (held since {prev['since_utc']}: {prev['code']})"
+                self.held = None
+            self._hold("TIMESTAMPS_QUARANTINED", reason, self._wall())
+            self.held["quarantine_id"] = quarantine_id
 
     def proposal(self) -> dict:
         return retention_proposal(self.hist, wall_s=self._wall(), trusted_s=self.trusted_now()) | {

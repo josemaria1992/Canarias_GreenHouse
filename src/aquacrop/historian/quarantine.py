@@ -206,8 +206,8 @@ def propose(c: sqlite3.Connection, reg: QuarantineRegister, *, wall_s: float,
         if row:
             first[t] = (row[0], row[1])
     if not first:
-        return base | {"needed": False, "note": "no record is stamped later than the current clock; nothing to "
-                                                "quarantine"}
+        return base | {"needed": False, "note": "no record outside a quarantine is stamped later than the current "
+                                                "clock; nothing to quarantine"}
     order = _session_order(c)
     sid = min((s for _, s in first.values()), key=lambda s: order.get(s, 1 << 62))
     mark_rows = c.execute(f"SELECT id, kind, utc, session_id, payload_json FROM events WHERE kind IN "

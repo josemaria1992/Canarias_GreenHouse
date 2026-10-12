@@ -207,6 +207,46 @@
     }
     return h("div", { class: "card" }, ...kids);
   }
+  // Records whose UTC stamps an administrator quarantined (ADR-0009): the stored time is shown unchanged, flagged.
+  function susPill(r) {
+    return r && r.timestamp_suspect ? [" ", h("span", { class: "pill warn", title: `stored time unchanged; quarantined by ${r.quarantine_id}` }, "SUSPECT TIME")] : null;
+  }
+  function quarantineCard(q) {
+    if (!q) return h("div", { class: "card" }, h("h2", null, "Clock and timestamps"), h("p", { class: "muted" }, "Timestamp state unavailable."));
+    const prop = q.proposal || {}, rec = q.recorder || {};
+    const kids = [h("h2", null, "Clock and timestamps"), h("dl", { class: "kv" },
+      h("dt", null, "Clock epoch"), h("dd", null, String(q.clock_epoch), q.clock_epoch ? h("span", { class: "muted" }, " (snapshot ids carry /e" + q.clock_epoch + "/)") : null),
+      h("dt", null, "Recorder"), h("dd", null, rec.clock_behind ? [pill("WAITING: stored snapshots are later than the clock", "bad"), h("div", { class: "muted" }, `since ${fmtTime(rec.clock_behind.since_utc)}; newest stored ${fmtTime(rec.clock_behind.newest_label_utc)}`)] : pill(rec.state === "RUNNING" ? "recording" : (rec.state || "unknown"), rec.state === "RUNNING" ? "ok" : "warn")),
+      h("dt", null, "Quarantines"), h("dd", null, q.quarantines.length ? `${q.quarantines.length} in force` : "none"))];
+    q.quarantines.slice().reverse().forEach(x => kids.push(h("p", { class: "muted" },
+      `${x.quarantine_id}: epoch ${x.clock_epoch}, confirmed by ${x.confirmed_by} at ${fmtTime(x.confirmed_utc)}; ids ` +
+      Object.entries(x.ranges).map(([t, r]) => `${t} ${r[0]}–${r[1]}`).join(", ") + ". Records kept with their original stamps.")));
+    if (prop.needed) {
+      kids.push(h("h3", null, "Records stamped later than the clock"),
+        h("p", null, `The clock reads ${fmtTime(prop.wall_utc)} (${S.tz}).`),
+        h("table", null, h("thead", null, h("tr", null, ["Records", "Count", "Stamped from", "to"].map(x => h("th", null, x)))),
+          h("tbody", null, Object.entries(prop.counts || {}).filter(([, n]) => n).map(([t, n]) => {
+            const sp = (prop.stamped_utc || {})[t] || []; return h("tr", null, h("td", null, t), h("td", null, String(n)), h("td", null, fmtTime(sp[0])), h("td", null, fmtTime(sp[1]))); }))),
+        h("p", null, `From ${prop.start.kind}${prop.start.utc ? " at " + fmtTime(prop.start.utc) : ""}: ${prop.start.why}. To ${prop.end.kind}${prop.end.utc ? " at " + fmtTime(prop.end.utc) : ""}: ${prop.end.why}.`),
+        h("p", { class: "muted" }, prop.note));
+      if (can("config_admin")) {
+        const ok = h("input", { type: "checkbox" });
+        const btn = h("button", { class: "cmd small", disabled: true, onclick: async () => {
+          const res = await act("POST", "/api/history/quarantine", { proposal_id: prop.proposal_id, clock_checked: true },
+            "records flagged as suspect; recording resumes and retention stays held until you confirm a cutoff");
+          if (res) { S.settingsLoaded = false; VIEWS.settings(); }
+        } }, "Quarantine suspect records");
+        ok.onchange = () => { btn.disabled = !ok.checked; };
+        kids.push(h("div", { class: "row" }, h("label", null, ok, h("span", null, " I checked the current date and time against an independent source")), btn),
+          h("p", { class: "muted" }, "This keeps every record and its stored time, flags them, and holds retention. It deletes nothing and authorizes no deletion."));
+      } else {
+        kids.push(h("p", { class: "muted" }, "Quarantining requires an administrator."));
+      }
+    } else {
+      kids.push(h("p", { class: "muted" }, prop.note || ""));
+    }
+    return h("div", { class: "card" }, ...kids);
+  }
   function backupCard(b) {
     const d = b.restore_drill;
     return h("div", { class: "card" }, h("h2", null, "Backups"), h("dl", { class: "kv" },
@@ -499,11 +539,19 @@
     const end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000);
     const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
     const tr = await api("GET", "/api/trends?" + q);
-    const series = S.trendSel.map(pid => {
-      const meta = S.allPoints.find(p => p.id === pid) || {};
-      const pts = (tr.series[pid] || []).map(r => [Date.parse(r[0]), r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", r[8]]);
-      const unit = (tr.series[pid] || []).map(r => r[5]).find(u => u) || "";
-      return { name: `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`, digital: meta.kind !== "AI", points: pts, dashed: false };
+    // Records whose stamps an administrator quarantined are split into their own dashed grey series; neither
+    // half draws a line across the other, so a suspect stamp never joins a trusted trace.
+    const iSus = tr.columns.indexOf("timestamp_suspect");
+    const series = S.trendSel.flatMap(pid => {
+      const meta = S.allPoints.find(p => p.id === pid) || {}, rows = tr.series[pid] || [];
+      const trusted = [], suspect = [];
+      rows.forEach((r, i) => {
+        const sus = iSus >= 0 && !!r[iSus], switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
+        (sus ? suspect : trusted).push([Date.parse(r[0]), r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", r[8] || switched]);
+      });
+      const unit = rows.map(r => r[5]).find(u => u) || "", name = `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`;
+      return [{ name, digital: meta.kind !== "AI", points: trusted, dashed: false },
+        { name: name + " SUSPECT timestamps (quarantined)", digital: meta.kind !== "AI", points: suspect, suspect: true }];
     });
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");
@@ -523,7 +571,7 @@
             h("tr", null, h("td", null, sig), h("td", null, e.kind), h("td", null, oBadge(o)), h("td", null, num(v.estimate, 2)), h("td", null, (v.coverage * 100).toFixed(0) + " %")))))),
         h("p", { class: "muted" }, an.note)));
     const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz });
-    legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, "■ " + l.name)));
+    legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
   };
 
   // ------------------------------------------------ alarms/events
@@ -532,7 +580,7 @@
     const occRow = o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")), h("td", null, o.rule_id), h("td", { class: "mono" }, o.target),
       h("td", null, o.message), h("td", null, o.active ? pill("ACTIVE", "bad") : pill("cleared")), h("td", null, o.acknowledged ? `ack ${o.ack_user}` : pill("UNACK", "warn")),
       h("td", null, o.latched ? (o.reset_required ? pill("RESET REQUIRED", "warn") : "reset " + (o.reset_user || "")) : "—"),
-      h("td", null, fmtTime(o.first_seen_utc)), h("td", null, fmtTime(o.last_seen_utc)), h("td", { class: "mono" }, o.value == null ? "" : String(o.value)),
+      h("td", null, fmtTime(o.first_seen_utc), susPill(o)), h("td", null, fmtTime(o.last_seen_utc)), h("td", { class: "mono" }, o.value == null ? "" : String(o.value)),
       h("td", null, !o.closed && !o.acknowledged ? h("button", { class: "cmd small", disabled: !can("alarm_ack"), onclick: () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "acknowledged") }, "Ack") : null,
         !o.closed && o.reset_required && !o.active && o.acknowledged && o.target !== "controller" ? h("button", { class: "cmd small ghost", disabled: !can("lockout_reset"), onclick: () => act("POST", "/api/alarms/reset", { rule_id: o.rule_id, target: o.target }, "reset") }, "Reset") : null));
     const hdr = ["Sev", "Rule", "Target", "Message", "Condition", "Ack", "Latch/reset", "First", "Last", "Value", ""];
@@ -541,10 +589,10 @@
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.open.map(occRow)))),
       h("div", { class: "card" }, h("h2", null, "Commands (incl. rejected / uncertain)"),
         h("table", null, h("thead", null, h("tr", null, ["Time", "Actor", "Target", "Desired", "Origin", "Outcome", "Detail"].map(x => h("th", null, x)))),
-          h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
+          h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc), susPill(c)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
             h("td", null, c.origin), h("td", null, pill(c.outcome, c.outcome === "READBACK_CONFIRMED" ? "ok" : c.outcome === "REJECTED" ? "warn" : "bad")), h("td", { class: "muted" }, c.detail || "")))))),
       h("div", { class: "card" }, h("h2", null, "Events"),
-        h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc)), h("td", null, e.kind), h("td", null, e.actor || ""),
+        h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc), susPill(e)), h("td", null, e.kind), h("td", null, e.actor || ""),
           h("td", { class: "mono" }, JSON.stringify(e.payload).slice(0, 200))))))),
       h("div", { class: "card" }, h("h2", null, "Alarm history (closed)"),
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.history.map(occRow)))));
@@ -553,8 +601,8 @@
   // ------------------------------------------------ settings
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
-    const [s, ret, bk] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
-      api("GET", "/api/backup").catch(() => null)]), c = s.config;
+    const [s, ret, bk, qu] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
+      api("GET", "/api/backup").catch(() => null), api("GET", "/api/history/quarantine").catch(() => null)]), c = s.config;
     S.settingsLoaded = true;
     const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
     const userForm = can("user_admin") ? (() => {
@@ -584,6 +632,7 @@
           h("dt", null, "Projection"), h("dd", null, s.storage.projected_window_bytes != null ? `${gib(s.storage.projected_window_bytes)} at ${s.storage.retention_days} days` + (s.storage.projected_over_budget ? " (over budget)" : "") : "after one day of history"),
           h("dt", null, "Free disk"), h("dd", null, `${gib(s.storage.free_bytes)} (warning below ${gib(s.storage.warning_free_bytes)}, starts refused below ${gib(s.storage.reserve_bytes)}, snapshots pause below ${gib(s.storage.snapshot_floor_bytes)})`))),
         retentionCard(ret),
+        quarantineCard(qu),
         bk ? backupCard(bk) : h("div", { class: "card" }, h("h2", null, "Backups"), h("p", { class: "muted" }, "Backup state unavailable.")),
         h("div", { class: "card" }, h("h2", null, "Production status"), h("dl", { class: "kv" }, ...Object.entries(s.production_fields).flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)])),
           h("p", { class: "muted" }, s.commissioning_evidence))),

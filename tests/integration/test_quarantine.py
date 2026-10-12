@@ -270,8 +270,9 @@ def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_p
         r = c.post("/api/history/quarantine", json=body | {"proposal_id": "0" * 16}, headers=adm)
         assert r.status_code == 409 and r.json()["detail"]["proposal"]["proposal_id"] == prop["proposal_id"]
         r = c.post("/api/history/quarantine", json=body, headers=adm)
-        assert r.status_code == 200 and r.json()["retention_held"]["code"] in ("TIMESTAMPS_QUARANTINED",
-                                                                             "CLOCK_BEHIND_STORED")
+        held = r.json()["retention_held"]       # supersedes the startup hold it answers; still held
+        assert r.status_code == 200 and held["code"] == "TIMESTAMPS_QUARANTINED" and "CLOCK_BEHIND_STORED" in \
+            held["reason"]
         assert c.get("/api/history/quarantine").json()["clock_epoch"] == 1
         app.state.hist.wait_idle()
         rng = f"&start={(fut - timedelta(minutes=5)).isoformat()}&end={(fut + timedelta(minutes=5)).isoformat()}"
