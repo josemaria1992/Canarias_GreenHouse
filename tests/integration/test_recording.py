@@ -109,9 +109,14 @@ def test_hw_acquisition_keeps_its_rate_and_snapshots_are_separate_and_complete(h
         assert ":snap:" in c["cycle_id"]
     per = hist.query("SELECT cycle_pk, count(*) n, count(DISTINCT point_id) d FROM samples GROUP BY cycle_pk")
     assert all(r["n"] == r["d"] == n_points for r in per)
-    # unchanged digital inputs are written in every snapshot, with their quality
-    q = hist.query("SELECT quality, count(*) n FROM samples WHERE point_id='relay_A.DI1' GROUP BY quality")
-    assert {r["quality"] for r in q} == {"GOOD"} and sum(r["n"] for r in q) == len(cycles)
+    # unchanged digital inputs are written in every snapshot, with their quality; a boundary that
+    # falls before the first poll has returned (a slow first connect) records UNAVAILABLE, never a value
+    q = hist.query("SELECT quality, reason FROM samples WHERE point_id='relay_A.DI1' ORDER BY cycle_pk")
+    assert len(q) == len(cycles)
+    first_good = next(i for i, r in enumerate(q) if r["quality"] == "GOOD")
+    assert all(r["quality"] == "UNAVAILABLE" and r["reason"] == "no acquisition yet in this process"
+               for r in q[:first_good])
+    assert [r["quality"] for r in q[first_good:]] == ["GOOD"] * (len(q) - first_good) and len(q) - first_good >= 2
     assert svc.task_health()["recorder"]["snapshots"] == len(cycles)
 
 
