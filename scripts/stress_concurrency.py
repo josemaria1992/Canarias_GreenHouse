@@ -337,8 +337,8 @@ def main() -> None:
     con = sqlite3.connect(db)
     since = s.base_wall.isoformat()
     written = {"cycles": con.execute("SELECT count(*) FROM cycles WHERE persisted_utc >= ?", (since,)).fetchone()[0],
-               "events": con.execute("SELECT count(*) FROM events WHERE utc >= ? AND session_id=?",
-                                     (since, h.session_id)).fetchone()[0],
+               "events": con.execute("SELECT count(*) FROM events WHERE utc >= ? AND session_id=? AND kind NOT LIKE "
+                                     "'RETENTION_%'", (since, h.session_id)).fetchone()[0],
                "commands": con.execute("SELECT count(*) FROM commands WHERE session_id=?", (h.session_id,)).fetchone()[0],
                "commands_without_outcome": con.execute("SELECT count(*) FROM commands WHERE session_id=? AND outcome "
                                                        "IN ('ACCEPTED','EXECUTING')", (h.session_id,)).fetchone()[0]}
@@ -365,8 +365,10 @@ def main() -> None:
         "writer_commit_latency_s": summary(s.commit_probe),
         "command_intent_latency_s": summary(s.cmd_latency), "command_failures": s.cmd_failures,
         "status_read_latency_s": summary(s.status_probe),
-        "events": {"submitted_by_stress": s.events_submitted, "written_this_session": written["events"],
-                   "note": "written includes the historian's own events (retention, backup)"},
+        "events": {"submitted_by_stress": s.events_submitted, "written": written["events"],
+                   "lost": s.events_submitted - written["events"],
+                   "note": "events this run submitted (edges, alarm transitions) against those stored; the "
+                           "historian's own RETENTION_* events are not counted"},
         "commands": {"written": written["commands"], "without_outcome": written["commands_without_outcome"]},
         "writer_health": {k: health.get(k) for k in ("ok", "commits", "dropped_cycles", "degraded_reason",
                                                      "labels_refused")},
