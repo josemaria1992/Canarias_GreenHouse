@@ -75,16 +75,28 @@ def boundary_index(wall_s: float, interval_s: float) -> int:
     return math.floor(wall_s / interval_s + 1e-9)
 
 
-def slot_cycle_id(at: datetime, interval_s: float) -> str:
-    """Durable identity of a wall-time snapshot: the same label gives the same id in every process."""
-    return f"slot/{interval_s:g}s/{at.astimezone(timezone.utc).isoformat()}"
+def slot_cycle_id(at: datetime, interval_s: float, clock_epoch: int = 0) -> str:
+    """Durable identity of a wall-time snapshot: (clock epoch, label). The same label gives the same id
+    in every process of one clock epoch. Epoch 0 (no timestamp quarantine yet) keeps the original form
+    `slot/60s/<label>`; after the n-th quarantine (ADR-0009) ids are `slot/60s/e<n>/<label>`, so a
+    correctly timed label equal to a quarantined, future-dated one is a different snapshot."""
+    label = at.astimezone(timezone.utc).isoformat()
+    return f"slot/{interval_s:g}s/{label}" if not clock_epoch else f"slot/{interval_s:g}s/e{clock_epoch}/{label}"
+
+
+def slot_clock_epoch(cycle_id: str) -> int | None:
+    """Clock epoch of a wall-time snapshot id (0 before any quarantine), None if it is not one."""
+    if not cycle_id.startswith("slot/"):
+        return 0 if ":snap:" in cycle_id else None
+    parts = cycle_id.split("/")
+    return int(parts[2][1:]) if len(parts) == 4 and parts[2].startswith("e") else 0
 
 
 def slot_epoch(cycle_id: str) -> float | None:
     """UTC label (epoch seconds) of a wall-time snapshot id, or None if `cycle_id` is not one. Also reads
     the `<session>:snap:<label>` ids written by the first revision of this change."""
     if cycle_id.startswith("slot/"):
-        label = cycle_id.split("/", 2)[-1]
+        label = cycle_id.rsplit("/", 1)[-1]
     elif ":snap:" in cycle_id:
         label = cycle_id.split(":snap:", 1)[1]
     else:
@@ -250,6 +262,25 @@ class HistoryRecorder:
         # The held intervals are reported here; the labels they span are not reported again as missed.
         self._base_s = max(self._base_s, label - self.interval_s)
         self._base_wall, self._base_mono = wall, mono
+
+    def rebase(self, reason: str) -> None:
+        """Re-read the stored high-water label after a timestamp quarantine (ADR-0009): the quarantined,
+        future-dated labels no longer count, so recording resumes from the current wall clock. A held
+        state ends here and is reported; nothing is back-filled."""
+        wall, mono = self._wall(), self._mono()
+        stored = self._high_water()
+        b, self.behind = self.behind, None
+        self._durable_s = stored
+        iv = self.interval_s
+        current = boundary_index(wall, iv) * iv
+        # As at a start, the first label written is the next boundary; the current one is not back-filled.
+        self._base_s = current if stored is None else max(stored, current)
+        self._base_wall, self._base_mono = wall, mono
+        self._next_mono = mono + max(0.0, current + iv - wall)
+        if b is not None:
+            self._on_event("HISTORY_CLOCK_RESUMED", {"held_intervals": b["held"], "since_utc": b["since_utc"],
+                                                     "newest_label_utc": b["newest_label_utc"], "reason": reason,
+                                                     "newest_trusted_label_utc": _utc(stored) if stored else None})
 
     def _run(self) -> None:
         while not self._stop.is_set():

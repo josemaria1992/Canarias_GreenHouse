@@ -36,6 +36,7 @@ from pathlib import Path
 
 from .. import __version__
 from .backup import _sha256
+from .quarantine import QUARANTINE_EVENT
 from .schema import utc_iso
 
 SAMPLE_COLS = ["id", "point_id", "acquired_utc", "persisted_utc", "sequence", "quality", "reason", "raw_value",
@@ -170,13 +171,24 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
         return {"deleted": {}, "reason": f"retention policy is {h.retention_provenance}; nothing is deleted"}
     cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=h.retention_days)).isoformat(
         timespec="microseconds")
+    reg = hist.quarantines
+    xs, xs_a = reg.exclude("samples")
+    xc, xc_a = reg.exclude("cycles")
+    xe, xe_a = reg.exclude("events")
+    xm, xm_a = reg.exclude("commands")
+    # Quarantined records (ADR-0009) are not judged by their suspect stamps: they go only once the
+    # quarantine itself (a trusted time after all of them were written) has left the window.
+    expired_q = [q for q in reg.items if datetime.fromisoformat(q.confirmed_utc) < datetime.fromisoformat(cutoff)]
     if dry_run:
-        q = lambda sql: hist.query(sql, (cutoff,))[0][0]  # noqa: E731
-        return {"dry_run": True, "cutoff_utc": cutoff, "would_delete": {
-            "samples": q("SELECT count(*) FROM samples WHERE acquired_utc < ?"),
-            "events": q("SELECT count(*) FROM events WHERE utc < ?"),
+        q = lambda sql, extra=(): hist.query(sql, (cutoff,) + extra)[0][0]  # noqa: E731
+        kept = {t: sum(r[1] - r[0] + 1 for r in (x.ranges.get(t) for x in reg.items if x not in expired_q) if r)
+                for t in ("samples", "events", "commands")}
+        return {"dry_run": True, "cutoff_utc": cutoff, "quarantined_rows_kept": kept,
+                "expired_quarantines": [x.quarantine_id for x in expired_q], "would_delete": {
+            "samples": q("SELECT count(*) FROM samples WHERE acquired_utc < ?" + xs, xs_a),
+            "events": q(f"SELECT count(*) FROM events WHERE utc < ? AND kind != '{QUARANTINE_EVENT}'" + xe, xe_a),
             "commands": q("SELECT count(*) FROM commands WHERE intent_utc < ? AND outcome NOT IN "
-                          "('ACCEPTED','EXECUTING')"),
+                          "('ACCEPTED','EXECUTING')" + xm, xm_a),
             "alarm_occurrences": q("SELECT count(*) FROM alarm_occurrences WHERE closed=1 AND updated_utc < ?"),
             "bench_leases": q("SELECT count(*) FROM bench_leases WHERE expires_utc < ?"),
             "auth_sessions": q("SELECT count(*) FROM auth_sessions WHERE absolute_expiry_utc < ?")}}
@@ -194,29 +206,53 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     d: dict[str, int] = {}
     stopped = None
     try:
-        _chunks(hist, "DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE acquired_utc < ? "
-                      "ORDER BY acquired_utc LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="samples")
+        for xq in expired_q:      # whole quarantined ranges whose quarantine left the window
+            for t, col in (("samples", "id"), ("events", "id"), ("commands", "rowid")):
+                if t in xq.ranges:
+                    lo, hi = xq.ranges[t]
+                    _chunks(hist, f"DELETE FROM {t} WHERE {col} IN (SELECT {col} FROM {t} WHERE {col} BETWEEN ? AND ? "
+                                  f"AND {col} NOT IN (SELECT id FROM events WHERE kind='{QUARANTINE_EVENT}') LIMIT ?)"
+                            if t == "events" else
+                            f"DELETE FROM {t} WHERE {col} IN (SELECT {col} FROM {t} WHERE {col} BETWEEN ? AND ? LIMIT ?)",
+                            (lo, hi), chunk_rows, guard=guard, into=d, key=t)
+            if "cycles" in xq.ranges:
+                lo, hi = xq.ranges["cycles"]
+                _chunks(hist, "DELETE FROM cycles WHERE cycle_pk IN (SELECT cycle_pk FROM cycles WHERE cycle_pk "
+                              "BETWEEN ? AND ? AND NOT EXISTS (SELECT 1 FROM samples s WHERE s.cycle_pk=cycles.cycle_pk) "
+                              "LIMIT ?)", (lo, hi), chunk_rows, guard=guard, into=d, key="cycles")
+        live = [x for x in reg.items if x not in expired_q]
+        xs, xs_a = _excl(live, "samples", "id")
+        xc, xc_a = _excl(live, "cycles", "cycle_pk")
+        xe, xe_a = _excl(live, "events", "id")
+        xm, xm_a = _excl(live, "commands", "rowid")
+        _chunks(hist, "DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE acquired_utc < ?" + xs +
+                      " ORDER BY acquired_utc LIMIT ?)", (cutoff,) + xs_a, chunk_rows, guard=guard, into=d,
+                key="samples")
 
         # Sample ids grow with their cycle (one writer, cycle row then its samples), so every cycle below
         # the oldest remaining sample's cycle has no samples left. Deleting by that bound with
         # foreign-key checks off avoids a full scan of samples per deleted cycle.
+        # Quarantined cycles (and their samples) are skipped on both sides.
         def drop_cycles(c, limit):
-            row = c.execute("SELECT cycle_pk FROM samples ORDER BY id LIMIT 1").fetchone()
+            row = c.execute("SELECT cycle_pk FROM samples WHERE 1=1" + xs + " ORDER BY id LIMIT 1", xs_a).fetchone()
             bound = row[0] if row else (c.execute("SELECT coalesce(max(cycle_pk), 0) + 1 FROM cycles").fetchone()[0])
             return c.execute("DELETE FROM cycles WHERE cycle_pk IN (SELECT cycle_pk FROM cycles WHERE cycle_pk < ? "
-                             "AND persisted_utc < ? ORDER BY cycle_pk LIMIT ?)", (bound, cutoff, limit)).rowcount
-        d["cycles"] = 0
+                             "AND persisted_utc < ?" + xc + " ORDER BY cycle_pk LIMIT ?)",
+                             (bound, cutoff) + xc_a + (limit,)).rowcount
+        d["cycles"] = d.get("cycles", 0)
         while True:
             guard()
             n = hist.submit(lambda c: drop_cycles(c, chunk_rows), wait=True, timeout=600, solo_without_fk=True)
             d["cycles"] += n
             if n < chunk_rows:
                 break
-        _chunks(hist, "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE utc < ? "
-                      "ORDER BY utc LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="events")
+        _chunks(hist, f"DELETE FROM events WHERE id IN (SELECT id FROM events WHERE utc < ? AND kind != "
+                      f"'{QUARANTINE_EVENT}'" + xe + " ORDER BY utc LIMIT ?)", (cutoff,) + xe_a, chunk_rows,
+                guard=guard, into=d, key="events")
         _chunks(hist, "DELETE FROM commands WHERE request_id IN (SELECT request_id FROM commands "
-                      "WHERE intent_utc < ? AND outcome NOT IN ('ACCEPTED','EXECUTING') "
-                      "ORDER BY intent_utc LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="commands")
+                      "WHERE intent_utc < ? AND outcome NOT IN ('ACCEPTED','EXECUTING')" + xm +
+                      " ORDER BY intent_utc LIMIT ?)", (cutoff,) + xm_a, chunk_rows, guard=guard, into=d,
+                key="commands")
         _chunks(hist, "DELETE FROM alarm_occurrences WHERE occurrence_id IN (SELECT "
                       "occurrence_id FROM alarm_occurrences WHERE closed=1 AND updated_utc < ? "
                       "LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="alarm_occurrences")
@@ -227,7 +263,9 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
                       "FROM auth_sessions WHERE absolute_expiry_utc < ? LIMIT ?)", (cutoff,),
                 chunk_rows, guard=guard, into=d, key="auth_sessions")
         guard()
-        d |= hist.submit(lambda c: _prune_provenance(c, cutoff, hist.session_id), wait=True, timeout=600)
+        keep_sessions = set().union(*(x.sessions for x in live)) if live else set()
+        d |= hist.submit(lambda c: _prune_provenance(c, cutoff, hist.session_id, keep_sessions), wait=True,
+                         timeout=600)
     except _Stop as e:
         stopped = str(e)
     res = {"cutoff_utc": cutoff, "retention_days": h.retention_days, "deleted": d, "transactions": budget["chunks"]}
@@ -241,7 +279,12 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     return res
 
 
-def _prune_provenance(c, cutoff: str, current_session: str) -> dict:
+def _excl(items, table: str, col: str) -> tuple[str, tuple]:
+    rs = [q.ranges[table] for q in items if table in q.ranges]
+    return "".join(f" AND NOT ({col} BETWEEN ? AND ?)" for _ in rs), tuple(x for r in rs for x in r)
+
+
+def _prune_provenance(c, cutoff: str, current_session: str, keep: set[str] = frozenset()) -> dict:
     """Process-session and simulation-run records are provenance for samples, events and commands. One
     is deleted only when it ended before the cutoff and the oldest remaining sample, cycle, event and
     command are all later than its end, so nothing left in the database can refer to it. Sessions run
@@ -256,7 +299,7 @@ def _prune_provenance(c, cutoff: str, current_session: str) -> dict:
     gone = []
     for i, (sid, started, ended) in enumerate(rows):
         end = ended or (rows[i + 1][1] if i + 1 < len(rows) else None)
-        if sid == current_session or end is None:
+        if sid == current_session or end is None or sid in keep:   # keep: referenced by quarantined rows
             continue
         if datetime.fromisoformat(end) < datetime.fromisoformat(floor):
             gone.append(sid)
@@ -339,12 +382,19 @@ def _newest_record(hist, exclude_session: str | None) -> str | None:
     """Newest time written by any process (or by earlier ones): snapshots, events, commands and the
     process register, so a history with audit records but no snapshot is covered too."""
     sid = exclude_session or "<none>"
+    reg = hist.quarantines        # quarantined records (ADR-0009) do not count: their stamps are suspect
+    xc, ac = reg.exclude("cycles")
+    xe, ae = reg.exclude("events")
+    xm, am = reg.exclude("commands")
+    qs = sorted(reg.sessions())
+    xp = f" AND session_id NOT IN ({','.join('?' * len(qs))})" if qs else ""
     rows = hist.query(
-        "SELECT (SELECT persisted_utc FROM cycles WHERE session_id != ? ORDER BY cycle_pk DESC LIMIT 1), "
-        "(SELECT utc FROM events WHERE coalesce(session_id, '') != ? ORDER BY utc DESC LIMIT 1), "
-        "(SELECT intent_utc FROM commands WHERE session_id != ? ORDER BY intent_utc DESC LIMIT 1), "
-        "(SELECT max(coalesce(ended_utc, started_utc)) FROM process_sessions WHERE session_id != ?)",
-        (sid, sid, sid, sid))[0]
+        f"SELECT (SELECT persisted_utc FROM cycles WHERE session_id != ?{xc} ORDER BY cycle_pk DESC LIMIT 1), "
+        f"(SELECT utc FROM events WHERE coalesce(session_id, '') != ? AND kind != '{QUARANTINE_EVENT}'{xe} "
+        "ORDER BY utc DESC LIMIT 1), "
+        f"(SELECT intent_utc FROM commands WHERE session_id != ?{xm} ORDER BY intent_utc DESC LIMIT 1), "
+        f"(SELECT max(coalesce(ended_utc, started_utc)) FROM process_sessions WHERE session_id != ?{xp})",
+        (sid,) + ac + (sid,) + ae + (sid,) + am + (sid,) + tuple(qs))[0]
     stamps = [r for r in rows if r]
     return max(stamps, key=lambda t: datetime.fromisoformat(t)) if stamps else None
 
@@ -395,6 +445,11 @@ class RetentionTask:
                 return
             if not self._started_check_done:
                 self._started_check_done = True
+                prior = self._unreleased_hold()
+                if prior is not None:
+                    self._hold(prior["code"], f"{prior['reason']} (held since {prior['since_utc']}, before this "
+                               "process started; an administrator has not confirmed the date since)", wall)
+                    return
                 newest = self._newest_prior_record()
                 if newest:
                     gap_s = wall - datetime.fromisoformat(newest).timestamp()
@@ -418,6 +473,31 @@ class RetentionTask:
                            "against the monotonic clock while running", wall)
             else:
                 self._anchor = (wall, mono)   # follow small corrections
+
+    def _unreleased_hold(self) -> dict | None:
+        """A hold (or a timestamp quarantine) recorded by an earlier process that no administrator
+        confirmation followed: holds survive restarts until they are released."""
+        rows = self.hist.query("SELECT kind, utc, payload_json FROM events WHERE kind IN ('RETENTION_HELD', "
+                               f"'RETENTION_CLOCK_CONFIRMED', '{QUARANTINE_EVENT}') ORDER BY id DESC LIMIT 1")
+        if not rows or rows[0]["kind"] == "RETENTION_CLOCK_CONFIRMED":
+            return None
+        p = json.loads(rows[0]["payload_json"])
+        if rows[0]["kind"] == QUARANTINE_EVENT:
+            return {"code": "TIMESTAMPS_QUARANTINED", "since_utc": rows[0]["utc"],
+                    "reason": f"timestamps were quarantined ({p.get('quarantine_id')})"}
+        return {"code": p.get("code", "UNKNOWN"), "since_utc": p.get("since_utc", rows[0]["utc"]),
+                "reason": p.get("reason", "held")}
+
+    def hold_for_quarantine(self, quarantine_id: str) -> None:
+        """A timestamp quarantine never authorizes deletion: retention is held (or stays held) until an
+        administrator separately confirms the date and the proposed cutoff."""
+        with self._lock:
+            self._started_check_done = True
+            if self.held is None:
+                self._hold("TIMESTAMPS_QUARANTINED", f"timestamps were quarantined ({quarantine_id}); confirm the "
+                           "date and the proposed cutoff to resume deletion", self._wall())
+            else:
+                self.held = self.held | {"quarantine_id": quarantine_id}
 
     def proposal(self) -> dict:
         return retention_proposal(self.hist, wall_s=self._wall(), trusted_s=self.trusted_now()) | {

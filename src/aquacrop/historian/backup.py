@@ -442,7 +442,8 @@ def _app_smoke(db: Path, cfg=None) -> dict:
     the queries behind trends, events, alarms and the snapshot high-water mark; with a configuration,
     a full historian start and stop and the capacity report."""
     from .schema import CURRENT_VERSION, connect, migrate, schema_version
-    from .writer import NEWEST_WALL_CYCLE_SQL, Historian
+    from .quarantine import QuarantineRegister
+    from .writer import Historian, newest_wall_label
     con = connect(db)
     try:
         ver = schema_version(con)
@@ -457,9 +458,10 @@ def _app_smoke(db: Path, cfg=None) -> dict:
         for e in events:
             json.loads(e[3])
         alarms = [json.loads(r[0]) for r in con.execute("SELECT json FROM alarm_occurrences WHERE closed=0")]
-        con.execute(NEWEST_WALL_CYCLE_SQL).fetchone()
+        reg = QuarantineRegister.load(con)
+        newest_wall_label(con, reg)
         out = {"ok": True, "schema_version": ver, "migrations_applied": applied, "trend_rows": len(trend),
-               "events_read": len(events), "open_alarms": len(alarms)}
+               "events_read": len(events), "open_alarms": len(alarms), "timestamp_quarantines": len(reg.items)}
     finally:
         con.close()
     if cfg is not None:
