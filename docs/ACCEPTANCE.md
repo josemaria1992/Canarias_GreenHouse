@@ -69,7 +69,7 @@ NOT RUN (could run, has not).
 | ID | Status | Evidence |
 |---|---|---|
 | AT-PKG-01 wheel outside the tree serves UI offline | PASS (Linux x86_64, py3.13) | `scripts/check_installed_wheel.py` 13/13 |
-| AT-PKG-01 Windows / macOS / ARM64 | PENDING CI | first GitHub run on `main` (`b5700c8`): Ubuntu, macOS and ARM64 green on every Python; Windows failed one legacy test that read a file in the Windows code page (fixed in this update) |
+| AT-PKG-01 Windows / macOS / ARM64 | PASS (GitHub CI) | run 38221964706 on `b3c32eb`: full suite, `demo verify` and the serial-isolation check on Windows 2022, macOS 14 and Ubuntu 24.04 (Python 3.11, 3.12, 3.13) and Ubuntu ARM64 (3.11, 3.13); installed-wheel check on all four. The first run on `main` (`b5700c8`) failed on Windows only: a legacy test read a file in the Windows code page (fixed). ARM64 here is a hosted runner, not a CM4 |
 | AT-PKG-02 hash-locked requirements, `pip check` | PASS | `requirements.lock`, `requirements-dev.lock`; installs and `pip check` on 3.11/3.12/3.13; ARM64 py3.11 wheels all available |
 | AT-SEC-02 expiry, revocation, rate limits, CSV escaping, XSS-safe | PASS | `test_idle_expiry`, `test_password_change_revokes_sessions_and_logout`, `test_csv_export_escapes_and_discloses_completeness`, CSP header + `textContent`-only UI |
 | AT-OPS-01 backup, verify, restore to new instance | PASS | see AT-BAK-01 … AT-BAK-06 |
