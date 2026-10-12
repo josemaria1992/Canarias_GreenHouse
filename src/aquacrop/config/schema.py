@@ -215,6 +215,76 @@ class HistorianSettings(_Strict):
         return self
 
 
+class SdCardSettings(_Strict):
+    """The SD card (in a USB reader) that holds the daily local backups and the restore-drill scratch
+    space (owner request of 2026-10-12, ADR-0010). Its identity is TBD until the owner confirms the
+    actual card: the filesystem UUID (`blkid`) and the volume id written to the card at enrolment
+    (`offsite enroll-card`). Nothing is written unless the mounted filesystem proves to be this card."""
+    mount_path: str | None = None            # TBD, e.g. /media/aquacrop-sd (an fstab entry with nofail)
+    filesystem_uuid: str | None = Field(default=None, pattern=r"^[0-9A-Fa-f][0-9A-Fa-f\-]{3,35}$")
+    volume_id: str | None = Field(default=None, pattern=r"^vol_[0-9a-f]{16}$")
+    backup_subdir: str = "aquacrop/backups"
+    drill_subdir: str = "aquacrop/drill-scratch"
+    reserve_bytes: int = Field(default=1 * GIB, ge=0)   # kept free on the card after a backup
+
+
+class CloudBackupSettings(_Strict):
+    """Encrypted copies through rclone: `remote` must name an rclone *crypt* remote that wraps the
+    OneDrive folder (client-side encryption; checked before every upload). Account and folder are TBD
+    until the owner confirms them; credentials live only in `rclone_config` (mode 0600, never in git)."""
+    remote: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_][A-Za-z0-9_\- ]*:[^\s]*$")
+    account_note: str | None = None          # documentation only: which OneDrive account and folder
+    rclone_binary: str = "rclone"
+    rclone_config: str | None = None         # e.g. /etc/aquacrop/rclone.conf
+    transfer_timeout_s: float = Field(default=3 * 3600.0, gt=0)
+    retry_initial_s: float = Field(default=300.0, ge=10)
+    retry_max_s: float = Field(default=3600.0, ge=60)
+
+
+class BackupCopyPolicy(_Strict):
+    """PROPOSED copy counts. Nothing is ever pruned until an administrator confirms exactly these
+    values (Settings); a changed policy needs a new confirmation."""
+    local_daily: int = Field(default=7, ge=1)
+    cloud_daily: int = Field(default=30, ge=1)
+    cloud_monthly: int = Field(default=12, ge=0)
+
+
+class RestoreDrillSettings(_Strict):
+    interval_days: int = Field(default=30, ge=1)
+    min_scratch_bytes: int = Field(default=10 * GIB, ge=0)   # owner: preflight at least 10 GiB ...
+    headroom_bytes: int = Field(default=1 * GIB, ge=0)       # ... plus headroom that must stay free
+    max_seconds: float = Field(default=4 * 3600.0, gt=0)
+
+
+class OffsiteBackupSettings(_Strict):
+    """SD-card daily backups plus encrypted OneDrive copies (ADR-0010). Disabled until the owner confirms
+    the actual OneDrive account/folder and SD card; while disabled the earlier local eMMC backups
+    (ADR-0008) continue unchanged."""
+    enabled: bool = False
+    sd_card: SdCardSettings = SdCardSettings()
+    cloud: CloudBackupSettings = CloudBackupSettings()
+    policy: BackupCopyPolicy = BackupCopyPolicy()
+    drill: RestoreDrillSettings = RestoreDrillSettings()
+    stale_after_hours: float = Field(default=36.0, gt=0)     # no new verified backup / upload: alarm
+
+    @model_validator(mode="after")
+    def _check(self) -> "OffsiteBackupSettings":
+        sd = self.sd_card
+        if self.enabled and not (sd.mount_path and sd.filesystem_uuid and sd.volume_id):
+            raise ValueError("offsite_backup.enabled needs the confirmed SD card: sd_card.mount_path, "
+                             "filesystem_uuid and volume_id (see `offsite enroll-card`)")
+        if sd.mount_path is not None and not sd.mount_path.startswith("/"):
+            raise ValueError("sd_card.mount_path must be an absolute path")
+        for sub in (sd.backup_subdir, sd.drill_subdir):
+            if sub.startswith("/") or ".." in sub.split("/"):
+                raise ValueError("sd_card subdirectories must be relative and stay on the card")
+        if self.cloud.remote is not None and not self.cloud.rclone_config:
+            raise ValueError("cloud.remote needs cloud.rclone_config (the protected rclone configuration)")
+        if self.cloud.retry_initial_s > self.cloud.retry_max_s:
+            raise ValueError("cloud.retry_initial_s must not exceed retry_max_s")
+        return self
+
+
 class SecuritySettings(_Strict):
     session_idle_minutes: int = Field(default=30, ge=1, le=24 * 60)
     session_absolute_hours: int = Field(default=12, ge=1, le=7 * 24)
@@ -247,6 +317,7 @@ class InstallationConfig(_Strict):
     alarm_rules: list[AlarmRule] = Field(default_factory=list)
     twin: TwinParams | None = None
     historian: HistorianSettings = HistorianSettings()
+    offsite_backup: OffsiteBackupSettings = OffsiteBackupSettings()
     security: SecuritySettings = SecuritySettings()
 
     # ---------------------------------------------------------------------------------------

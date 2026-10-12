@@ -341,5 +341,5 @@ def test_backup_state_shows_off_device_unconfigured_and_restore_drill_due(env):
     app, c = env
     login(c, "view1", PW["view1"])
     st = c.get("/api/backup").json()
-    assert st["off_device"].startswith("NOT CONFIGURED") and st["keep"] == 7
+    assert st["off_device"].startswith("NOT ACTIVATED") and st["keep"] == 7
     assert st["restore_drill"] is None and st["restore_drill_due"] is True and st["local_count"] == 0

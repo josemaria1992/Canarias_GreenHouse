@@ -160,6 +160,11 @@ class RetentionConfirmIn(Body):
     cutoff_utc: str = Field(min_length=20, max_length=40)   # the cutoff shown by GET /api/retention
 
 
+class OffsitePolicyIn(Body):
+    policy_hash: str = Field(min_length=16, max_length=16, pattern="^[0-9a-f]{16}$")   # from GET /api/offsite
+    confirm: Literal[True]
+
+
 class QuarantineConfirmIn(Body):
     proposal_id: str = Field(min_length=16, max_length=16, pattern="^[0-9a-f]{16}$")   # from GET /api/history/quarantine
     clock_checked: bool          # the administrator checked the date and time against an independent source
@@ -208,6 +213,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         raise ValueError(f"profile {cfg.profile.value} is not served by this release")
     if reconciled:
         hist.event("COMMANDS_RECONCILED", {"request_ids": reconciled}, actor="system")
+    from ..historian.offsite import Busy, NotActivated, Offsite, OffsiteMonitor, PolicyMismatch
+    offsite = OffsiteMonitor(cfg, state_dir, hist)
+    svc.offsite = offsite
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -981,6 +989,19 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     def _run_backup(user: str) -> None:
         h = cfg.historian
+        if cfg.offsite_backup.enabled:      # SD card only (verified identity); never the eMMC (ADR-0010)
+            try:
+                with Offsite(cfg, state_dir, hist.db_path) as off:
+                    res = off.backup(actor=user)
+                b = res.get("backup", res)
+                backup_job["last"] = ({"ok": True, "file": b["file"], "bytes": b["bytes"]} if b.get("ok") else
+                                      {"ok": False, "error": f"{b.get('code')}: {b.get('error')}"})
+            except Exception as e:     # Busy, NotActivated or an error: recorded, never silent
+                hist.event("BACKUP_FAILED", {"error": str(e), "destination": "sd_card"}, actor=user)
+                backup_job["last"] = {"ok": False, "error": str(e)}
+            finally:
+                backup_job["running"] = False
+            return
         try:
             hist.wait_idle()
             man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
@@ -1004,7 +1025,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 raise HTTPException(409, "a backup is already running")
             backup_job["running"] = True
         threading.Thread(target=_run_backup, args=(p.username,), name="api-backup", daemon=True).start()
-        return {"started": True, "destination": str(state_dir / "backups")}
+        return {"started": True, "destination": "sd_card" if cfg.offsite_backup.enabled else str(state_dir / "backups")}
 
     @app.get("/api/backup")
     def backup_state(p: Principal = Depends(require(Perm.READ))):
@@ -1022,8 +1043,28 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             "local_bytes": sum(b.stat().st_size for b in local), "newest": local[-1].name if local else None,
             "restore_drill": drill, "restore_drill_due": True if drill is None else due,
             "restore_drill_interval_days": cfg.historian.restore_drill_interval_days,
-            "off_device": "NOT CONFIGURED: the off-device backup destination is an open owner decision; local "
-                          "backups do not survive loss of this device"}
+            "offsite_enabled": cfg.offsite_backup.enabled,
+            "off_device": ("SD card plus encrypted cloud copies (see Off-device backups)" if cfg.offsite_backup.enabled
+                           else "NOT ACTIVATED: SD-card and encrypted OneDrive backups are implemented but wait for the "
+                                "owner to confirm the card and the account/folder; until then these eMMC backups do "
+                                "not survive loss of this device")}
+
+    @app.get("/api/offsite")
+    def offsite_state(p: Principal = Depends(require(Perm.READ))):
+        """SD-card backups, upload queue, cloud copies, restore drills and the copy policy (ADR-0010).
+        Read from state files; nothing is contacted."""
+        return offsite.view()
+
+    @app.post("/api/offsite/policy")
+    def offsite_policy(body: OffsitePolicyIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        """An administrator confirms the configured copy policy; only then is pruning enabled. A later
+        change to the policy needs a new confirmation."""
+        try:
+            entry = Offsite(cfg, state_dir, hist.db_path).confirm_policy(p.username, body.policy_hash)
+        except PolicyMismatch as e:
+            raise HTTPException(409, {"error": str(e), "policy": e.policy})
+        offsite.record(entry)
+        return {"confirmed": entry["payload"]}
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")

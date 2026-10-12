@@ -267,6 +267,113 @@ def cmd_backup_restore(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------------------------ offsite (ADR-0010)
+def _offsite(args):
+    from .historian.offsite import Offsite
+    cfg = _cfg(args.config)
+    sd = _state_dir(args)
+    return Offsite(cfg, sd, _db_path(cfg, sd))
+
+
+def _offsite_run(args, op) -> int:
+    """Exit codes: 0 done, 1 failed (recorded), 2 not activated, 75 another offsite job is running."""
+    from .historian.offsite import Busy, NotActivated
+    off = _offsite(args)
+    try:
+        with off:
+            res = op(off)
+    except NotActivated as e:
+        print(f"NOT ACTIVATED: {e}", file=sys.stderr)
+        return 2
+    except Busy as e:
+        print(f"BUSY: {e}", file=sys.stderr)
+        return 75
+    print(json.dumps(res, indent=2, default=str))
+    bad = (isinstance(res, dict) and (res.get("ok") is False or (res.get("backup") or {}).get("ok") is False
+                                      or bool(res.get("failed"))))
+    return 1 if bad else 0
+
+
+def cmd_offsite_backup(args) -> int:
+    return _offsite_run(args, lambda o: o.backup(actor="timer" if args.timer else "cli"))
+
+
+def cmd_offsite_upload(args) -> int:
+    return _offsite_run(args, lambda o: o.upload(force=args.now))
+
+
+def cmd_offsite_drill(args) -> int:
+    return _offsite_run(args, lambda o: o.drill(actor="timer" if args.timer else "cli"))
+
+
+def cmd_offsite_plan(args) -> int:
+    """What the copy policy would delete now, and whether it is confirmed. Deletes nothing."""
+    from .historian.sdcard import VolumeError
+
+    def op(o):
+        try:
+            card = o.card()
+        except VolumeError:
+            card = None
+        listing = None
+        if o.rclone is not None and args.list_cloud:
+            listing = o.rclone.listing()
+        return o.plan(card, listing)
+    return _offsite_run(args, op)
+
+
+def cmd_offsite_status(args) -> int:
+    from .historian.offsite import OffsiteMonitor
+    cfg = _cfg(args.config)
+
+    class _NoHist:
+        def query(self, *a):
+            return []
+    mon = OffsiteMonitor(cfg, _state_dir(args), _NoHist())
+    print(json.dumps(mon.view(), indent=2, default=str))
+    return 0
+
+
+def cmd_offsite_check(args) -> int:
+    """Verify the card's identity and that the cloud remote is an rclone crypt remote. Writes nothing
+    to the card or the cloud."""
+    from .historian.rclone import RcloneError
+    from .historian.sdcard import VolumeError
+    off = _offsite(args)
+    out, rc = {}, 0
+    try:
+        out["sd_card"] = {"ok": True} | off.card().view()
+    except VolumeError as e:
+        out["sd_card"], rc = {"ok": False, "code": e.code, "error": str(e)}, 1
+    if off.rclone is None:
+        out["cloud"] = {"ok": False, "error": "cloud.remote is not configured (TBD)"}
+        rc = 1
+    else:
+        try:
+            off.rclone.check_crypt()
+            out["cloud"] = {"ok": True, "remote": off.s.cloud.remote, "copies_listed": len(off.rclone.listing())}
+        except RcloneError as e:
+            out["cloud"], rc = {"ok": False, "code": e.code, "error": str(e)}, 1
+    out["activated"] = off.s.enabled
+    print(json.dumps(out, indent=2))
+    return rc
+
+
+def cmd_offsite_enroll(args) -> int:
+    """Mark the card the owner chose (it must be mounted at --mount and have filesystem --uuid) and print
+    the values to put into the configuration's offsite_backup.sd_card section."""
+    from .historian.sdcard import VolumeError, enroll_card
+    cfg = _cfg(args.config)
+    sd = _state_dir(args)
+    try:
+        res = enroll_card(args.mount, args.uuid, live_paths=[_db_path(cfg, sd).parent, sd], note=args.note or "")
+    except VolumeError as e:
+        print(f"REFUSED ({e.code}): {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(res, indent=2))
+    return 0
+
+
 # ------------------------------------------------------------------------------------------ archive / retention
 def _maintenance_historian(args, actor: str):
     """Open the installation's database only while no server owns it."""
@@ -428,6 +535,30 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--config")
     br.add_argument("--state-dir", default="var")
     br.set_defaults(fn=cmd_backup_restore)
+
+    of = sub.add_parser("offsite", help="SD-card backups and encrypted cloud copies (ADR-0010)").add_subparsers(
+        dest="sub", required=True)
+    for name, fn, hlp in (("backup", cmd_offsite_backup, "daily: SD-card backup, queue, upload, prune if confirmed"),
+                          ("upload", cmd_offsite_upload, "upload queued backups that are due"),
+                          ("drill", cmd_offsite_drill, "restore drill from the newest verified cloud copy"),
+                          ("plan", cmd_offsite_plan, "show what the copy policy would delete (deletes nothing)"),
+                          ("status", cmd_offsite_status, "backup, upload, drill and policy state"),
+                          ("check", cmd_offsite_check, "verify the card identity and the crypt remote")):
+        x = of.add_parser(name, help=hlp)
+        common(x)
+        x.set_defaults(fn=fn)
+        if name in ("backup", "drill"):
+            x.add_argument("--timer", action="store_true", help="started by the systemd timer (recorded as actor)")
+        if name == "upload":
+            x.add_argument("--now", action="store_true", help="ignore the retry backoff")
+        if name == "plan":
+            x.add_argument("--list-cloud", action="store_true", help="also list the cloud folder")
+    en = of.add_parser("enroll-card", help="write the enrolment marker on the chosen SD card")
+    common(en)
+    en.add_argument("--mount", required=True)
+    en.add_argument("--uuid", required=True, help="filesystem UUID of the card (blkid)")
+    en.add_argument("--note", default=None)
+    en.set_defaults(fn=cmd_offsite_enroll)
 
     ar = sub.add_parser("archive").add_subparsers(dest="sub", required=True)
     ac = ar.add_parser("create", help="export a UTC range of samples+events with checksummed manifest")

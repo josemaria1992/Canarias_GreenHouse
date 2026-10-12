@@ -149,6 +149,7 @@ class HardwareService:
                                         on_event=lambda kind, payload: hist.event(kind, payload, actor="system"),
                                         high_water=hist.newest_wall_label, wall=wall, monotonic=monotonic)
         self.retention = RetentionTask(hist, wall=wall, monotonic=monotonic)
+        self.offsite = None                 # OffsiteMonitor, attached by the app
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -198,6 +199,8 @@ class HardwareService:
             evaluate_storage_alarm(self.hist, self.alarms)
             evaluate_recorder_alarm(self.recorder, self.alarms)
             self.retention.tick(self.alarms)     # clock trust is checked even while snapshots are held
+            if self.offsite is not None:
+                self.offsite.tick(self.alarms)   # reads state files only; never runs rclone or touches the card
             # Transitions are written now; refreshes of still-active alarms ride with the snapshot.
             dirty = self.alarms.take_dirty() if self.alarms.take_transitioned() else []
         if dirty:

@@ -245,7 +245,46 @@
     } else {
       kids.push(h("p", { class: "muted" }, prop.note || ""));
     }
-    return h("div", { class: "card" }, ...kids);
+    return h("div", { class: "card wide" }, ...kids);
+  }
+  // SD-card backups and encrypted cloud copies (ADR-0010). Everything shown comes from the controller's
+  // state files; the page never contacts the cloud.
+  function offsiteCard(o) {
+    if (!o) return h("div", { class: "card" }, h("h2", null, "Off-device backups"), h("p", { class: "muted" }, "Off-device backup state unavailable."));
+    const res = (r, okText) => !r ? "none yet" : r.ok ? [pill(okText || "ok", "ok"), " ", fmtTime(r.utc)] : [pill("FAILED" + (r.code ? ": " + r.code : ""), "bad"), " ", fmtTime(r.utc), h("div", { class: "muted" }, r.error || r.integrity || "")];
+    const card = o.sd_card.last_check, q = o.queue || [], pol = o.policy, plan = pol.last_plan;
+    const rows = [
+      h("dt", null, "State"), h("dd", null, o.enabled ? pill("ACTIVATED", "ok") : pill("NOT ACTIVATED", "warn"), o.activation.note ? h("div", { class: "muted" }, o.activation.note) : null),
+      h("dt", null, "SD card"), h("dd", null, o.sd_card.mount_path ? `${o.sd_card.mount_path} (UUID ${o.sd_card.filesystem_uuid})` : "TBD",
+        card ? h("div", null, card.ok ? [pill("identity verified", "ok"), ` ${gib(card.free_bytes)} free · checked ${fmtTime(card.utc)}`] : [pill(card.code, "bad"), h("div", { class: "muted" }, card.error)]) : null),
+      h("dt", null, "Last SD backup"), h("dd", null, res(o.last_backup, o.last_backup && o.last_backup.file ? `${o.last_backup.file} · ${gib(o.last_backup.bytes)}` : "ok")),
+      h("dt", null, "On the card"), h("dd", null, o.local ? `${o.local.count} backups, ${gib(o.local.bytes)}; newest ${o.local.newest || "—"}` : "—"),
+      h("dt", null, "Upload queue"), h("dd", null, q.length ? [pill(`${q.length} waiting`, "warn"), h("div", { class: "muted" }, `oldest ${q[0].name}; ${q[0].attempts} attempt(s); next try ${fmtTime(q[0].next_attempt_utc)}${q[0].last_error ? "; last error: " + q[0].last_error : ""}`)] : "empty"),
+      h("dt", null, "Cloud copies"), h("dd", null, o.cloud.remote ? `${o.cloud.copies || 0} verified (cryptcheck) in ${o.cloud.remote}${o.cloud.newest ? "; newest " + o.cloud.newest : ""}` : "TBD (account and folder not confirmed)",
+        o.cloud.account_note ? h("div", { class: "muted" }, o.cloud.account_note) : null),
+      h("dt", null, "Last upload"), h("dd", null, res(o.last_upload)),
+      h("dt", null, "Restore drill"), h("dd", null, res(o.drill.last, o.drill.last && o.drill.last.backup ? "restored " + o.drill.last.backup : "ok"),
+        o.drill.due ? [" ", pill(`due (every ${o.drill.interval_days} days)`, "warn")] : null,
+        h("div", { class: "muted" }, `from the newest cloud copy into SD-card scratch space; needs ${gib(o.drill.min_scratch_bytes)} free plus ${gib(o.drill.headroom_bytes)} headroom`))];
+    const probs = Object.values(o.problems || {}).filter(Boolean);
+    const kids = [h("h2", null, "Off-device backups"), h("dl", { class: "kv" }, ...rows)];
+    if (probs.length) kids.push(h("div", null, probs.map(m => h("p", { class: "error" }, m))));
+    kids.push(h("h3", null, "Copy policy"),
+      h("p", null, `${pol.local_daily} daily copies on the SD card; ${pol.cloud_daily} daily plus ${pol.cloud_monthly} monthly copies in the cloud.`),
+      h("p", null, pol.active ? [pill("pruning enabled", "ok"), ` confirmed by ${pol.confirmed.confirmed_by} at ${fmtTime(pol.confirmed.confirmed_utc)}`]
+        : [pill("pruning off until confirmed", "warn"), pol.confirmed ? " (the policy changed since the last confirmation)" : " Nothing is deleted from the card or the cloud until an administrator confirms these counts."]));
+    if (plan) kids.push(h("p", { class: "muted" }, `Last plan (${fmtTime(plan.utc)}): would delete ${plan.local.delete.length} from the card and ${plan.cloud.delete.length} from the cloud` +
+      (plan.local.kept_for_upload && plan.local.kept_for_upload.length ? `; ${plan.local.kept_for_upload.length} kept until uploaded` : "") + (plan.refused ? `; refused: ${plan.refused}` : "")));
+    if (!pol.active && can("config_admin")) {
+      const ok = h("input", { type: "checkbox" });
+      const btn = h("button", { class: "cmd small", disabled: true, onclick: async () => {
+        const r = await act("POST", "/api/offsite/policy", { policy_hash: pol.policy_hash, confirm: true }, "copy policy confirmed; pruning follows it from the next daily run");
+        if (r) { S.settingsLoaded = false; VIEWS.settings(); }
+      } }, "Confirm policy and enable pruning");
+      ok.onchange = () => { btn.disabled = !ok.checked; };
+      kids.push(h("div", { class: "row" }, h("label", null, ok, h("span", null, ` I reviewed these copy counts (policy ${pol.policy_hash})`)), btn));
+    }
+    return h("div", { class: "card wide" }, ...kids);
   }
   function backupCard(b) {
     const d = b.restore_drill;
@@ -253,7 +292,7 @@
       h("dt", null, "Local copies"), h("dd", null, `${b.local_count} of ${b.keep} kept, ${gib(b.local_bytes)}` + (b.newest ? `, newest ${b.newest}` : "")),
       h("dt", null, "Last run"), h("dd", null, b.running ? pill("running", "ok") : (b.last ? (b.last.ok ? pill("published " + b.last.file, "ok") : pill("FAILED: " + b.last.error, "bad")) : "none in this process")),
       h("dt", null, "Restore drill"), h("dd", null, d ? [d.ok ? pill("ok", "ok") : pill("FAILED", "bad"), ` ${d.utc}`] : "never run", b.restore_drill_due ? [" ", pill(`due (every ${b.restore_drill_interval_days} days)`, "warn")] : null),
-      h("dt", null, "Off-device"), h("dd", null, pill("NOT CONFIGURED", "warn"), " ", b.off_device)),
+      h("dt", null, "Off-device"), h("dd", null, b.offsite_enabled ? pill("SD card + cloud", "ok") : pill("NOT ACTIVATED", "warn"), " ", b.off_device)),
       h("button", { class: "cmd small", disabled: !can("backup") || b.running, onclick: () => act("POST", "/api/backup", undefined, "backup started; it ends with a BACKUP_CREATED or BACKUP_FAILED event") }, "Create backup now"));
   }
 
@@ -546,8 +585,12 @@
       const meta = S.allPoints.find(p => p.id === pid) || {}, rows = tr.series[pid] || [];
       const trusted = [], suspect = [];
       rows.forEach((r, i) => {
-        const sus = iSus >= 0 && !!r[iSus], switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
-        (sus ? suspect : trusted).push([Date.parse(r[0]), r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", r[8] || switched]);
+        const sus = iSus >= 0 && !!r[iSus], t = Date.parse(r[0]), own = sus ? suspect : trusted;
+        // The server flags a gap between neighbouring rows of the merged list; where the other kind sits
+        // in between (same stamps can interleave), each half breaks only on a missed snapshot of its own.
+        const switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
+        const gap = switched ? (own.length === 0 || t - own[own.length - 1][0] > 150000) : !!r[8];
+        own.push([t, r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", gap]);
       });
       const unit = rows.map(r => r[5]).find(u => u) || "", name = `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`;
       return [{ name, digital: meta.kind !== "AI", points: trusted, dashed: false },
@@ -601,8 +644,9 @@
   // ------------------------------------------------ settings
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
-    const [s, ret, bk, qu] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
-      api("GET", "/api/backup").catch(() => null), api("GET", "/api/history/quarantine").catch(() => null)]), c = s.config;
+    const [s, ret, bk, qu, off] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
+      api("GET", "/api/backup").catch(() => null), api("GET", "/api/history/quarantine").catch(() => null),
+      api("GET", "/api/offsite").catch(() => null)]), c = s.config;
     S.settingsLoaded = true;
     const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
     const userForm = can("user_admin") ? (() => {
@@ -634,6 +678,7 @@
         retentionCard(ret),
         quarantineCard(qu),
         bk ? backupCard(bk) : h("div", { class: "card" }, h("h2", null, "Backups"), h("p", { class: "muted" }, "Backup state unavailable.")),
+        offsiteCard(off),
         h("div", { class: "card" }, h("h2", null, "Production status"), h("dl", { class: "kv" }, ...Object.entries(s.production_fields).flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)])),
           h("p", { class: "muted" }, s.commissioning_evidence))),
       h("div", { class: "card" }, h("h2", null, "Buses"), tbl(["Bus", "Kind", "Port", "Serial", "Poll s"], c.buses.map(b => [b.bus_id, b.kind, b.port, `${b.serial.baudrate} ${b.serial.bytesize}${b.serial.parity}${b.serial.stopbits}`, b.poll_interval_s]))),
