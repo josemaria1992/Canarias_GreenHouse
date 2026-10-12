@@ -4,7 +4,7 @@
 3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-12 (historian update ADR-0008;
 quarantine ADR-0011 and off-device backups ADR-0012), software 0.2.0.dev0. The 2026-10-11 run was at
 `0ce4842` (183 tests); the ADR-0008 run at `f0b18e2` (252 tests).
-**Results:** `python -m pytest`: 270 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
+**Results:** `python -m pytest`: 271 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
 `demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`. Installed-wheel check
 (`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
 

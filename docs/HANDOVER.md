@@ -40,7 +40,7 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-270 tests pass on Python 3.11, 3.12 and 3.13 (one of them runs the real rclone binary against a
+271 tests pass on Python 3.11, 3.12 and 3.13 (one of them runs the real rclone binary against a
 local encrypted remote; it is skipped where rclone is not installed and required on CI's Linux jobs). `demo verify` gives 21/21 on both fixtures, and
 the installed wheel passes 13/13 from outside the repository. A simulated 400-day history at 60 s
 with commands, alarms and device faults measured the one-year size, the rolling window, the WAL,

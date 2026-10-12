@@ -232,6 +232,30 @@ def test_nothing_to_quarantine_without_future_stamps(tmp_path, cfg24, clk):
     h.close()
 
 
+def test_proposal_never_reaches_into_the_running_process(tmp_path, cfg24):
+    """A later process (the one running while an administrator reads the proposal) keeps writing; its
+    records are never proposed, and its own clock marker does not change the proposal."""
+    db = tmp_path / "r.sqlite3"
+    fut = datetime.now(timezone.utc) + timedelta(days=1)
+    h = Historian(db, cfg24, "earlier")
+    h.submit(lambda c: c.execute("INSERT INTO events(utc,kind,session_id,payload_json) VALUES(?,'DI_EDGE',"
+                                 "'earlier','{}')", (fut.isoformat(),)), wait=True)
+    h.close()
+    h = Historian(db, cfg24, "running")
+    h.event("TEST_EVENT", {}, actor="t")
+    h.wait_idle()
+    first_running = h.query("SELECT min(id) FROM events WHERE session_id='running'")[0][0]
+    wall = datetime.now(timezone.utc).timestamp()
+    p1 = h.read(lambda c: propose(c, h.quarantines, wall_s=wall))
+    assert p1["needed"] and p1["ranges"]["events"][1] < first_running
+    h.event("HISTORY_CLOCK_BEHIND", {"behind_s": 86400}, actor="system")
+    h.event("TEST_EVENT", {}, actor="t")
+    h.wait_idle()
+    p2 = h.read(lambda c: propose(c, h.quarantines, wall_s=wall))
+    assert p2["proposal_id"] == p1["proposal_id"]
+    h.close()
+
+
 def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_path, cfg48):
     """AT-QUA-06/07 through the real app: proposal, permissions, date check, and SUSPECT flags in
     trends, sample export, audit export, events and command history."""

@@ -237,20 +237,22 @@ def propose(c: sqlite3.Connection, reg: QuarantineRegister, *, wall_s: float,
         start_anchor = {"kind": "PROCESS_START", "session_id": sid,
                         "why": "no forward clock step was recorded in this process: its clock is taken as wrong "
                                "from its start"}
-    # End: the first backward correction after the start, else now.
+    # End: the first backward correction after the start, else now; never into a later process, whose
+    # clock was set right at its start (its records keep being written while the proposal is shown).
     after = [m for m in markers if _backward_marker(m[1], m[4]) and m[0] >= start["events"]]
     now_wm = watermark(c)
     if after:
         m = after[0]
         end = {t: m[4]["watermark"][t] for t in ("cycles", "events", "commands")}
-        if m[3] != sid and order.get(m[3], 0) > order.get(sid, 0):    # corrected by a later process at start
-            f = _session_first_ids(c, m[3])
-            end = {t: min(end[t], f[t] - 1) if f[t] is not None else end[t] for t in end}
         end_anchor = {"kind": m[1], "event_id": m[0], "utc": m[2], "session_id": m[3],
                       "why": "the clock was corrected backward here"}
     else:
         end = {t: now_wm[t] for t in ("cycles", "events", "commands")}
         end_anchor = {"kind": "NOW", "why": "no backward correction was recorded; up to the newest record"}
+    later = sorted((r, s) for s, r in order.items() if r > order.get(sid, 1 << 62))
+    if later:
+        f = _session_first_ids(c, later[0][1])
+        end = {t: min(end[t], f[t] - 1) if f[t] is not None else end[t] for t in end}
     for q in reg.items:                       # never overlap an earlier quarantine
         for t in end:
             r = q.ranges.get(t)
