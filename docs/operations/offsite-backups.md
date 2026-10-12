@@ -1,26 +1,36 @@
 # Operations: SD-card backups and encrypted OneDrive copies (ADR-0012)
 
 **Status: implemented, not activated.** Every shipped configuration has `offsite_backup.enabled:
-false`, and the card, the OneDrive account and the folder are TBD. Until the owner confirms them
-(section 1) the eMMC backups of ADR-0008 continue and every `offsite` command answers "not
-activated". Nothing here has been tried with a physical card, a USB reader on the CM4 or a real
+false`. The owner chose the card, the account, the folder, the key escrow and the copy policy on
+2026-10-12 (section 1); the card's UUID and the rclone remote are set up on the controller at
+activation (sections 2, 3, 5). Until then the eMMC backups of ADR-0008 continue and every `offsite`
+command answers "not activated". Nothing here has been tried with a physical card, a USB reader on the CM4 or a real
 OneDrive account; the tests use a simulated card and a local rclone crypt remote.
 
 Application backups are not motor safety. Nothing here stops equipment.
 
 ## 1. Owner decisions before activation
 
-| Item | Needed | Proposal (not a decision) |
+Recorded from the owner's messages of 2026-10-12 19:19 and 19:20 UTC. Values that identify people
+or grant access (the account's address, the sharing link, the drive id) are kept in the site record
+outside this public repository.
+
+| Item | Owner decision (2026-10-12) | Still open, done on site at activation |
 |---|---|---|
-| SD card | make, capacity, which physical card | 32 GB or larger, high-endurance type; 7 backups (about 3.5 GiB at one year) plus 10 GiB drill space plus 1 GiB headroom |
-| USB reader | which reader, which CM4 port | any USB mass-storage reader; record `lsusb` and `/dev/disk/by-id` on CP-00 |
-| Filesystem | format and label | ext4, label `AQUACROP-BK` |
-| Mount path | where it mounts | `/media/aquacrop-sd` |
-| OneDrive account | which account (personal or Microsoft 365 business), who owns it | an AquaCrop-owned account, not a personal one |
-| Folder | which folder | a dedicated folder, e.g. `AquaCrop/greenhouse-backups` |
-| Who authorizes | who signs in once to authorize rclone | the account owner, on their own computer |
-| Recovery key escrow | where the crypt password and salt are kept | the owner's password manager plus a sealed printed copy in a safe |
-| Copy policy | confirm or change the counts | 7 daily on the card; 30 daily + 12 monthly in the cloud |
+| SD card | 64 GB card, ext4 | which physical card; its filesystem UUID (`blkid`) at enrolment |
+| USB reader | not specified | any USB mass-storage reader; record `lsusb` and `/dev/disk/by-id` on CP-00 |
+| Filesystem | ext4 | label `AQUACROP-BK` (proposal) |
+| Mount path | not specified | `/media/aquacrop-sd` (proposal) |
+| OneDrive account | the owner's account, signed in with the owner's institutional e-mail address (address in the site record) | whether that address is a personal Microsoft account or a work/school account decides how rclone reaches the folder (section 3.1) |
+| Folder | `AQUACROP_DATOS_CANARIAS` in a colleague's **personal** OneDrive (onedrive.live.com), shared with the owner | the colleague shares it with the owner's address with edit rights; set the remote to it (section 3.1) |
+| Who authorizes | the account holder (the owner) signs in once | the sign-in itself |
+| Recovery key escrow | a printed copy of the crypt password and salt in a sealed envelope | print it when the keys are generated; store it away from the controller (section 4) |
+| Copy policy | 7 daily on the card; 30 daily + 12 monthly in the cloud (confirmed) | an administrator confirms the same policy in Settings after activation; that confirmation is what lets the software prune |
+
+Space: 7 copies (about 3.5 GiB at one year) plus 10 GiB drill space plus 1 GiB headroom fit the
+64 GB card with room to spare. In the cloud, 42 copies need about 20 GiB at one year, counted
+against the **folder owner's** OneDrive quota (a free personal OneDrive has 5 GB; Microsoft 365
+Personal/Family 1 TB), not the owner's.
 
 ## 2. SD card
 
@@ -60,8 +70,10 @@ The CM4 has no browser. rclone's OneDrive authorization is done once on another 
 
    - `n` new remote `aquacrop-onedrive`, type `onedrive`, paste the token when asked
      ("use auto config? n"), choose the drive the owner confirmed.
-   - `n` new remote `aquacrop-crypt`, type `crypt`, remote `aquacrop-onedrive:AquaCrop/greenhouse-backups`
-     (the confirmed folder), `filename_encryption = standard`, `directory_name_encryption = true`,
+   - Point `aquacrop-onedrive` at the shared folder `AQUACROP_DATOS_CANARIAS` (section 3.1), so
+     that `aquacrop-onedrive:` is the folder itself.
+   - `n` new remote `aquacrop-crypt`, type `crypt`, remote `aquacrop-onedrive:` (the shared folder),
+     `filename_encryption = standard`, `directory_name_encryption = true`,
      password: `g` (generate, 256 bits), salt (password2): `g` (generate, 256 bits).
    - **Write the generated password and salt down now** (section 4). rclone stores them only
      obscured in the file; obscuring is not encryption.
@@ -73,28 +85,81 @@ The CM4 has no browser. rclone's OneDrive authorization is done once on another 
 5. `python -m aquacrop offsite check --config ... --state-dir /var/lib/aquacrop` must report the card
    verified and the remote as `crypt`.
 
-What the token can do: rclone's default OneDrive scopes allow reading and writing the account's
-files, not only the backup folder. A dedicated AquaCrop account limits what a stolen controller can
-reach. To withdraw access, revoke the app's consent in the Microsoft account's privacy/app
+What the token can do: rclone's OneDrive token is not limited to one folder. Because the folder
+lives in a colleague's OneDrive, the token needs `Files.ReadWrite.All`, which reaches every file the
+signed-in account can read or write, including its own files and other folders shared with it.
+Someone who steals the controller and its `rclone.conf` can reach those files until consent is
+revoked. Set `access_scopes = Files.Read Files.ReadWrite Files.Read.All Files.ReadWrite.All
+offline_access` on `aquacrop-onedrive` to leave out SharePoint site browsing (`Sites.Read.All`), keep
+the controller physically secured, and revoke at once if it is lost. (A dedicated account holding
+only this folder would limit it further.)
+
+To withdraw access, revoke the app's consent in the Microsoft account's privacy/app
 permissions page (or the Microsoft 365 admin portal) and delete the remote from `rclone.conf`.
 Refresh tokens expire after a period without use; the daily upload keeps them in use, and an expired
 token shows as `AUTHORIZATION` in Settings and in the `OFFSITE_BACKUP` alarm: repeat steps 1 and 2.
+
+### 3.1 The shared folder
+
+The folder belongs to a colleague's personal OneDrive, so rclone has to be told which drive and
+which folder; a plain `aquacrop-onedrive:` would otherwise be the signed-in account's own OneDrive.
+Neither way below has been tried with these accounts yet (CP-00); use the first that passes the
+check.
+
+The account that signs in for rclone must be able to open the folder in onedrive.live.com:
+
+- **A personal Microsoft account** (the owner's address opens onedrive.live.com and the folder is
+  under *Shared*): use way 1 or 2 with that account.
+- **A work or school account** (the address signs in to the institution's Microsoft 365): rclone
+  cannot reach a folder in a personal OneDrive from it. Then either the colleague who owns the folder
+  signs in for rclone (the token then reaches the colleague's whole OneDrive, as above), or the
+  folder is created in the owner's institutional OneDrive instead (then `drive_type = business`, and
+  the tenant may require IT approval for rclone, "Need admin approval").
+
+1. **Shortcut.** Signed in at onedrive.live.com, *Shared* → `AQUACROP_DATOS_CANARIAS` → *Add
+   shortcut to My files*; then `aquacrop-onedrive:AQUACROP_DATOS_CANARIAS` is the folder, and the
+   crypt remote points there (`aquacrop-onedrive:AQUACROP_DATOS_CANARIAS` instead of
+   `aquacrop-onedrive:` in section 3).
+2. **Drive and folder ids.** In [Graph Explorer](https://developer.microsoft.com/graph/graph-explorer),
+   signed in with the same account, run `GET https://graph.microsoft.com/v1.0/me/drive/sharedWithMe`.
+   In the entry named `AQUACROP_DATOS_CANARIAS`, `remoteItem.parentReference.driveId` is the
+   colleague's drive and `remoteItem.id` is the folder. In the `aquacrop-onedrive` remote set
+   `drive_type = personal`, `drive_id` to the drive and `root_folder_id` to the folder.
+
+Check: `rclone lsf aquacrop-onedrive:` lists the folder's contents (and nothing of the owner's own
+files), then `rclone copyto` a small test file into it, `rclone lsf` shows it, and `rclone
+deletefile` removes it. The colleague sees only encrypted names and contents; they cannot read the
+backups.
+
+The colleague owns these copies: they can delete them or stop sharing, and the folder disappears if
+their account is closed (for example when they leave the institution). AquaCrop only uses `copyto`,
+so nothing on the controller can delete cloud copies by mirroring, but it cannot protect them from
+the folder owner. Uploads would then fail (`AUTHORIZATION` or `RCLONE_FAILED`) and the alarm shows it;
+before the colleague leaves, move the folder to a long-lived account. Share the folder with named
+people, not as "anyone with the link": with an edit link anyone who has it can delete the copies
+(they still cannot read them).
 
 ## 4. Credentials and recovery keys (kept away from the controller)
 
 | Secret | Where it lives | Where the recovery copy lives |
 |---|---|---|
-| Crypt password and salt (password2), plain values | only obscured inside `rclone.conf` on the controller | owner's password manager **and** a sealed printed copy in a safe; never on the controller in plain text, never in OneDrive, never in git |
+| Crypt password and salt (password2), plain values | only obscured inside `rclone.conf` on the controller | a printed copy in a sealed envelope (owner decision, 2026-10-12), stored away from the controller's site; never on the controller in plain text, never in OneDrive, never in git, never in a chat or ticket |
 | OneDrive account password and MFA | the account owner | the owner's normal account recovery |
 | OAuth token | `rclone.conf` (0600, user `aquacrop`) | not needed: re-authorize (section 3) |
 | `rclone.conf` itself | controller only | not copied off the controller; it can be rebuilt from the escrowed password and salt plus a new authorization |
+
+Print the two values when rclone generates them in section 3, on a printer that does not keep
+copies, and check the printout against the screen before sealing it. With one paper copy, a lost or
+damaged envelope makes the cloud copies unreadable once the controller is also lost: replace it at
+once (new keys, new uploads) if it is ever missing.
 
 Without the crypt password and salt every cloud copy is unreadable, also to AquaCrop. Encryption
 protects the cloud copy against the cloud account and the provider; it does not protect against
 someone with root access to the controller, who can read `rclone.conf`.
 
 **Escrow test (yearly, and after any change of keys):** on a computer that is not the controller,
-build a fresh `rclone.conf` from the escrowed password and salt plus a new authorization, download one
+open the envelope, build a fresh `rclone.conf` from the printed password and salt (typed in by hand,
+which also proves the printout is legible), reseal it in a new envelope plus a new authorization, download one
 cloud copy with `rclone copyto aquacrop-crypt:backups/<name> ./<name>` and run
 `python -m aquacrop backup verify --backup ./<name> --full --scratch-dir <dir>`. The monthly drill
 only proves the keys on the controller; this proves the escrowed ones.

@@ -22,6 +22,9 @@
   `OFFSITE_BACKUP` alarm; a Settings card; systemd units and an fstab example;
   `docs/operations/offsite-backups.md` (authorization, credentials, recovery keys, activation).
 - CI installs rclone on Linux and requires the real rclone round trip there.
+- Owner choices for off-device backups recorded in `docs/operations/offsite-backups.md`: 64 GB ext4
+  card, the shared folder in a colleague's personal OneDrive (with setup steps for a shared folder),
+  a sealed printed key copy, and the 7 / 30 + 12 copy policy. Still not activated.
 
 ### Changed
 - A confirmed quarantine supersedes the clock hold it answers (`TIMESTAMPS_QUARANTINED`); a hold

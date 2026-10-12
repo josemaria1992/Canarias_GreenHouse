@@ -70,10 +70,12 @@ eMMC and SQLite database (ADR-0008).
 
 1. **Accept ADR-0008** (revised; R1 to R5 answered), **ADR-0011** (timestamp quarantine) and
    **ADR-0012** (SD card and OneDrive); all three are "proposed".
-2. **Activate off-device backups**: confirm the SD card (and reader), the OneDrive account and
-   folder, who authorizes rclone, where the recovery keys are escrowed, and the copy policy
-   (proposed 7 on the card; 30 daily + 12 monthly in the cloud). Checklist in
-   `operations/offsite-backups.md` section 1.
+2. **Activate off-device backups**: the owner chose a 64 GB ext4 card, the shared folder
+   `AQUACROP_DATOS_CANARIAS` (a colleague's personal OneDrive), a sealed printed key copy and the
+   7 / 30 + 12 copy policy (2026-10-12). Still open: whether the owner's address is a personal
+   Microsoft account (decides how rclone reaches the folder), the folder owner's storage plan
+   (about 20 GiB needed), then enrolment and rclone setup on the controller.
+   `operations/offsite-backups.md` sections 1 and 3.1.
 3. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
    future-dated records are now resolved by the administrator's quarantine (ADR-0011).
 4. Production facts still `TBD`: hydraulic topology, wiring/physical mapping (also unblocks shadow

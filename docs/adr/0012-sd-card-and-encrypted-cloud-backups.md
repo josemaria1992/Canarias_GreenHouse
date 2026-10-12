@@ -1,6 +1,9 @@
 # ADR-0012 SD-card daily backups and encrypted OneDrive copies
 Status: proposed 2026-10-12 (owner request of 2026-10-12 16:01 UTC); implemented and shipped
-**disabled** until the owner confirms the actual SD card and the OneDrive account and folder.
+**disabled**. Owner choices recorded 2026-10-12 19:19 UTC: a 64 GB ext4 card, the folder
+`AQUACROP_DATOS_CANARIAS` in a colleague's personal OneDrive shared with the owner's account, a sealed
+printed copy of the crypt keys, and the proposed copy policy. Activation still needs the card's
+enrolment and the rclone remote on the controller (`docs/operations/offsite-backups.md` sections 1-5).
 Resolves the "off-device backup destination TBD" item of ADR-0008.
 
 ## Context
@@ -121,7 +124,10 @@ account authorization, credentials and recovery keys: `docs/operations/offsite-b
 - Anyone with root on the controller can read the rclone configuration, including the crypt keys:
   encryption protects the cloud copy against the cloud account, not against a compromised controller.
 - Losing the crypt password and salt makes every cloud copy unreadable; they are escrowed away from
-  the controller and tested (operations doc).
+  the controller (one sealed printed copy) and tested (operations doc).
+- The cloud copies live in a colleague's personal OneDrive and count against that account's quota
+  (about 20 GiB at one year for 42 copies). The folder owner can delete them, and they disappear with
+  that account; copy-only uploads protect them from the controller, not from the folder owner.
 - Not physically tested: the USB reader and card on the CM4, OneDrive throughput and token refresh,
   and power loss during a write remain checks for CP-00.
 

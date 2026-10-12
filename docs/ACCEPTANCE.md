@@ -161,7 +161,7 @@ OneDrive account was used.**
 | AT-OFF-09 shipped disabled; nothing runs until the card and account are confirmed | PASS | `test_not_activated_until_owner_confirms` |
 | AT-OFF-10 outcomes recorded once as events (also after a restart); alarms for failed backups, upload backlog and drills | PASS | `test_monitor_copies_journal_once_and_raises_alarms` |
 | AT-OFF-11 status in the API and Settings; policy confirmation administrator only, audited | PASS | `test_api_shows_state_and_policy_confirmation_is_admin_only`; headless Chromium: Settings card with a simulated card and an offline queue, policy confirmation |
-| AT-OFF-12 the physical card in its USB reader on the CM4, the owner's OneDrive account, token refresh, throughput, the escrow test | BLOCKED | needs the hardware and the owner's confirmation of the account/folder and card (CP-00) |
+| AT-OFF-12 the physical card in its USB reader on the CM4, the owner's OneDrive account, token refresh, throughput, the escrow test | BLOCKED | card and folder chosen 2026-10-12; needs the hardware, the folder shared with the signing-in account, and the rclone setup on the controller (CP-00) |
 
 ## Milestone 5: hardware arrival
 
@@ -180,7 +180,7 @@ OneDrive account was used.**
 | AI channel modes on real modules | UNKNOWN until CP-01/CP-02; values stay UNSCALED |
 | Shadow / what-if | Not served (ADR-0002) |
 | Alarm severities for physical equipment | TBD; only DEMO rules shipped |
-| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 revised, awaiting acceptance); off-device backup destination and restore-drill scratch TBD |
+| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 revised, awaiting acceptance); off-device: 64 GB ext4 SD card and the shared OneDrive folder `AQUACROP_DATOS_CANARIAS` chosen (owner, 2026-10-12), card UUID and rclone remote TBD until set up on the controller |
 | Role assignments and remote physical rights | Proposal only; owner approval required |
 | CM4 performance, UART mapping, RTC | Not measured / not verified |
 | Safety functions (E-stop, motor protection, dry-run, overfill) | Outside software; never replaced by it |
