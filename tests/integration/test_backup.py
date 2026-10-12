@@ -158,15 +158,24 @@ def test_concurrent_backups_restore_to_their_own_snapshot(live, tmp_path, cfg24)
     the historian keeps writing: a full restore of each matches its manifest exactly."""
     h, rt = live
     stop = threading.Event()
+    writes = [0]
 
     def writer():
         while not stop.is_set():
             rt.run_for(60)
             h.event("BURST", {"n": 1})
+            writes[0] += 1
     t = threading.Thread(target=writer)
     t.start()
     try:
-        mans = [create_backup(h.db_path, tmp_path / "bk") for _ in range(2)]
+        mans = []
+        for _ in range(2):
+            # at least one more write before each backup, so the two snapshots must differ
+            # (a fast runner could otherwise take both before the writer thread gets scheduled)
+            n, deadline = writes[0], time.monotonic() + 30
+            while writes[0] == n and time.monotonic() < deadline:
+                time.sleep(0.005)
+            mans.append(create_backup(h.db_path, tmp_path / "bk"))
     finally:
         stop.set()
         t.join()
