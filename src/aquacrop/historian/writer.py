@@ -84,7 +84,10 @@ def capacity_report(con: sqlite3.Connection, db_path: Path, cfg: InstallationCon
     page = con.execute("PRAGMA page_size").fetchone()[0]
     pages = con.execute("PRAGMA page_count").fetchone()[0]
     free_pages = con.execute("PRAGMA freelist_count").fetchone()[0]
-    oldest, newest = con.execute("SELECT min(acquired_utc), max(acquired_utc) FROM samples").fetchone()
+    # Two single-aggregate queries: each is one index lookup. A combined min()/max() scans the whole
+    # index (seconds on a one-year database), and this runs on every poll cycle.
+    oldest = con.execute("SELECT min(acquired_utc) FROM samples").fetchone()[0]
+    newest = con.execute("SELECT max(acquired_utc) FROM samples").fetchone()[0]
     used = (pages - free_pages) * page
     span_days = projected = None
     if oldest and newest:

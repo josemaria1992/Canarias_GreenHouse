@@ -506,3 +506,43 @@ def test_capacity_check_does_not_wait_behind_a_long_user_query(h):
     assert _time.monotonic() - tic < 1.0 and st["db_bytes"] > 0
     release.set()
     t.join()
+
+
+def test_per_poll_status_queries_are_index_lookups_not_scans(h):
+    """The capacity check runs on every poll cycle and the status page: none of its queries may scan
+    a table or a whole index (a combined min()/max() took 2.4 s on a one-year database)."""
+    seed(h, NOW - timedelta(minutes=1), tag="p")
+    sqls = []
+    con = sqlite3.connect(h.db_path)
+    con.set_trace_callback(sqls.append)
+    from aquacrop.historian.writer import NEWEST_WALL_CYCLE_SQL, capacity_report, newest_wall_label
+    capacity_report(con, h.db_path, h.cfg)
+    newest_wall_label(con)
+    con.set_trace_callback(None)
+    selects = [q for q in sqls if q.lstrip().upper().startswith("SELECT")]
+    assert selects
+    for q in selects:
+        plan = " ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + q))
+        if q == NEWEST_WALL_CYCLE_SQL:                          # reverse rowid walk, stops at the first match
+            assert plan == "SCAN cycles", plan
+            continue
+        assert "SCAN" not in plan, (q, plan)
+    # The walk really does stop: its cost does not grow with the number of earlier snapshots.
+    steps = []
+
+    def cost():
+        n = [0]
+        con.set_progress_handler(lambda: n.__setitem__(0, n[0] + 1), 1)
+        newest_wall_label(con)
+        con.set_progress_handler(None, 1)
+        return n[0]
+    steps.append(cost())
+    con.executemany("INSERT INTO cycles(cycle_id,session_id,persisted_utc,n_points,cadence_basis) "
+                    "VALUES(?,?,?,0,'WALL')", [(f"x{i}", "s", iso(NOW - timedelta(days=30, minutes=i)))
+                                                for i in range(20000)])
+    con.execute("INSERT INTO cycles(cycle_id,session_id,persisted_utc,n_points,cadence_basis) "
+                "VALUES('newest','s',?,0,'WALL')", (iso(NOW),))
+    steps.append(cost())
+    con.rollback()
+    assert steps[1] <= steps[0] + 20, steps
+    con.close()

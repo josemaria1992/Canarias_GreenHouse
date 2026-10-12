@@ -301,7 +301,8 @@ def create_backup(db_path: str | Path, destination: str | Path, *, config_id: st
             if "schema_meta" in tables else None
         user_version = con.execute("PRAGMA user_version").fetchone()[0]
         objects = _schema_objects(con)
-        rng = con.execute("SELECT min(acquired_utc), max(acquired_utc) FROM samples").fetchone() \
+        rng = (con.execute("SELECT min(acquired_utc) FROM samples").fetchone()[0],
+               con.execute("SELECT max(acquired_utc) FROM samples").fetchone()[0]) \
             if "samples" in tables else (None, None)
         prints = _fingerprints(con, tables)
         watch.check(force=True)
