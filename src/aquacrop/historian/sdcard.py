@@ -1,4 +1,4 @@
-"""Identity of the SD card that receives backups (ADR-0010).
+"""Identity of the SD card that receives backups (ADR-0012).
 
 Before anything is written, the configured mount path must be a mounted filesystem, read-write, on a
 different filesystem from the live database, backed by the block device whose filesystem UUID the

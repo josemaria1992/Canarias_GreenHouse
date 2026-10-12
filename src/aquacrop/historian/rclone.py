@@ -1,4 +1,4 @@
-"""The only path from the controller to the cloud copy: a narrow wrapper around the rclone CLI (ADR-0010).
+"""The only path from the controller to the cloud copy: a narrow wrapper around the rclone CLI (ADR-0012).
 
 - Uploads are `copyto` of one file to one name. Mirror operations (`sync`, `bisync`, `move`, `delete`,
   `purge`, ...) are not in the allowlist and cannot be issued from here: a local deletion or an empty

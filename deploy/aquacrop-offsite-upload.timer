@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry queued AquaCrop cloud uploads every 15 minutes
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=15m
+RandomizedDelaySec=2m
+
+[Install]
+WantedBy=timers.target

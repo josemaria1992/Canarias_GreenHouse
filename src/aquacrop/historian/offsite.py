@@ -1,4 +1,4 @@
-"""SD-card daily backups and encrypted OneDrive copies (owner request of 2026-10-12, ADR-0010).
+"""SD-card daily backups and encrypted OneDrive copies (owner request of 2026-10-12, ADR-0012).
 
 The working database stays on the eMMC; recording (60 s snapshots, 365-day window) is untouched by
 everything here. Backup, upload, prune and drill run as separate short processes (systemd timers or
@@ -477,6 +477,8 @@ class Offsite:
         live = self.db_path.resolve().parent
         if root.resolve() == live or live in root.resolve().parents:
             return self._fail("DRILL", "UNSAFE_SCRATCH", "the drill scratch space is inside the live state directory")
+        for stale in root.glob("drill-*"):        # left by a drill that crashed or lost power (we hold the lock)
+            shutil.rmtree(stale, ignore_errors=True)
         free = self.probe.usage(root).free
         if free < need:
             return self._fail("DRILL", "NO_SCRATCH_SPACE",

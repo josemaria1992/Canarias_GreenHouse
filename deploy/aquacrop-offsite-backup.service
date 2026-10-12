@@ -1,0 +1,28 @@
+# Daily SD-card backup (ADR-0012): verifies the card's identity (mounted, UUID, enrolment marker,
+# read-write, not the eMMC), writes a consistent compressed backup with checksum and manifest to the
+# card, re-reads it, queues it for the encrypted cloud copy and tries the queue once. Prunes only under
+# a copy policy an administrator confirmed. Does not need the network: without it the backup is still
+# made and the upload stays queued. Replaces aquacrop-backup.timer once offsite_backup is activated.
+[Unit]
+Description=AquaCrop daily SD-card backup and cloud copy
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=aquacrop
+Group=aquacrop
+EnvironmentFile=/etc/aquacrop/aquacrop.env
+Environment=HOME=/var/lib/aquacrop XDG_CACHE_HOME=/var/lib/aquacrop/rclone/cache
+WorkingDirectory=/var/lib/aquacrop
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop offsite backup --timer --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop
+# 0 done, 1 failed (recorded and alarmed), 2 not activated, 75 another offsite job running
+SuccessExitStatus=2 75
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# The card's mount point; '-' so a missing card is reported by the program (never written elsewhere).
+ReadWritePaths=/var/lib/aquacrop -/media/aquacrop-sd

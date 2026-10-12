@@ -78,7 +78,7 @@ def boundary_index(wall_s: float, interval_s: float) -> int:
 def slot_cycle_id(at: datetime, interval_s: float, clock_epoch: int = 0) -> str:
     """Durable identity of a wall-time snapshot: (clock epoch, label). The same label gives the same id
     in every process of one clock epoch. Epoch 0 (no timestamp quarantine yet) keeps the original form
-    `slot/60s/<label>`; after the n-th quarantine (ADR-0009) ids are `slot/60s/e<n>/<label>`, so a
+    `slot/60s/<label>`; after the n-th quarantine (ADR-0011) ids are `slot/60s/e<n>/<label>`, so a
     correctly timed label equal to a quarantined, future-dated one is a different snapshot."""
     label = at.astimezone(timezone.utc).isoformat()
     return f"slot/{interval_s:g}s/{label}" if not clock_epoch else f"slot/{interval_s:g}s/e{clock_epoch}/{label}"
@@ -264,7 +264,7 @@ class HistoryRecorder:
         self._base_wall, self._base_mono = wall, mono
 
     def rebase(self, reason: str) -> None:
-        """Re-read the stored high-water label after a timestamp quarantine (ADR-0009): the quarantined,
+        """Re-read the stored high-water label after a timestamp quarantine (ADR-0011): the quarantined,
         future-dated labels no longer count, so recording resumes from the current wall clock. A held
         state ends here and is reported; nothing is back-filled."""
         wall, mono = self._wall(), self._mono()

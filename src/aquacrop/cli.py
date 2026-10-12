@@ -267,7 +267,7 @@ def cmd_backup_restore(args) -> int:
     return 0
 
 
-# ------------------------------------------------------------------------------------------ offsite (ADR-0010)
+# ------------------------------------------------------------------------------------------ offsite (ADR-0012)
 def _offsite(args):
     from .historian.offsite import Offsite
     cfg = _cfg(args.config)
@@ -536,7 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--state-dir", default="var")
     br.set_defaults(fn=cmd_backup_restore)
 
-    of = sub.add_parser("offsite", help="SD-card backups and encrypted cloud copies (ADR-0010)").add_subparsers(
+    of = sub.add_parser("offsite", help="SD-card backups and encrypted cloud copies (ADR-0012)").add_subparsers(
         dest="sub", required=True)
     for name, fn, hlp in (("backup", cmd_offsite_backup, "daily: SD-card backup, queue, upload, prune if confirmed"),
                           ("upload", cmd_offsite_upload, "upload queued backups that are due"),

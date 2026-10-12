@@ -957,7 +957,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             raise HTTPException(422, str(e))
         return {"released": True, "cutoff_utc": prop["cutoff_utc"], "would_delete": prop["would_delete"]}
 
-    # ------------------------------------------------------------------ timestamp quarantine (ADR-0009)
+    # ------------------------------------------------------------------ timestamp quarantine (ADR-0011)
     @app.get("/api/history/quarantine")
     def quarantine_state(p: Principal = Depends(require(Perm.READ))):
         """Quarantines in force and, when records are stamped later than the current clock, the proposal
@@ -989,7 +989,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     def _run_backup(user: str) -> None:
         h = cfg.historian
-        if cfg.offsite_backup.enabled:      # SD card only (verified identity); never the eMMC (ADR-0010)
+        if cfg.offsite_backup.enabled:      # SD card only (verified identity); never the eMMC (ADR-0012)
             try:
                 with Offsite(cfg, state_dir, hist.db_path) as off:
                     res = off.backup(actor=user)
@@ -1051,7 +1051,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/offsite")
     def offsite_state(p: Principal = Depends(require(Perm.READ))):
-        """SD-card backups, upload queue, cloud copies, restore drills and the copy policy (ADR-0010).
+        """SD-card backups, upload queue, cloud copies, restore drills and the copy policy (ADR-0012).
         Read from state files; nothing is contacted."""
         return offsite.view()
 

@@ -1,4 +1,4 @@
-"""Timestamp quarantine (owner request of 2026-10-12, ADR-0009).
+"""Timestamp quarantine (owner request of 2026-10-12, ADR-0011).
 
 When the wall clock ran ahead and was then corrected, the history holds records with future-dated
 UTC stamps, and the newest stored snapshot label blocks new snapshots (HISTORY_CLOCK_BEHIND) until the
@@ -10,7 +10,7 @@ quarantine those records:
   their storage sequence (cycle, sample, event and command ids), so charts, exports and the audit view
   flag them as having suspect timestamps. The schema is unchanged (no migration).
 * Each quarantine starts a new clock epoch. Wall-time snapshot ids carry the epoch
-  (`slot/60s/e<n>/<label>`, ADR-0009), and the duplicate check compares a new label only with the newest
+  (`slot/60s/e<n>/<label>`, ADR-0011), and the duplicate check compares a new label only with the newest
   label that is not quarantined. A correctly timed label equal to a quarantined one is a different
   snapshot; the same label twice in one epoch is still refused.
 * A quarantine never authorizes deletion. It puts rolling retention on hold (TIMESTAMPS_QUARANTINED),

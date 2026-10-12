@@ -1,4 +1,4 @@
-"""AT-OFF-01..10: SD-card daily backups and encrypted cloud copies (owner request of 2026-10-12, ADR-0010).
+"""AT-OFF-01..10: SD-card daily backups and encrypted cloud copies (owner request of 2026-10-12, ADR-0012).
 
 These tests use a fake volume probe (no physical SD card or USB reader) and a fake rclone remote (no
 OneDrive account); `test_real_rclone_crypt_round_trip` runs the real rclone binary against a local
@@ -375,6 +375,9 @@ def test_monthly_drill_from_cloud_copy_into_card_scratch(env):
     database untouched. Preflight refuses without 10 GiB plus headroom; a corrupted download fails."""
     env.off.backup()
     prod = hashlib.sha256(env.db.read_bytes()).hexdigest()
+    crashed = env.sd / "aquacrop" / "drill-scratch" / "drill-20260101T000000Z-1"   # power lost mid-drill
+    crashed.mkdir(parents=True)
+    (crashed / "verify.sqlite3").write_bytes(b"x" * 1000)
     rep = env.off.drill()
     assert rep["ok"], rep
     assert rep["checksum_ok"] and rep["scratch_removed"]
@@ -461,7 +464,8 @@ def test_rclone_wrapper_issues_only_copy_operations(tmp_path):
     assert ei.value.code == "NOT_ENCRYPTED"
 
 
-@pytest.mark.skipif(shutil.which("rclone") is None, reason="rclone not installed (runs in CI)")
+@pytest.mark.skipif(shutil.which("rclone") is None and not os.environ.get("AQUACROP_REQUIRE_RCLONE"),
+                    reason="rclone not installed (CI installs it on Linux and requires this test)")
 def test_real_rclone_crypt_round_trip(env, tmp_path):
     """The real rclone binary against a local crypt remote: copyto, cryptcheck, listing, download and
     the drill. Proves the commands and the encryption at rest; not the owner's OneDrive account."""

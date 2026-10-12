@@ -30,7 +30,7 @@ from .schema import connect, migrate, utc_iso
 # Newest wall-time snapshot below a primary-key bound. Wall-time labels only ever increase with
 # cycle_pk within the trusted history (the writer refuses any label that is not after the newest
 # trusted one), so this is a reverse rowid walk that stops at the first match; quarantined ranges
-# (ADR-0009) are jumped over, one index lookup each.
+# (ADR-0011) are jumped over, one index lookup each.
 NEWEST_WALL_CYCLE_SQL = NEWEST_WALL_BEFORE_SQL
 
 
@@ -156,7 +156,7 @@ class Historian:
         con = connect(self.db_path)
         self.applied_migrations = migrate(con, self.db_path, reserve_bytes=cfg.historian.free_space_reserve_bytes)
         self._con = con
-        self.quarantines = QuarantineRegister.load(con)   # timestamp quarantines in force (ADR-0009)
+        self.quarantines = QuarantineRegister.load(con)   # timestamp quarantines in force (ADR-0011)
         # Two read connections: user queries (trends, exports, audit) on one, the short reads the
         # acquisition loop and status page depend on (capacity, open alarms, newest label) on the other,
         # so a long export never delays a poll cycle's storage check.
@@ -439,7 +439,7 @@ class Historian:
     def event(self, kind: str, payload: dict, *, actor: str | None = None, sim_s: float | None = None) -> None:
         """Queue one event. Clock events (MARKER_KINDS) also record the storage watermark, the newest id of
         each history table when they are written, which places them exactly in the record sequence for a
-        later timestamp quarantine (ADR-0009)."""
+        later timestamp quarantine (ADR-0011)."""
         utc, run = utc_iso(), payload.get("run_id")
         if kind in MARKER_KINDS:
             def op(c):

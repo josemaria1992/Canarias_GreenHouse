@@ -217,7 +217,7 @@ class HistorianSettings(_Strict):
 
 class SdCardSettings(_Strict):
     """The SD card (in a USB reader) that holds the daily local backups and the restore-drill scratch
-    space (owner request of 2026-10-12, ADR-0010). Its identity is TBD until the owner confirms the
+    space (owner request of 2026-10-12, ADR-0012). Its identity is TBD until the owner confirms the
     actual card: the filesystem UUID (`blkid`) and the volume id written to the card at enrolment
     (`offsite enroll-card`). Nothing is written unless the mounted filesystem proves to be this card."""
     mount_path: str | None = None            # TBD, e.g. /media/aquacrop-sd (an fstab entry with nofail)
@@ -257,7 +257,7 @@ class RestoreDrillSettings(_Strict):
 
 
 class OffsiteBackupSettings(_Strict):
-    """SD-card daily backups plus encrypted OneDrive copies (ADR-0010). Disabled until the owner confirms
+    """SD-card daily backups plus encrypted OneDrive copies (ADR-0012). Disabled until the owner confirms
     the actual OneDrive account/folder and SD card; while disabled the earlier local eMMC backups
     (ADR-0008) continue unchanged."""
     enabled: bool = False

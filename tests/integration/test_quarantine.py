@@ -1,4 +1,4 @@
-"""AT-QUA-01..07: timestamp quarantine after a clock correction (owner request of 2026-10-12, ADR-0009).
+"""AT-QUA-01..07: timestamp quarantine after a clock correction (owner request of 2026-10-12, ADR-0011).
 
 Clock corrections, quarantine, restart and retention are exercised together through the simulation
 service (recorder, retention task and alarm engine on fake wall/monotonic clocks); every UTC stamp the

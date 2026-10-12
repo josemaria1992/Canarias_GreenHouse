@@ -162,8 +162,11 @@ files are mode 0600 (they contain password hashes).
 
 The backup timer runs `backup create --keep 7` at 02:30 daily with low CPU and I/O priority. The web
 UI's *Create backup now* starts one in the background and logs `BACKUP_CREATED` or `BACKUP_FAILED`.
-The off-device destination is **not configured (owner decision)**: local copies do not survive loss
-of the eMMC, and Settings says so.
+Off-device copies (SD card in a USB reader plus encrypted OneDrive copies through rclone) are
+implemented but **not activated** until the owner confirms the card and the account/folder:
+`offsite-backups.md` and ADR-0012. Until then local copies do not survive loss of the eMMC, and
+Settings says so. Once activated, the daily backup, *Create backup now* and the monthly drill use the
+verified card (never the eMMC) and the eMMC backup and drill timers are disabled.
 
 ### Restore drill
 
@@ -273,3 +276,15 @@ and configuration in `/etc/aquacrop` stay untouched by upgrades.
 All stored times are UTC; the UI shows `Europe/Stockholm` with CET/CEST. Timing uses the
 monotonic clock. Wall-clock steps larger than 2 s are recorded as `WALL_CLOCK_STEP`. See the CM4
 guide for the RTC.
+
+**Records stamped in the future (ADR-0011).** If the clock ran ahead and was then corrected, the
+future-dated snapshot labels would hold new snapshots until real time passes them
+(`HISTORY_CLOCK_BEHIND`). Settings, *Clock and timestamps*, then shows a proposal: which records
+(per table, with their stamped range) and why (the forward step or process start, and the backward
+correction). An administrator checks the date against an independent source, ticks the box and
+quarantines them. Nothing is deleted or rewritten: the records keep their stamps and are flagged
+`SUSPECT` in trends (dashed grey), exports (`timestamp_suspect`, `quarantine_id`), events, alarms
+and command history. Recording resumes at the next minute in a new clock epoch (snapshot ids
+`slot/60s/e<n>/...`). Retention stays held (`TIMESTAMPS_QUARANTINED`) until the separate
+date-and-cutoff confirmation; quarantined records are deleted only a full window after the
+quarantine itself.

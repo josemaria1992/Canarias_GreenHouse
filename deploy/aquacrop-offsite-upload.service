@@ -1,0 +1,24 @@
+# Retries queued cloud uploads that are due (exponential backoff, 5 min up to 1 h). After connectivity
+# returns the whole queue drains in one run. Recording never waits for this unit.
+[Unit]
+Description=AquaCrop queued cloud uploads
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aquacrop
+Group=aquacrop
+EnvironmentFile=/etc/aquacrop/aquacrop.env
+Environment=HOME=/var/lib/aquacrop XDG_CACHE_HOME=/var/lib/aquacrop/rclone/cache
+WorkingDirectory=/var/lib/aquacrop
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop offsite upload --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop
+SuccessExitStatus=2 75
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aquacrop -/media/aquacrop-sd

@@ -1,0 +1,28 @@
+# Monthly restore drill from the cloud: downloads the newest verified cloud copy (rclone decrypts it)
+# into a fresh directory on the verified SD card, checks it against the checksum recorded at upload
+# and runs the full restore check there (integrity, foreign keys, schema, row counts, fingerprints,
+# application smoke test). Preflight: at least 10 GiB plus headroom free on the card. Sessions and
+# bench leases in the restored copy are deleted; the production database is only read; the scratch
+# directory is removed afterwards. Replaces aquacrop-restore-drill.timer once activated.
+[Unit]
+Description=AquaCrop monthly restore drill from the cloud copy
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aquacrop
+Group=aquacrop
+EnvironmentFile=/etc/aquacrop/aquacrop.env
+Environment=HOME=/var/lib/aquacrop XDG_CACHE_HOME=/var/lib/aquacrop/rclone/cache
+WorkingDirectory=/var/lib/aquacrop
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop offsite drill --timer --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop
+SuccessExitStatus=2 75
+Nice=15
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aquacrop -/media/aquacrop-sd

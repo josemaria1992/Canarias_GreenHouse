@@ -176,7 +176,7 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     xc, xc_a = reg.exclude("cycles")
     xe, xe_a = reg.exclude("events")
     xm, xm_a = reg.exclude("commands")
-    # Quarantined records (ADR-0009) are not judged by their suspect stamps: they go only once the
+    # Quarantined records (ADR-0011) are not judged by their suspect stamps: they go only once the
     # quarantine itself (a trusted time after all of them were written) has left the window.
     expired_q = [q for q in reg.items if datetime.fromisoformat(q.confirmed_utc) < datetime.fromisoformat(cutoff)]
     if dry_run:
@@ -382,7 +382,7 @@ def _newest_record(hist, exclude_session: str | None) -> str | None:
     """Newest time written by any process (or by earlier ones): snapshots, events, commands and the
     process register, so a history with audit records but no snapshot is covered too."""
     sid = exclude_session or "<none>"
-    reg = hist.quarantines        # quarantined records (ADR-0009) do not count: their stamps are suspect
+    reg = hist.quarantines        # quarantined records (ADR-0011) do not count: their stamps are suspect
     xc, ac = reg.exclude("cycles")
     xe, ae = reg.exclude("events")
     xm, am = reg.exclude("commands")

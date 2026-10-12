@@ -207,7 +207,7 @@
     }
     return h("div", { class: "card" }, ...kids);
   }
-  // Records whose UTC stamps an administrator quarantined (ADR-0009): the stored time is shown unchanged, flagged.
+  // Records whose UTC stamps an administrator quarantined (ADR-0011): the stored time is shown unchanged, flagged.
   function susPill(r) {
     return r && r.timestamp_suspect ? [" ", h("span", { class: "pill warn", title: `stored time unchanged; quarantined by ${r.quarantine_id}` }, "SUSPECT TIME")] : null;
   }
@@ -247,7 +247,7 @@
     }
     return h("div", { class: "card wide" }, ...kids);
   }
-  // SD-card backups and encrypted cloud copies (ADR-0010). Everything shown comes from the controller's
+  // SD-card backups and encrypted cloud copies (ADR-0012). Everything shown comes from the controller's
   // state files; the page never contacts the cloud.
   function offsiteCard(o) {
     if (!o) return h("div", { class: "card" }, h("h2", null, "Off-device backups"), h("p", { class: "muted" }, "Off-device backup state unavailable."));

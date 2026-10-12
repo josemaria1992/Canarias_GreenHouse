@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly AquaCrop restore drill from the cloud copy
+
+[Timer]
+OnCalendar=*-*-07 04:00:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

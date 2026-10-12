@@ -1,0 +1,6 @@
+# /etc/fstab line for the backup SD card in its USB reader (ADR-0012). Replace the UUID with the value
+# `sudo blkid` shows for the owner-confirmed card. `nofail` lets the controller boot and record without
+# the card; `x-systemd.device-timeout` keeps boot from waiting long for a missing reader. The software
+# checks the mount, the UUID and the enrolment marker before every write and never falls back to the eMMC.
+# ext4 is recommended (journaled; survives power loss better than exFAT/FAT). Not yet tested on the CM4.
+UUID=REPLACE-WITH-CARD-UUID  /media/aquacrop-sd  ext4  nofail,noatime,nodev,nosuid,noexec,x-systemd.device-timeout=10s  0  2
