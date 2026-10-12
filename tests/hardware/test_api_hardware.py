@@ -120,3 +120,17 @@ def test_database_of_another_profile_is_refused(tmp_path, fake_bus, cfg48):
     app.state.hist.close()
     with pytest.raises(ValueError, match="belongs to profile"):
         create_app(cfg.model_copy(update={"historian": cfg48.historian}), state_dir=tmp_path)
+
+
+def test_plant_view_is_read_only_and_unbound_on_a_hardware_profile(hw):
+    """The installation diagram on a real profile: every logical signal UNBOUND until a physical mapping
+    is approved, no process summary, and the process/recipe/stock mutations stay simulation-only."""
+    app, c, bus, *_ = hw
+    h = login(c, "admin1")
+    p = c.get("/api/plant").json()
+    assert p["read_only"] is True and p["processes"] is None and "UNBOUND" in p["mapping"]
+    assert p["signals"] and {s["binding"] for s in p["signals"].values()} == {"UNBOUND"}
+    assert all(s["point"] is None for s in p["signals"].values())
+    for path in ("/api/processes/IRRIGATION/state", "/api/recipes/rollback", "/api/stocks/A/acknowledge"):
+        assert c.post(path, json={"target": "AUTO", "reason": "x"}, headers=h).status_code == 409
+    assert bus.write_frames() == []

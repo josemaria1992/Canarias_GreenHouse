@@ -4,8 +4,9 @@
 3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-12 (historian update ADR-0008;
 quarantine ADR-0011 and off-device backups ADR-0012), software 0.2.0.dev0. The 2026-10-11 run was at
 `0ce4842` (183 tests); the ADR-0008 run at `f0b18e2` (252 tests).
-**Results:** `python -m pytest`: 271 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
-`demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`. Installed-wheel check
+**Results:** `python -m pytest`: 348 passed on 3.11, 3.12 and 3.13 locally (pre-hardware release
+stages 1 to 3; 271 before them); `pip check` clean. `demo verify --seed 42`: 21/21 PASS for `demo-48`
+and `demo-24`, 42/42 for `installation-48`. Installed-wheel check
 (`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
 
 The acceptance IDs are this project's own (`docs/IMPLEMENTATION_PLAN.md`); the owner's
@@ -171,7 +172,8 @@ with DEMO dynamics and a synthetic chemistry fixture. None of it is physical ver
 names refer to `src/aquacrop/twin/installation_scenarios.py`; each runs as
 `tests/acceptance/test_installation_pc.py::test_scenario[<name>]` and in `demo verify --config
 installation-48` (42/42 PASS: 40 scenarios plus determinism and replay, 48-point I/O round trip,
-isolation and inventory checks). The UI, OP, BK and DL gates follow in later pull requests.
+isolation and inventory checks). The UI gates are in the next section; OP, BK and DL follow in a
+later pull request.
 
 | ID | Status | Evidence |
 |---|---|---|
@@ -196,6 +198,25 @@ isolation and inventory checks). The UI, OP, BK and DL gates follow in later pul
 | PC-11 sump high with the main tank full alarms and holds the transfer; pump and valve faults propagate as defined; safe responses logged | PASS | scenario `sump_high_main_full`; the fault scenarios under PC-12 |
 | PC-12 a fault stops and locks out; ack alone cannot reset; reset while the fault is active fails; a healthy reset does not restart; a deliberate restart succeeds under the same role rules locally and remotely | PASS | scenarios `vfd_trip_recovery`, `safety_chain_open`, `main_pump_no_flow`, `sector_valve_stuck_open`, `main_level_open_loop`, `stale_acquisition`, `module_timeout`, `main_source_empty`, `main_low_low`; `test_pc12_ack_reset_restart_are_distinct`, `test_pc12_storage_fault_inhibits_new_starts`, `test_pc12_stop_all_brings_every_output_off`; roles: `integration/test_api_installation.py` (one API for local and remote) |
 | PC-13 bounded MANUAL fills, transfers and doses honour quantity, time, capacity and arbitration; a stale required sensor disables the operation with an actionable reason | PASS | scenarios `manual_bounds_rejected`, `raw_command_refused`, `stale_acquisition` |
+
+## Pre-hardware release: process pages and installation diagram (UI)
+
+Browser evidence comes from `scripts/ui_check/run_ui_check.py`: it serves `installation-48`
+(SIMULATED) on 127.0.0.1 with a throwaway state directory and administrator, drives headless Chromium
+through Playwright, restarts the server and checks what survived, then serves the HARDWARE_READ_ONLY
+profile over the in-memory fake bus (`tests/fakes`) for the read-only pages. Every screen step is
+paired with an API assertion on the controller state. It runs in CI (job `ui`, screenshots and
+`checks.json` kept as the `ui-evidence` artifact); the local run of 2026-10-12 passed UICOUNT checks with
+Playwright 1.56.1 and Chromium. **Simulation and a fake bus only; none of this is physical verification.**
+
+| ID | Status | Evidence |
+|---|---|---|
+| UI-01 overview plus nutrients/acid, main tank, main pumps, sector 1, sector 2 and drainage pages; shared alarm, trend, I/O, settings and backup functions | PASS | `ui_check` "UI-01 nav" and "UI-01 page *" (13 pages with content, no page errors, no stale banner); "UI-01 process page *" (each page has the diagram with its own parts highlighted, its controls or a link to them, its alarms and a last-hour trend); "UI-01 nutrients tabs" (stock A, stock B and acid tabs with the active recipe's pH target, EC target and A:B ratio); "UI-01 actionable alarm on the process page" (the irrigation lockout listed on Main pumps with Ack and the next step); `integration/test_api.py::test_static_ui_is_packaged_and_offline` (plant.js packaged, no external URL, no innerHTML, no style attributes under the CSP) |
+| UI-02 click-through diagram matching the confirmed topology; state, flow, volume, pH, EC and pressure with units, quality and age; requested versus observed; no misleading installed-probe or mixer labels | PASS | `ui_check` "UI-02 *" (25 clickable parts with labels, mouse and keyboard navigation, units, quality and age on the diagram, probe "proposed; not installed or verified", "No agitator or air pump"); `integration/test_api_installation.py::test_plant_view_binds_every_signal_with_units_quality_and_age` (48 points, 13 UNBOUND, 1 drive adapter, owner layout); hardware profile: `hardware/test_api_hardware.py::test_plant_view_is_read_only_and_unbound_on_a_hardware_profile` and `ui_check` "HW *" (the same pages read-only over the fake bus: reason shown instead of controls, unmapped values "not measured", observations labelled REAL, no Recipes page, and "DL-03 no write from the browser on the read-only profile": 0 write frames on the fake bus) |
+| UI-03 owner walkthrough: edit a recipe, run concurrent processes, inject a fault, recover deliberately, export data, restart | PASS (simulation) | `ui_check` "UI-03 *": sector 1 300 to 240 s saved, validated and activated as `demo-sim@v2`; irrigation, return, refill and acid in AUTO together with the three stocks acknowledged; drive TRIP locks irrigation out while the other three stay AUTO; reset refused (409) before acknowledgement, then acknowledge, reset (stays STOPPED) and AUTO on request; CSV downloaded with rows and its completeness footer; after a server restart every process is STOPPED, `demo-sim@v2` is still active and the stocks are still PREPARED. Screenshots `walk-1` to `walk-6` |
+| UI-04 viewer/operator/admin table enforced at the API including forged and direct requests; individual login, expiry/revocation, password change, CSRF/origin and rate-limit regressions | PASS | `integration/test_api_installation.py::test_role_table_is_enforced_on_every_process_and_recipe_mutation` (12 mutations x 3 roles, plus missing CSRF, wrong origin, forged token and no session); `ui_check` "UI-04 viewer" (new account must change its password, controls disabled, forged browser request 403); existing regressions `test_every_mutation_requires_session_origin_and_csrf`, `test_roles_enforced_server_side`, `test_login_failures_and_rate_limit`, `test_idle_expiry`, `test_password_change_revokes_sessions_and_logout` in `integration/test_api.py` |
+| UI-05 offline packaged assets; PC, tablet and phone viewports; no colour-only alarm semantics; a broken and reconnected network shows stale data and does not replay commands | PASS | `ui_check` "UI-05 viewport phone 390px / tablet 820px / pc 1366px" (eight pages each, no horizontal overflow), "UI-05 text on every status mark", "UI-05 offline" (stale banner while offline; a STOP clicked offline is not sent and not replayed after reconnecting); `test_static_ui_is_packaged_and_offline` |
+| UI-06 OpenVPN/TLS deployment guide and route test; real home-to-greenhouse check | NOT RUN | Guide and route test follow in the stage 4 pull request; the real check stays NOT RUN until the endpoint exists. Local operation needs no internet (all assets packaged) |
 
 ## Milestone 5: hardware arrival
 

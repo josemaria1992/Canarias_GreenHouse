@@ -98,3 +98,95 @@ def test_recipe_roles_validation_and_persistence(tmp_path, icfg):
         assert pr["stocks"]["B"]["status"] == "PREPARED" and pr["stocks"]["A"]["status"] == "NOT_PREPARED"
         assert all(v["state"] == "STOPPED" for v in pr["processes"].values())
         assert pr["active_recipe_body"]["acid"]["ph_target"] == 6.1
+
+
+def test_plant_view_binds_every_signal_with_units_quality_and_age(tmp_path, icfg):
+    """UI-02 data: the installation page draws from one view; each logical signal is bound to a point,
+    the drive adapter or nothing (UNBOUND), and carries unit, quality and age. Requested (command
+    readback) and observed (feedback) are separate signals; no installed-probe or mixer claim."""
+    with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
+        login(c, "view1")
+        p = c.get("/api/plant").json()
+        sig = p["signals"]
+        by = {}
+        for name, s in sig.items():
+            by.setdefault(s["binding"], []).append(name)
+        assert len(by["POINT"]) == 48 and by["DRIVE_ADAPTER"] == ["drive.MAIN.run"]
+        assert sorted(by["UNBOUND"]) == sorted(
+            ["main.temperature", "tank.A.low", "tank.B.low", "tank.ACID.low", "valve.S1.closed_limit",
+             "valve.S2.closed_limit"] + [f"valve.{v}.open_limit" for v in
+                                         ("FILL_MAIN", "FILL_A", "FILL_B", "FILL_ACID", "OUT_A", "OUT_B", "OUT_ACID")])
+        assert len({s["point"] for s in sig.values() if s["point"]}) == 48       # no point bound twice
+        for name in by["POINT"]:
+            s = sig[name]["sample"]
+            assert s is not None and s["quality"] and s["age_s"] >= 0 and sig[name]["label"], name
+        assert sig["tank.MAIN.level"]["sample"]["unit"] == "L" and sig["main.ph"]["sample"]["unit"] == "pH"
+        assert sig["pressure.S1"]["sample"]["unit"] == "bar" and sig["flow.S2"]["sample"]["unit"] == "L/min"
+        # requested vs observed: the contactor command and its auxiliary contact are different points
+        assert sig["contactor.MP1.cmd"]["kind"] == "actuator" and sig["contactor.MP1.closed"]["kind"] == "digital"
+        assert sig["contactor.MP1.cmd"]["point"] != sig["contactor.MP1.closed"]["point"]
+        assert sig["drive.MAIN.run"]["adapter"]["kind"] and "requested" in sig["drive.MAIN.run"]["adapter"]
+        lay = p["layout"]
+        assert lay["tanks_L"] == {"MAIN": 20000.0, "SUMP": 5000.0, "A": 5000.0, "B": 5000.0, "ACID": 5000.0}
+        assert [len(s["channels"]) for s in lay["sectors"]] == [6, 7] and lay["agitators"] == 0
+        assert lay["outlets_per_channel"] * 13 == 52 and lay["shared_drive"] == "MAIN"
+        assert lay["channel"]["retained_L"] == pytest.approx(85 * 0.30 * 0.05 * 1000)
+        assert p["read_only"] is False and "not wiring" in p["mapping"]
+        assert set(p["processes"]["processes"]) == {"IRRIGATION", "RETURN", "REFILL", "ACID", "STOCK_FILL_A",
+                                                    "STOCK_FILL_B", "STOCK_FILL_ACID"}
+        assert "truth" not in str(p).lower()                                     # twin truth stays out of the view
+
+
+def test_plant_view_needs_the_installation_topology(tmp_path, cfg48):
+    with TestClient(_app(tmp_path, cfg48), base_url=ORIGIN) as c:
+        login(c, "view1")
+        assert c.get("/api/plant").status_code == 409
+
+
+def test_recipe_form_offers_choices_for_enumerated_fields(tmp_path, icfg):
+    with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
+        login(c, "view1")
+        form = c.get("/api/recipes").json()["form"]
+        opts = {r["path"]: r["options"] for r in form if r["options"]}
+        assert set(opts) == {"refill.endpoint_mode", "refill.nutrient_mode", "return.duty_policy"}, opts
+        assert all(len(v) >= 2 for v in opts.values())
+
+
+# (path, body, lowest role allowed). Forged and direct requests: the gate checks the session, origin
+# and CSRF token before the body; the role check follows. UI-04.
+MUTATIONS = [
+    ("/api/processes/stop-all", {"reason": "t"}, Role.OPERATOR),
+    ("/api/processes/ACID/state", {"target": "STOPPED"}, Role.OPERATOR),
+    ("/api/processes/ACID/manual", {"op": {"volume_L": 1}}, Role.OPERATOR),
+    ("/api/processes/ACID/reset", None, Role.OPERATOR),
+    ("/api/stocks/A/acknowledge", {"note": "x"}, Role.OPERATOR),
+    ("/api/stocks/A/invalidate", {"reason": "x"}, Role.OPERATOR),
+    ("/api/twin/stock/A/prepare", None, Role.OPERATOR),
+    ("/api/twin/outlet", {"channel": 1, "outlet": 1, "opening": 0.5}, Role.OPERATOR),
+    ("/api/recipes/draft", {"recipe_id": "t", "name": "t", "body": demo_preset(["S1", "S2"]).body_json()},
+     Role.OPERATOR),
+    ("/api/recipes/demo-sim/1/validate", None, Role.OPERATOR),
+    ("/api/recipes/demo-sim/1/activate", {"reason": "x"}, Role.ADMIN),
+    ("/api/recipes/rollback", {"reason": "x"}, Role.ADMIN),
+]
+RANK = {Role.VIEWER: 0, Role.OPERATOR: 1, Role.ADMIN: 2}
+
+
+def test_role_table_is_enforced_on_every_process_and_recipe_mutation(tmp_path, icfg):
+    with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
+        for user, role in (("view1", Role.VIEWER), ("oper1", Role.OPERATOR), ("admin1", Role.ADMIN)):
+            c.cookies.clear()
+            h = login(c, user)
+            for path, body, least in MUTATIONS:
+                r = c.post(path, json=body, headers=h)
+                if RANK[role] < RANK[least]:
+                    assert r.status_code == 403, (user, path, r.status_code)
+                else:
+                    assert r.status_code not in (401, 403), (user, path, r.status_code, r.text)
+            for path, body, _ in MUTATIONS:                                       # forged / direct requests
+                assert c.post(path, json=body, headers={"Origin": ORIGIN}).status_code == 403, path
+                assert c.post(path, json=body, headers=h | {"Origin": "http://evil.example"}).status_code == 403
+                assert c.post(path, json=body, headers=h | {"X-CSRF-Token": "forged"}).status_code == 403
+        c.cookies.clear()
+        for path, body, _ in MUTATIONS:
+            assert c.post(path, json=body, headers={"Origin": ORIGIN}).status_code == 401, path

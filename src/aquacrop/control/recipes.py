@@ -173,6 +173,7 @@ class FieldRule:
     gt: float | None = None           # exclusive minimum (for "positive")
     required: str = "always"          # always | <mode condition> | optional
     help: str = ""
+    options: tuple[str, ...] = ()     # enumerated (text) fields
 
 
 def _rules(cap: dict[str, float]) -> list[FieldRule]:
@@ -187,14 +188,16 @@ def _rules(cap: dict[str, float]) -> list[FieldRule]:
         R("main.high_inhibit_L", "High-level inflow inhibit", "L", lo=0, hi=M),
         R("main.min_dosing_L", "Minimum volume for dosing", "L", lo=0, hi=M),
         R("refill.trigger_debounce_s", "Trigger debounce", "s", lo=0, hi=3600),
-        R("refill.endpoint_mode", "Refill endpoint", "", help="FIXED_ADDITIONS or FINAL_LEVEL"),
+        R("refill.endpoint_mode", "Refill endpoint", "", help="FIXED_ADDITIONS or FINAL_LEVEL",
+          options=("FIXED_ADDITIONS", "FINAL_LEVEL")),
         R("refill.final_level_L", "Final operating level", "L", lo=0, hi=M, required="refill.endpoint_mode=FINAL_LEVEL"),
         R("refill.water.target_L", "Mains water addition", "L", gt=0, hi=M,
           required="refill.endpoint_mode=FIXED_ADDITIONS"),
         R("refill.water.max_time_s", "Mains water maximum time", "s", gt=0, hi=86400),
         R("refill.water.min_flow_L_min", "Mains water minimum flow", "L/min", gt=0, hi=10000),
         R("refill.water.flow_grace_s", "Mains water flow grace", "s", lo=0, hi=600),
-        R("refill.nutrient_mode", "Nutrient mode", "", help="FIXED_VOLUMES or EC_TARGET"),
+        R("refill.nutrient_mode", "Nutrient mode", "", help="FIXED_VOLUMES or EC_TARGET",
+          options=("FIXED_VOLUMES", "EC_TARGET")),
         R("refill.fixed.a_L", "Stock A addition", "L", lo=0, hi=st, required="refill.nutrient_mode=FIXED_VOLUMES"),
         R("refill.fixed.b_L", "Stock B addition", "L", lo=0, hi=st, required="refill.nutrient_mode=FIXED_VOLUMES"),
         R("refill.fixed.ec_min_mS_cm", "EC validation minimum", "mS/cm", gt=0, hi=20,
@@ -242,7 +245,8 @@ def _rules(cap: dict[str, float]) -> list[FieldRule]:
         R("return.sump_stop_L", "Return stop (sump)", "L", lo=0, hi=S),
         R("return.main_inhibit_L", "Return destination-full inhibit (main)", "L", lo=0, hi=M),
         R("return.main_resume_L", "Return resume below (main)", "L", lo=0, hi=M),
-        R("return.duty_policy", "Return pump duty policy", "", help="FIXED_RP1, FIXED_RP2 or ALTERNATE_EACH_START"),
+        R("return.duty_policy", "Return pump duty policy", "", help="FIXED_RP1, FIXED_RP2 or ALTERNATE_EACH_START",
+          options=("FIXED_RP1", "FIXED_RP2", "ALTERNATE_EACH_START")),
         R("return.max_runtime_s", "Return maximum run time", "s", gt=0, hi=86400),
         R("return.min_flow_L_min", "Return minimum flow", "L/min", gt=0, hi=10000),
         R("return.flow_grace_s", "Return flow grace", "s", lo=0, hi=600),
@@ -383,7 +387,8 @@ def _nutrient_max(rf: Refill) -> float | None:
 
 def form_schema(capacities: dict[str, float]) -> list[dict]:
     return [{"path": r.path, "label": r.label, "unit": r.unit, "min": r.lo if r.lo is not None else r.gt,
-             "min_exclusive": r.gt is not None, "max": r.hi, "required": r.required, "help": r.help}
+             "min_exclusive": r.gt is not None, "max": r.hi, "required": r.required, "help": r.help,
+             "options": list(r.options)}
             for r in _rules(capacities)]
 
 

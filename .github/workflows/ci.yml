@@ -84,3 +84,32 @@ jobs:
         with:
           name: wheel
           path: dist/*.whl
+
+  ui:
+    # Installation pages in headless Chromium (UI-01 to UI-05): every page, the clickable diagram, the
+    # owner walkthrough with a restart, viewer refusals, offline/reconnect and three viewports. Simulation.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install locked dependencies and Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pip install --no-deps -e .
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Browser checks
+        run: python scripts/ui_check/run_ui_check.py --out ui-evidence
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-evidence
+          path: ui-evidence

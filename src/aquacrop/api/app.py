@@ -566,6 +566,58 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"freshness": _freshness(), "source": rt().backend.source.value if is_sim else "REAL",
                 "devices": groups}
 
+    @app.get("/api/plant")
+    async def plant_view(p: Principal = Depends(require(Perm.READ))):
+        """The installation as the controllers see it: every logical signal of the confirmed layout with
+        its binding (point, drive adapter or UNBOUND) and the acquired sample (value, unit, quality, age,
+        origin). Requested states are the command points' readback; observed states are the feedbacks.
+        On a hardware profile the view is read-only and every signal stays UNBOUND until a physical
+        mapping is approved (ADR-0009, ADR-0013). Twin truth is not part of this view."""
+        from ..twin.installation_params import TANKS, InstallationFacts
+        if is_sim and cfg.topology != "installation":
+            raise HTTPException(409, "the installation view needs the installation topology (this is the demo)")
+        facts = cfg.twin.facts if is_sim else InstallationFacts()
+        cat = facts.signal_catalogue(extra_flows=cfg.twin.dynamics.flow_span_L_min if is_sim else ())
+        samples, now = _samples(), datetime.now(timezone.utc)
+        r = rt() if is_sim else None
+        signals = {}
+        for kind, names in cat.items():
+            for name in sorted(names):
+                pt = cfg.point_for_signal(name) if is_sim else None
+                ad = cfg.adapter_for_signal(name)
+                e = {"kind": kind, "point": pt, "binding": "POINT" if pt else "DRIVE_ADAPTER" if ad else "UNBOUND"}
+                if pt:
+                    pid = PointId.parse(pt)
+                    s = samples.get(pt)
+                    e |= {"label": cfg.device(pid.device_uid).label_for(pid),
+                          "sample": None if s is None else _sample(s) | {"age_s": (now - s.acquired_utc).total_seconds()}}
+                elif ad:
+                    e |= {"adapter": {"adapter_id": ad.adapter_id, "kind": ad.kind,
+                                      "requested": r.adapter_state.get(name) if r is not None else None}}
+                signals[name] = e
+        procs = None
+        if r is not None:
+            a = r.recipes.active()
+            procs = {"aggregate_state": r._controller_state().value, "recipe": a.ref if a else None,
+                     "processes": {x.pid: {"title": x.title, "state": x.state.value, "phase": x.phase,
+                                           "fault_reason": x.fault_reason, "inhibit": x.inhibit, "next": x.next_step,
+                                           "outputs_on": sorted(x.on)} for x in r.sup.processes},
+                     "arbiter": dict(sorted(r.sup.arbiter.owner.items())),
+                     "stocks": {k: v.view() for k, v in r.sup.stocks.items()}}
+        return {"profile": cfg.profile.value, "read_only": not is_sim, "freshness": _freshness(),
+                "layout": {"provenance": "OWNER_CONFIRMED (approximate where stated, 2026-10-12)",
+                           "tanks_L": {t: facts.tank_capacity(t) for t in TANKS},
+                           "sectors": [s.model_dump() for s in facts.sectors],
+                           "main_pumps": facts.main_pumps, "return_pumps": facts.return_pumps,
+                           "shared_drive": facts.shared_drive, "outlets_per_channel": facts.outlets_per_channel,
+                           "channel": facts.channel.model_dump() | {"retained_L": facts.channel.retained_L,
+                                                                     "capacity_L": facts.channel.capacity_L},
+                           "agitators": facts.agitators},
+                "mapping": ("SIMULATED proposal (configs/installation-48.yaml); not wiring" if is_sim else
+                            "physical mapping empty: no approved wiring, every signal UNBOUND"),
+                "signals": signals, "processes": procs,
+                "alarms": [o.to_dict() for o in list(_alarm_engine().open.values())]}
+
     @app.get("/api/twin")
     async def twin(p: Principal = Depends(require(Perm.READ))):
         r = rt()

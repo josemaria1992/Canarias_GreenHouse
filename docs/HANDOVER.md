@@ -44,6 +44,15 @@
   cover normal operation and faults (ADR-0013, ADR-0014, `model/installation_model.md`,
   `model/signal_budget.md`, `model/cause_and_effect.md`). There is no physical AUTO.
 
+- **Process pages and installation diagram (2026-10-12, pre-hardware stage 3)**: the Overview of
+  `installation-48` is a clickable diagram of the installation showing what the controllers read
+  (value, unit, quality, age), with requested and observed state drawn apart. Nutrients & acid, Main
+  tank, Main pumps, Sector 1, Sector 2, Drainage and Recipes pages run each process (AUTO, MANUAL,
+  STOP, lockout reset, bounded manual forms, stock acknowledgements, page alarms, a last-hour trend)
+  and edit, validate, activate and roll back recipe versions. On a hardware profile the same pages
+  are read-only observation and every signal is UNBOUND until a mapping is approved.
+  `scripts/ui_check/run_ui_check.py` repeats the owner walkthrough in headless Chromium.
+
 ## What changed from v0.1
 
 All 12 findings in the brief were reproduced on the original code and are corrected (table in
@@ -52,8 +61,8 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-271 tests pass on Python 3.11, 3.12 and 3.13 (one of them runs the real rclone binary against a
-local encrypted remote; it is skipped where rclone is not installed and required on CI's Linux jobs). `demo verify` gives 21/21 on both fixtures, and
+348 tests pass on Python 3.11, 3.12 and 3.13 (one of them runs the real rclone binary against a
+local encrypted remote; it is skipped where rclone is not installed and required on CI's Linux jobs). `demo verify` gives 21/21 on both demo fixtures and 42/42 on `installation-48`; the browser checks (`scripts/ui_check/`) pass in headless Chromium; and
 the installed wheel passes 13/13 from outside the repository. A simulated 400-day history at 60 s
 with commands, alarms and device faults measured the one-year size, the rolling window, the WAL,
 the compressed backup and the restore drill; a concurrency stress run measured the WAL and

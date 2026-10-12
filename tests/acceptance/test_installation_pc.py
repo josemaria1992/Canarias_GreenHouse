@@ -178,6 +178,7 @@ def test_pc12_ack_reset_restart_are_distinct(icfg):
     rt.run_for(15)
     irr = rt.sup.by_id["IRRIGATION"]
     assert irr.state == CS.FAULT_LOCKOUT
+    assert irr.next_step == "" and irr.inhibit is None              # no stale "next" plan on the page
     rt.set_actuator_fault("op", "drive", "MAIN", None)
     rt.set_actuator_fault("op", "valve", "S1", None)
     rt.run_for(10)

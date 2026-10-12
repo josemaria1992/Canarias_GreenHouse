@@ -80,3 +80,28 @@ svg text { fill: var(--ink); font-size: 12px; }
 .legend span { margin-right: 12px; font-size: 12px; }
 .disabled-by-stale button.cmd { pointer-events: none; opacity: .4; }
 details summary { cursor: pointer; color: var(--muted); }
+/* installation diagram and process pages */
+.diagram { max-height: 720px; }
+/* on a phone the diagram keeps a readable size and scrolls sideways inside its card, not the page */
+.diagram-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (max-width: 760px) { .diagram-wrap .diagram { min-width: 720px; } }
+.diagram.compact { max-height: 420px; }
+.diagram .dim { opacity: .4; }
+.diagram .focus .hl { stroke: var(--accent); stroke-width: 3; }
+.chart.chart-small { height: 200px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.tabs .tab { background: transparent; color: var(--ink); border: 1px solid var(--line); border-bottom: none; border-radius: 6px 6px 0 0; }
+.tabs .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.diagram .hot { cursor: pointer; outline: none; }
+.diagram .hot:hover .hl, .diagram .hot:focus .hl { stroke: var(--accent); stroke-width: 3; }
+.diagram .hot:focus-visible .hl { stroke-dasharray: none; stroke-width: 4; }
+.diagram .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.diagram .unknown { fill: var(--bg); stroke: var(--muted); stroke-dasharray: 2 4; }
+.diagram .equip-unk { fill: var(--bg); stroke: var(--muted); stroke-dasharray: 2 3; }
+.diagram .unbound { stroke: var(--muted); stroke-dasharray: 1 4; }
+.diagram text.th { font-weight: 700; font-size: 13px; }
+.diagram text.small { font-size: 11px; }
+.diagram text.val { font-size: 11px; }
+.diagram text.muted-t { fill: var(--muted); }
+.w-num { width: 110px; }
+#nav-inst a { display: inline-block; }
