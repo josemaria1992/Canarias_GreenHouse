@@ -319,6 +319,19 @@ def storage_pressure(hist) -> tuple[str | None, str]:
 STORAGE_RULES = ("HISTORY_SNAPSHOTS_PAUSED", "STORAGE_PRESSURE", "STORAGE_CAPACITY")
 
 
+def evaluate_recorder_alarm(recorder, alarms, sim_s: float | None = None) -> None:
+    """HISTORY_CLOCK_BEHIND (WARNING) while the wall clock is behind the newest stored snapshot label."""
+    b = recorder.behind
+    if b is None:
+        alarms.clear("HISTORY_CLOCK_BEHIND", "historian")
+        return
+    alarms.raise_or_update("HISTORY_CLOCK_BEHIND", "historian", severity="WARNING", sim_s=sim_s,
+                           message=f"system clock is {b['behind_s']:.0f} s behind the newest stored snapshot "
+                                   f"({b['newest_label_utc']}): periodic snapshots are held until the clock passes "
+                                   "it (no label is written twice); events, commands and alarms are still recorded. "
+                                   "Check the date and time.")
+
+
 def evaluate_storage_alarm(hist, alarms, sim_s: float | None = None) -> None:
     """Raise/clear the capacity alarms and STORAGE_WRITE_FAILED on the given AlarmEngine."""
     active = {rule: (sev, msg) for rule, sev, msg in storage_alarms(hist)}

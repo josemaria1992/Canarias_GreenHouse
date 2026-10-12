@@ -427,9 +427,12 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "twin": {"activity": svc.clock.activity.value, "speed": svc.clock.speed, "run_id": r.run_id,
                          "sim_s": r.sim_s, "tick": r.tick, "source": r.backend.source.value, "scenario": svc.scenario,
                          "seed": r.seed, "acquisition_stalled": r.acquisition_stalled, "overruns": svc.clock.overruns,
-                         "history_stride_sim_s": r.history_stride_s,
-                         "history_cadence_note": "complete snapshot every history_stride_sim_s of simulated time; "
-                                                 "real installations record on wall-clock boundaries"},
+                         "recording_interval_s": cfg.historian.recording_interval_s, "recording_basis": "WALL",
+                         "sim_time_recording_s": r.sim_time_recording_s,
+                         "history_cadence_note": "complete snapshot every recording_interval_s of wall time, at any "
+                                                 "speed or while paused (run id and simulated time stored with each); "
+                                                 "sim_time_recording_s is the optional simulation-time series "
+                                                 "(null = off)"},
                 "devices": devs, "storage": hist.storage() | {"ok": ok_store, "reason": why},
                 "historian": {k: v for k, v in hist.health.items()}, "acquisition_task": svc.task_health(),
                 "alarms": {"active": sum(o.active for o in alarms), "unacknowledged": sum(not o.acknowledged for o in alarms),
@@ -678,7 +681,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     # ------------------------------------------------------------------ trends / export / analytics
     @app.get("/api/trends")
     def trends(p: Principal = Depends(require(Perm.READ)), points: str = Query(..., max_length=2000),
-               start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000)):
+               start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000),
+               basis: str | None = Query(None, pattern="^(WALL|SIMULATION_TIME|LEGACY_UNKNOWN)$")):
+        # `basis` selects one series when the optional simulation-time recorder is also on.
         s, e = _range(start, end)
         ids = [x for x in points.split(",") if x][:16]
         series, truncated = {}, False
@@ -686,13 +691,16 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             rows = hist.query("SELECT s.acquired_utc, s.value, s.raw_value, s.quality, s.origin, s.unit, s.sim_s, "
                               "s.sim_run_id, c.cadence_s, c.cadence_basis FROM samples s JOIN cycles c ON "
                               "c.cycle_pk=s.cycle_pk WHERE s.point_id=? AND s.acquired_utc>=? AND s.acquired_utc<=? "
-                              "ORDER BY s.acquired_utc LIMIT ?", (pid, s, e, limit + 1))
+                              "AND (? IS NULL OR c.cadence_basis=?) ORDER BY s.acquired_utc LIMIT ?",
+                              (pid, s, e, basis, basis, limit + 1))
             truncated |= len(rows) > limit
             out, prev = [], None
             for r in rows[:limit]:
                 gap = False
                 if prev is not None:
                     if r["sim_run_id"] != prev["sim_run_id"] or r["origin"] != prev["origin"]:
+                        gap = True
+                    elif r["cadence_basis"] != prev["cadence_basis"]:
                         gap = True
                     elif r["cadence_basis"] == "SIMULATION_TIME" and r["sim_s"] is not None and prev["sim_s"] is not None:
                         gap = (r["sim_s"] - prev["sim_s"]) > 1.5 * max(r["cadence_s"] or 0, prev["cadence_s"] or 0)

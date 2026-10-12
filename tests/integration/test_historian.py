@@ -7,6 +7,7 @@ from aquacrop.domain.model import ControllerState, Outcome
 from aquacrop.historian.schema import CURRENT_VERSION, connect, migrate, schema_version
 from aquacrop.historian.writer import Historian
 from aquacrop.twin.runtime import SimulationRuntime
+from tests.helpers import with_sim_time_recording
 
 
 @pytest.fixture
@@ -23,8 +24,9 @@ def make_rt(cfg, h):
 
 
 def test_every_cycle_records_all_points_including_unchanged(hist, cfg48):
+    cfg48 = hist.cfg = with_sim_time_recording(cfg48)
     rt = make_rt(cfg48, hist)
-    rt.run_for(300)  # 60 s snapshots (simulated time) => 5 cycles
+    rt.run_for(300)  # optional simulation-time recorder at 60 s => 5 cycles
     hist.wait_idle()
     rows = hist.query("SELECT cycle_pk, count(*) n FROM samples GROUP BY cycle_pk")
     assert len(rows) == 5 and all(r["n"] == 48 for r in rows)

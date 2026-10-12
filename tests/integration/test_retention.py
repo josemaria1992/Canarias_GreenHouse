@@ -15,6 +15,7 @@ from aquacrop.historian.retention import (RetentionTask, apply_retention, create
 from aquacrop.historian.schema import MIGRATIONS, connect, migrate, schema_version
 from aquacrop.historian.writer import Historian
 from aquacrop.twin.runtime import SimulationRuntime
+from tests.helpers import with_sim_time_recording
 
 # A "now" 200 days ahead keeps rows the historian writes in real time (events) inside the window.
 NOW = (datetime.now(timezone.utc) + timedelta(days=200)).replace(microsecond=0)
@@ -219,8 +220,13 @@ def test_capacity_levels_low_disk_reserve_and_snapshot_floor(h, cfg24):
     assert h.can_accept_starts() == (False, "free disk below reserve")
     # full-disk handling: below the floor periodic snapshots pause; events are still written
     _with(h, cfg24, free_space_warning_bytes=big, free_space_reserve_bytes=big, snapshot_floor_bytes=big)
-    rt = SimulationRuntime(h.cfg, audit=h, history=h, session_id="s_ret", start_permitted=h.can_accept_starts)
-    rt.run_for(120)
+    rt = SimulationRuntime(h.cfg, session_id="s_ret")
+    t0 = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+
+    def snap(i):
+        at = t0 + timedelta(minutes=i)
+        return h.snapshot(at, rt.wall_snapshot(at, 0.0), 60, run_id=rt.run_id, sim_s=rt.sim_s)
+    assert not snap(1) and not snap(2)
     h.wait_idle()
     assert counts(h)["cycles"] == 0 and h.health["paused_snapshots"] == 2
     evaluate_storage_alarm(h, al)
@@ -230,11 +236,13 @@ def test_capacity_levels_low_disk_reserve_and_snapshot_floor(h, cfg24):
     h.wait_idle()
     assert h.query("SELECT count(*) FROM events WHERE kind='STILL_WRITTEN'")[0][0] == 1
     _with(h, cfg24)                                             # space freed
-    rt.run_for(60)
+    assert snap(3)
     h.wait_idle()
     assert counts(h)["cycles"] == 1
     ev = json.loads(h.query("SELECT payload_json FROM events WHERE kind='HISTORY_SNAPSHOTS_RESUMED'")[0][0])
-    assert ev["snapshots_not_written"] == 2
+    assert ev["snapshots_not_written"] == 2               # the gap is reported with its labels, not back-filled
+    assert (ev["first_label_not_written_utc"], ev["last_label_not_written_utc"]) == (
+        (t0 + timedelta(minutes=1)).isoformat(), (t0 + timedelta(minutes=2)).isoformat())
     evaluate_storage_alarm(h, al)
     assert not any(k[0] in ("HISTORY_SNAPSHOTS_PAUSED", "STORAGE_PRESSURE", "STORAGE_CAPACITY") and o.active
                    for k, o in al.open.items())
@@ -262,6 +270,7 @@ def test_projection_of_the_365_day_size_is_reported(h):
 
 # ---------------------------------------------------------------------------------------- archives / migration
 def test_archive_verify_and_tamper_detection(tmp_path, cfg24):
+    cfg24 = with_sim_time_recording(cfg24)
     h = Historian(tmp_path / "a.sqlite3", cfg24, "s_arc")
     rt = SimulationRuntime(cfg24, audit=h, history=h, session_id="s_arc", start_permitted=h.can_accept_starts)
     rt.run_for(180)

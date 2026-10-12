@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import Future
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,7 +22,21 @@ from .. import __version__
 from ..config.schema import InstallationConfig
 from ..control.alarms import AlarmOccurrence
 from ..domain.model import CommandRecord, Sample
+from .recording import slot_cycle_id, slot_epoch
 from .schema import connect, migrate, utc_iso
+
+# Newest wall-time snapshot. Wall-time labels only ever increase with cycle_pk (the writer refuses any
+# label that is not after this one), so this is a reverse rowid scan that stops at the first match.
+NEWEST_WALL_CYCLE_SQL = ("SELECT cycle_id, persisted_utc FROM cycles WHERE cadence_basis='WALL' "
+                         "ORDER BY cycle_pk DESC LIMIT 1")
+
+
+def newest_wall_label(c: sqlite3.Connection) -> float | None:
+    row = c.execute(NEWEST_WALL_CYCLE_SQL).fetchone()
+    if row is None:
+        return None
+    t = slot_epoch(row[0])
+    return t if t is not None else datetime.fromisoformat(row[1]).timestamp()
 
 
 def _num(v: Any) -> float | None:
@@ -121,8 +135,9 @@ class Historian:
         self.fail_writes = False   # test hook: simulate disk/database failure
         self.health: dict[str, Any] = {"ok": True, "last_commit_utc": None, "last_error": None,
                                        "dropped_cycles": 0, "commits": 0, "degraded_reason": None,
-                                       "paused_snapshots": 0}
+                                       "paused_snapshots": 0, "labels_refused": 0}
         self.snapshots_paused = False
+        self._pause = {"count": 0, "first": None, "last": None}   # labels not written in the current pause
         self._thread = threading.Thread(target=self._run, name="historian-writer", daemon=True)
         self._thread.start()
         self.submit(lambda c: c.execute(
@@ -232,7 +247,11 @@ class Historian:
                                          utc_iso(), provenance, reason)))
 
     def write_cycle(self, cycle_id: str, samples: list[Sample], *, run_id: str | None, sim_s: float | None,
-                    cadence_s: float | None = None, cadence_basis: str | None = None) -> None:
+                    cadence_s: float | None = None, cadence_basis: str | None = None,
+                    label_s: float | None = None) -> None:
+        """One cycle in one transaction. With `label_s` (wall-time snapshots) the label must be after the
+        newest one stored; the check runs inside the writer's BEGIN IMMEDIATE transaction, so no other
+        connection or process can write a label in between. A refused label is counted and recorded."""
         persisted = utc_iso()
         rows = [(s.point_id, _iso(s.acquired_utc), persisted, s.sequence, s.quality.value, s.reason, _num(s.raw_value),
                  type(s.raw_value).__name__ if s.raw_value is not None else None, s.raw_unit, _num(s.value), s.unit,
@@ -241,6 +260,18 @@ class Historian:
                  _num(s.last_good_value), _iso(s.last_good_utc)) for s in samples]
 
         def op(c: sqlite3.Connection):
+            if label_s is not None:
+                newest = newest_wall_label(c)
+                if newest is not None and label_s <= newest + 1e-6:
+                    self.health["labels_refused"] += 1
+                    c.execute("INSERT INTO events(utc,kind,actor,session_id,run_id,sim_s,payload_json) "
+                              "VALUES(?,?,?,?,?,?,?)", (persisted, "HISTORY_LABEL_REFUSED", "system", self.session_id,
+                                                        run_id, sim_s, json.dumps({
+                                                            "cycle_id": cycle_id, "newest_stored_label_utc":
+                                                            datetime.fromtimestamp(newest, timezone.utc).isoformat(),
+                                                            "note": "a snapshot label is written once and in order; "
+                                                                    "this one was not written"})))
+                    return False
             cur = c.execute("INSERT INTO cycles(cycle_id,session_id,run_id,sim_s,persisted_utc,n_points,cadence_s,"
                             "cadence_basis) VALUES(?,?,?,?,?,?,?,?)", (cycle_id, self.session_id, run_id, sim_s,
                                                                       persisted, len(rows), cadence_s, cadence_basis))
@@ -250,22 +281,32 @@ class Historian:
                           "device_uid,bus_id,session_id,sim_run_id,sim_s,override_json,last_good_value,last_good_utc)"
                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           [(pk,) + r for r in rows])
+            return True
         self.submit(op, droppable=True)
 
-    def cycle(self, run, samples: list[Sample]) -> None:  # SimulationRuntime HistorySink
+    def cycle(self, run, samples: list[Sample]) -> None:
+        """Optional simulation-time recorder (`historian.sim_time_recording_s`, off by default): a
+        separately labelled series for desktop analysis, never the installation's history cadence."""
         if self.snapshot_permitted():
-            self.write_cycle(f"{run.run_id}:{run.tick}", samples, run_id=run.run_id, sim_s=run.sim_s,
-                             cadence_s=run.history_stride_s, cadence_basis="SIMULATION_TIME")
+            self.write_cycle(f"simtime/{run.run_id}/{run.tick}", samples, run_id=run.run_id, sim_s=run.sim_s,
+                             cadence_s=run.sim_time_recording_s, cadence_basis="SIMULATION_TIME")
 
-    def snapshot(self, at: datetime, samples: list[Sample], interval_s: float) -> bool:
-        """Periodic wall-clock snapshot of every point (real installations). False if paused for disk."""
-        if not self.snapshot_permitted():
+    def snapshot(self, at: datetime, samples: list[Sample], interval_s: float, *, run_id: str | None = None,
+                 sim_s: float | None = None) -> bool:
+        """Wall-time snapshot of every point (real and simulation profiles). `run_id`/`sim_s` record a
+        simulation's provenance. False if paused for disk (the label is then reported, not written)."""
+        if not self.snapshot_permitted(at):
             return False
-        self.write_cycle(f"{self.session_id}:snap:{at.isoformat()}", samples, run_id=None, sim_s=None,
-                         cadence_s=interval_s, cadence_basis="WALL")
+        self.write_cycle(slot_cycle_id(at, interval_s), samples, run_id=run_id, sim_s=sim_s, cadence_s=interval_s,
+                         cadence_basis="WALL", label_s=at.timestamp())
         return True
 
-    def snapshot_permitted(self) -> bool:
+    def newest_wall_label(self) -> float | None:
+        """Newest wall-time label stored (epoch seconds): where a restarted recorder continues."""
+        with self._read_lock:
+            return newest_wall_label(self._read)
+
+    def snapshot_permitted(self, at: datetime | None = None) -> bool:
         """Low/full-disk handling: below `snapshot_floor_bytes` free, periodic snapshots pause (counted,
         announced once, alarmed) so events, commands and alarms keep the remaining space. Recording
         resumes by itself once free space is back above the reserve. Nothing is deleted to make room."""
@@ -279,11 +320,17 @@ class Historian:
                        actor="system")
         elif self.snapshots_paused and free >= max(h.free_space_reserve_bytes, h.snapshot_floor_bytes + 64 * 2**20):
             self.snapshots_paused = False
-            self.event("HISTORY_SNAPSHOTS_RESUMED", {"free_bytes": free,
-                                                     "snapshots_not_written": self.health["paused_snapshots"]},
-                       actor="system")
+            pause, self._pause = self._pause, {"count": 0, "first": None, "last": None}
+            self.event("HISTORY_SNAPSHOTS_RESUMED", {
+                "free_bytes": free, "snapshots_not_written": pause["count"],
+                "first_label_not_written_utc": pause["first"], "last_label_not_written_utc": pause["last"],
+                "note": "the paused labels are not back-filled"}, actor="system")
         if self.snapshots_paused:
             self.health["paused_snapshots"] += 1
+            self._pause["count"] += 1
+            if at is not None:
+                self._pause["first"] = self._pause["first"] or at.isoformat()
+                self._pause["last"] = at.isoformat()
             return False
         return True
 

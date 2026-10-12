@@ -13,6 +13,7 @@ from aquacrop.historian.backup import (BackupRefused, _sha256, backup_to, create
                                        manifest_path, restore_backup, verify_backup)
 from aquacrop.historian.writer import Historian
 from aquacrop.twin.runtime import SimulationRuntime
+from tests.helpers import with_sim_time_recording
 
 
 REASON = "reason with 'quotes'\nLF, CRLF\r\nand a lone CR\r: riego ñ"   # must survive byte for byte
@@ -20,8 +21,9 @@ REASON = "reason with 'quotes'\nLF, CRLF\r\nand a lone CR\r: riego ñ"   # must 
 
 @pytest.fixture
 def live(tmp_path, cfg24):
-    h = Historian(tmp_path / "live.sqlite3", cfg24, "s1")
-    rt = SimulationRuntime(cfg24, audit=h, history=h, session_id="s1", start_permitted=h.can_accept_starts)
+    cfg = with_sim_time_recording(cfg24)     # history rows without waiting for wall-time labels
+    h = Historian(tmp_path / "live.sqlite3", cfg, "s1")
+    rt = SimulationRuntime(cfg, audit=h, history=h, session_id="s1", start_permitted=h.can_accept_starts)
     rt.set_override("op", "analog_A.AI1", 19800, REASON)
     rt.run_for(180)
     h.wait_idle()

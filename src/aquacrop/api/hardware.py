@@ -30,7 +30,7 @@ from ..control.commands import CommandService
 from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Origin, Outcome, OutputCommand, PointKind,
                             Sample, utcnow)
 from ..historian.recording import HistoryRecorder, complete_snapshot, stale_limit_s
-from ..historian.retention import RetentionTask, evaluate_storage_alarm
+from ..historian.retention import RetentionTask, evaluate_recorder_alarm, evaluate_storage_alarm
 from ..historian.writer import Historian
 from ..io.modbus_backend import ModbusBackend
 from ..io.sampling import AcqContext
@@ -145,8 +145,9 @@ class HardwareService:
         self._clock_ref: tuple[float, float] | None = None   # (monotonic, wall epoch) for jump detection
         self._stale_after = {b.bus_id: stale_limit_s(b.poll_interval_s) for b in cfg.buses}
         self.recorder = HistoryRecorder(recording_interval_s or cfg.historian.recording_interval_s,
-                                        self.record_snapshot, on_missed=self._missed, wall=wall,
-                                        monotonic=monotonic)
+                                        self.record_snapshot,
+                                        on_event=lambda kind, payload: hist.event(kind, payload, actor="system"),
+                                        high_water=hist.newest_wall_label, wall=wall, monotonic=monotonic)
         self.retention = RetentionTask(hist, wall=wall, monotonic=monotonic)
 
     # ------------------------------------------------------------------ lifecycle
@@ -195,6 +196,7 @@ class HardwareService:
             self.alarms.evaluate_devices(status, None)
             self.alarms.evaluate_samples(self.samples, self._mono(), None)
             evaluate_storage_alarm(self.hist, self.alarms)
+            evaluate_recorder_alarm(self.recorder, self.alarms)
             # Transitions are written now; refreshes of still-active alarms ride with the snapshot.
             dirty = self.alarms.take_dirty() if self.alarms.take_transitioned() else []
         if dirty:
@@ -214,7 +216,7 @@ class HardwareService:
             return f"stale: last acquired {age:.1f} s before the snapshot (limit {limit:.1f} s)"
         return None
 
-    def record_snapshot(self, at: datetime, interval_s: float) -> None:
+    def record_snapshot(self, at: datetime, interval_s: float) -> bool:
         """Runs on the recorder thread at each boundary: copy the latest samples, mark stale or missing
         points, write one complete cycle. Never touches a bus."""
         now = datetime.now(timezone.utc)
@@ -226,13 +228,10 @@ class HardwareService:
             self.alarms.take_transitioned()
         snap = complete_snapshot(self.cfg, latest, now=at, ctx=self._ctx(), origin=Origin.REAL,
                                  stale_reason=lambda s: self._stale_reason(s, now))
-        self.hist.snapshot(at, snap, interval_s)
+        stored = self.hist.snapshot(at, snap, interval_s)
         if dirty:
             self.hist.alarms(dirty)
-
-    def _missed(self, count: int, why: str) -> None:
-        self.hist.event("HISTORY_SNAPSHOTS_MISSED", {"boundaries": count, "interval_s": self.recorder.interval_s,
-                                                     "reason": why}, actor="system")
+        return stored
 
     def _edges(self, got: list[Sample], interval_s: float) -> list[tuple[str, dict]]:
         """Physical DI/DO edges = differences between consecutive valid observations. The change

@@ -30,10 +30,12 @@ def test_recording_interval_is_60_s_and_only_60_or_300_allowed(cfg48, cfg24):
     assert HistorianSettings().db_budget_bytes == 10 * 2**30   # the old 2 GiB limit is gone
 
 
-# ---------------------------------------------------------------------------------------- boundaries
+# ---------------------------------------------------------------------------------------- recorder timing
 class Clock:
+    """Wall and monotonic clocks moved by the test. `run(s)` advances both together."""
+
     def __init__(self, wall):
-        self.wall, self.mono = wall, 100.0
+        self.wall, self.mono = float(wall), 1000.0
 
     def w(self):
         return self.wall
@@ -41,25 +43,119 @@ class Clock:
     def m(self):
         return self.mono
 
+    def run(self, seconds):
+        self.wall += seconds
+        self.mono += seconds
+
+
+def _recorder(clk, interval, *, stored=None, ok=True):
+    written, events = [], []
+    rec = HistoryRecorder(interval, lambda at, iv: (written.append(at), ok)[1],
+                          on_event=lambda kind, payload: events.append((kind, payload)),
+                          high_water=lambda: stored, wall=clk.w, monotonic=clk.m)
+    rec.start(thread=False)
+    return rec, written, events
+
+
+def _drive(rec, clk, seconds, step=0.25):
+    for _ in range(int(round(seconds / step))):
+        clk.run(step)
+        rec.tick()
+
 
 @pytest.mark.parametrize("interval", [60, 300])
-def test_recorder_writes_each_wall_boundary_once_and_reports_skips(interval):
-    clk = Clock(1_000_000 * interval + 0.5 * interval)   # halfway through a boundary period
-    written, missed = [], []
-    rec = HistoryRecorder(interval, lambda at, iv: written.append((at, iv)), on_missed=lambda n, why: missed.append(n),
-                          wall=clk.w, monotonic=clk.m)
-    rec._last_index = boundary_index(clk.wall, interval)   # what start() does, without the thread
-    assert not rec.tick()                                  # a restart never back-fills the current period
-    clk.wall = (1_000_001 * interval) - 0.001
-    assert not rec.tick()
-    clk.wall = 1_000_001 * interval                         # exactly on the boundary
-    assert rec.tick() and not rec.tick()                    # written once
-    assert written[-1][0] == datetime.fromtimestamp(1_000_001 * interval, tz=timezone.utc)
-    assert written[-1][0].second == 0 and written[-1][1] == interval
-    clk.wall -= 30                                          # wall clock stepped back: nothing rewritten
-    assert not rec.tick()
-    clk.wall = 1_000_005 * interval + 1                     # stepped forward over three boundaries
-    assert rec.tick() and missed == [3] and len(written) == 2
+def test_recorder_labels_wall_boundaries_once_on_a_monotonic_schedule(interval):
+    clk = Clock(1_000_000 * interval + 0.5 * interval)   # halfway through a period
+    rec, written, events = _recorder(clk, interval)
+    assert not rec.tick()                                  # a start never back-fills the current period
+    _drive(rec, clk, 0.5 * interval - 0.5)
+    assert written == []
+    _drive(rec, clk, 3 * interval)                         # three labels in three intervals, no more
+    assert [w.timestamp() for w in written] == [(1_000_001 + i) * interval for i in range(3)]
+    assert all(w.second == 0 and w.minute % (interval // 60) == 0 for w in written)   # hh:mm:00 / hh:05:00
+    assert events == [] and rec.health()["ok"]
+
+
+def test_300_s_labels_are_five_minute_boundaries():
+    clk = Clock(datetime(2026, 10, 12, 10, 2, 17, tzinfo=timezone.utc).timestamp())
+    rec, written, events = _recorder(clk, 300)
+    _drive(rec, clk, 1200)
+    assert [w.strftime("%H:%M:%S") for w in written] == ["10:05:00", "10:10:00", "10:15:00", "10:20:00"]
+
+
+def test_forward_clock_step_writes_one_snapshot_and_logs_the_label_gap():
+    clk = Clock(1_000_000 * 60 + 30)
+    rec, written, events = _recorder(clk, 60)
+    _drive(rec, clk, 60)                                   # writes label +1
+    clk.wall += 3600                                       # NTP steps the wall clock forward one hour
+    _drive(rec, clk, 120)
+    assert len(written) == 3                               # one per interval of monotonic time: no burst
+    kinds = [k for k, _ in events]
+    assert kinds == ["HISTORY_SNAPSHOTS_MISSED"]
+    ev = events[0][1]
+    assert ev["cause"] == "CLOCK_STEP_FORWARD" and ev["labels"] == 60 and ev["clock_step_labels"] == 60
+    assert (written[1] - written[0]).total_seconds() == 3660   # the label gap stays visible, nothing invented
+
+
+def test_stalled_process_logs_missed_labels_without_back_fill():
+    clk = Clock(1_000_000 * 60 + 30)
+    rec, written, events = _recorder(clk, 60)
+    _drive(rec, clk, 60)
+    clk.run(5 * 60)                                        # the process was blocked for five minutes
+    rec.tick()
+    assert len(written) == 2 and (written[1] - written[0]).total_seconds() == 300
+    (kind, ev), = events
+    assert kind == "HISTORY_SNAPSHOTS_MISSED" and ev["cause"] == "STALLED" and ev["labels"] == 4
+
+
+def test_backward_clock_step_holds_until_the_clock_passes_the_newest_label():
+    clk = Clock(1_000_000 * 60 + 30)
+    rec, written, events = _recorder(clk, 60)
+    _drive(rec, clk, 120)                                  # labels +1, +2
+    newest = written[-1]
+    clk.wall -= 30                                         # small correction: next label just comes later
+    _drive(rec, clk, 120)
+    assert len(written) == 4 and events == []
+    clk.wall -= 600                                        # large correction: the clock is behind stored labels
+    _drive(rec, clk, 300)
+    assert len(written) == 4 and rec.behind is not None and not rec.health()["ok"]
+    assert [k for k, _ in events] == ["HISTORY_CLOCK_BEHIND"]
+    _drive(rec, clk, 400)                                  # real time passes the newest label again
+    assert rec.behind is None
+    kinds = [k for k, _ in events]
+    assert kinds == ["HISTORY_CLOCK_BEHIND", "HISTORY_CLOCK_RESUMED"]
+    held = events[1][1]["held_intervals"]
+    assert held >= 5
+    labels = [w.timestamp() for w in written]
+    assert labels == sorted(set(labels)) and newest in written          # never twice, never out of order
+
+
+def test_restart_continues_after_the_newest_stored_label():
+    label = 1_000_000 * 60.0
+    # restart in the same period as the label the previous process wrote: no duplicate, no gap
+    clk = Clock(label + 0.2)
+    rec, written, events = _recorder(clk, 60, stored=label)
+    _drive(rec, clk, 61)
+    assert [w.timestamp() for w in written] == [label + 60] and events == []
+    # restart exactly on a boundary the previous process did not reach: that label is reported missed
+    clk = Clock(label)
+    rec, written, events = _recorder(clk, 60, stored=label - 60)
+    _drive(rec, clk, 61)
+    assert [w.timestamp() for w in written] == [label + 60]
+    (kind, ev), = events
+    assert kind == "HISTORY_SNAPSHOTS_MISSED" and ev["cause"] == "NOT_RUNNING" and ev["labels"] == 1
+    # restart with the clock behind the stored label: held, not duplicated
+    clk = Clock(label - 300)
+    rec, written, events = _recorder(clk, 60, stored=label)
+    _drive(rec, clk, 120)
+    assert written == [] and rec.behind is not None
+
+
+def test_labels_not_written_for_low_disk_are_not_reported_again_as_missed():
+    clk = Clock(1_000_000 * 60 + 30)
+    rec, written, events = _recorder(clk, 60, ok=False)
+    _drive(rec, clk, 180)
+    assert len(written) == 3 and rec.snapshots == 0 and rec.not_written == 3 and events == []
 
 
 def test_stale_limit_follows_the_bus_poll_rate():
@@ -107,7 +203,7 @@ def test_hw_acquisition_keeps_its_rate_and_snapshots_are_separate_and_complete(h
     n_points = len(cfg.all_points())
     for c in cycles:
         assert c["cadence_s"] == 0.5 and c["cadence_basis"] == "WALL" and c["n_points"] == n_points
-        assert ":snap:" in c["cycle_id"]
+        assert c["cycle_id"].startswith("slot/0.5s/")
     per = hist.query("SELECT cycle_pk, count(*) n, count(DISTINCT point_id) d FROM samples GROUP BY cycle_pk")
     assert all(r["n"] == r["d"] == n_points for r in per)
     # unchanged digital inputs are written in every snapshot, with their quality; a boundary that
@@ -199,7 +295,7 @@ def test_hw_restart_preserves_history_and_resumes_on_next_boundary(fake_bus, tmp
     s2.stop()
     h2.wait_idle()
     first = h2.query("SELECT cycle_id FROM cycles WHERE session_id='sess-2' ORDER BY cycle_pk LIMIT 1")[0][0]
-    at = datetime.fromisoformat(first.split(":snap:")[1]).timestamp()
+    at = datetime.fromisoformat(first.split("/", 2)[2]).timestamp()
     assert at > t0 - 1e-6 and abs(at / 0.5 - round(at / 0.5)) < 1e-6   # a new boundary after restart
     for t, n in before.items():
         assert h2.query(f"SELECT count(*) FROM {t} WHERE rowid <= ?", (10**12,))[0][0] >= n
@@ -208,32 +304,162 @@ def test_hw_restart_preserves_history_and_resumes_on_next_boundary(fake_bus, tmp
     h2.close()
 
 
+# ---------------------------------------------------------------------------------------- durable labels
+def test_a_label_is_stored_once_per_database_across_sessions(tmp_path, cfg24):
+    """Two historian sessions on one database (a restart overlapping the old process, or two processes):
+    the label check runs inside the writer transaction, so the second write of a label is refused."""
+    db = tmp_path / "d.sqlite3"
+    h1, h2 = Historian(db, cfg24, "p1"), Historian(db, cfg24, "p2")
+    rt = SimulationRuntime(cfg24, session_id="p1")
+    at = datetime(2026, 10, 12, 10, 0, tzinfo=timezone.utc)
+    snap = rt.wall_snapshot(at, 0.0)
+    h1.snapshot(at, snap, 60)
+    h1.wait_idle()
+    h2.snapshot(at, snap, 60)                               # same label from the other session
+    h2.snapshot(at - timedelta(minutes=5), snap, 60)         # an older label (clock behind)
+    h2.wait_idle()
+    assert h2.newest_wall_label() == at.timestamp()
+    rows = h2.query("SELECT cycle_id, session_id FROM cycles")
+    assert [(r["cycle_id"], r["session_id"]) for r in rows] == [("slot/60s/2026-10-12T10:00:00+00:00", "p1")]
+    assert h2.health["labels_refused"] == 2
+    assert h2.query("SELECT count(*) FROM events WHERE kind='HISTORY_LABEL_REFUSED'")[0][0] == 2
+    h2.snapshot(at + timedelta(minutes=1), snap, 60)
+    h2.wait_idle()
+    assert h2.query("SELECT count(*) FROM cycles")[0][0] == 2
+    h1.close()
+    h2.close()
+
+
 # ---------------------------------------------------------------------------------------- simulation
-def _rt(cfg, h):
-    rt = SimulationRuntime(cfg, audit=h, history=h, session_id=h.session_id, start_permitted=h.can_accept_starts)
-    h.register_run(rt.run_id, rt.seed, rt.params.provenance, "test")
-    return rt
+def _service(db, cfg, sid, clk):
+    from aquacrop.api.service import SimulationService
+    h = Historian(db, cfg, sid)
+    return h, SimulationService(cfg, h, sid, wall=clk.w, monotonic=clk.m)
 
 
-@pytest.mark.parametrize("interval,expected", [(60, 10), (300, 2)])
-def test_sim_snapshot_interval_in_simulated_time(tmp_path, cfg24, interval, expected):
-    cfg = cfg24.model_copy(update={"historian": cfg24.historian.model_copy(update={"recording_interval_s": interval})})
-    h = Historian(tmp_path / "s.sqlite3", cfg, "s")
-    rt = _rt(cfg, h)
+def _run(svc, clk, seconds, step=0.5):
+    for _ in range(int(round(seconds / step))):
+        clk.run(step)
+        svc.drive_step()
+
+
+LABEL = datetime(2026, 10, 12, 10, 0, tzinfo=timezone.utc).timestamp()
+
+
+@pytest.mark.parametrize("speed", [1, 10, 60])
+def test_sim_records_on_wall_time_whatever_the_speed(tmp_path, cfg24, speed):
+    """Equal wall duration => equal snapshot count and labels at 1x, 10x and 60x; the simulated time
+    and run id are stored with each snapshot as provenance."""
+    clk = Clock(LABEL - 0.25)
+    h, svc = _service(tmp_path / "s.sqlite3", cfg24, "s", clk)
+    svc.apply_speed(speed)
+    _run(svc, clk, 60.5)                        # 60.5 s of wall time: crosses LABEL and LABEL + 60 s
+    h.wait_idle()
+    rows = h.query("SELECT cycle_id, cadence_s, cadence_basis, run_id, sim_s, n_points FROM cycles ORDER BY cycle_pk")
+    assert [r["cycle_id"] for r in rows] == [f"slot/60s/{datetime.fromtimestamp(LABEL + 60 * i, timezone.utc).isoformat()}"
+                                             for i in range(2)]
+    assert all(r["cadence_s"] == 60 and r["cadence_basis"] == "WALL" and r["n_points"] == 24 for r in rows)
+    assert {r["run_id"] for r in rows} == {svc.runtime.run_id}
+    assert rows[1]["sim_s"] - rows[0]["sim_s"] == pytest.approx(60 * speed, abs=1.0)
+    assert h.query("SELECT DISTINCT quality FROM samples WHERE point_id='analog_A.AI1'")[0][0] == "GOOD"
+    assert svc.task_health()["recorder"]["snapshots"] == 2
+    h.close()
+
+
+def test_sim_pause_keeps_wall_snapshots_and_records_frozen_readings_as_stale(tmp_path, cfg24):
+    clk = Clock(LABEL - 0.25)
+    h, svc = _service(tmp_path / "s.sqlite3", cfg24, "s", clk)
+    _run(svc, clk, 1)                           # label LABEL written while running
+    svc.clock.pause()
+    _run(svc, clk, 120)                         # two more labels while paused
+    h.wait_idle()
+    rows = h.query("SELECT c.sim_s, s.quality, s.reason, s.last_good_value, s.acquired_utc FROM cycles c "
+                   "JOIN samples s ON s.cycle_pk=c.cycle_pk WHERE s.point_id='analog_A.AI1' ORDER BY c.cycle_pk")
+    assert len(rows) == 3
+    assert rows[0]["quality"] == "GOOD"
+    for r in rows[1:]:
+        assert r["quality"] == "STALE" and "paused" in r["reason"] and r["last_good_value"] is not None
+        assert r["sim_s"] == svc.runtime.sim_s                            # simulated time stood still
+    assert rows[1]["acquired_utc"] != rows[2]["acquired_utc"]             # each row carries its own label time
+    svc.clock.resume()
+    _run(svc, clk, 60)
+    h.wait_idle()
+    last = h.query("SELECT quality FROM samples WHERE point_id='analog_A.AI1' ORDER BY id DESC LIMIT 1")[0][0]
+    assert last == "GOOD"
+    h.close()
+
+
+def test_sim_snapshot_marks_stalled_acquisition_stale(tmp_path, cfg24):
+    clk = Clock(LABEL - 5)
+    h, svc = _service(tmp_path / "s.sqlite3", cfg24, "s", clk)
+    _run(svc, clk, 4)
+    svc.runtime.acquisition_stalled = True      # the simulated acquisition stops; the plant keeps running
+    _run(svc, clk, 2)                           # label written ~2 s of simulated time after the last reading
+    h.wait_idle()
+    q = {r[0] for r in h.query("SELECT quality FROM samples")}
+    assert q == {"STALE"}
+    r = h.query("SELECT * FROM samples WHERE point_id='analog_A.AI1'")[0]
+    assert r["value"] is None and r["last_good_value"] is not None and "simulated time" in r["reason"]
+    h.close()
+
+
+def test_sim_restart_on_a_boundary_and_clock_corrections_never_duplicate_a_label(tmp_path, cfg24):
+    from aquacrop.historian.retention import evaluate_recorder_alarm
+    db = tmp_path / "s.sqlite3"
+    clk = Clock(LABEL - 0.25)
+    h, svc = _service(db, cfg24, "s1", clk)
+    _run(svc, clk, 0.5)                         # writes LABEL
+    h.close()
+    # the next process starts in the same minute (a restart right on the boundary)
+    h, svc = _service(db, cfg24, "s2", clk)
+    _run(svc, clk, 60)                          # LABEL is not written again; LABEL+60 is
+    clk.wall -= 600                             # the clock is corrected backwards by ten minutes
+    _run(svc, clk, 120)
+    assert svc.recorder.behind is not None
+    assert svc.runtime.alarms.is_active("HISTORY_CLOCK_BEHIND", "historian")
+    _run(svc, clk, 600)                         # real time catches up with the stored labels
+    assert svc.recorder.behind is None and not svc.runtime.alarms.is_active("HISTORY_CLOCK_BEHIND", "historian")
+    clk.wall += 3600                            # and later steps forward by an hour
+    _run(svc, clk, 120)
+    h.wait_idle()
+    ids = [r[0] for r in h.query("SELECT cycle_id FROM cycles ORDER BY cycle_pk")]
+    labels = [datetime.fromisoformat(i.split("/", 2)[2]).timestamp() for i in ids]
+    assert labels == sorted(set(labels)) and labels[:2] == [LABEL, LABEL + 60]
+    kinds = [r[0] for r in h.query("SELECT kind FROM events WHERE kind LIKE 'HISTORY_%' ORDER BY id")]
+    assert kinds == ["HISTORY_CLOCK_BEHIND", "HISTORY_CLOCK_RESUMED", "HISTORY_SNAPSHOTS_MISSED"]
+    missed = json.loads(h.query("SELECT payload_json FROM events WHERE kind='HISTORY_SNAPSHOTS_MISSED'")[0][0])
+    assert missed["cause"] == "CLOCK_STEP_FORWARD" and missed["labels"] == 60
+    assert h.health["labels_refused"] == 0     # the recorder never even offered a duplicate
+    h.close()
+
+
+def test_optional_sim_time_recorder_is_off_by_default_and_separately_labelled(tmp_path, cfg24):
+    from tests.helpers import with_sim_time_recording
+    h = Historian(tmp_path / "s.sqlite3", cfg24, "s")
+    rt = SimulationRuntime(cfg24, audit=h, history=h, session_id="s")
     rt.run_for(600)
     h.wait_idle()
-    rows = h.query("SELECT sim_s, cadence_s, n_points FROM cycles ORDER BY cycle_pk")
-    assert len(rows) == expected
-    assert all(r["cadence_s"] == interval and r["n_points"] == 24 for r in rows)
-    assert [round(r["sim_s"]) for r in rows] == [interval * (i + 1) for i in range(expected)]
+    assert h.query("SELECT count(*) FROM cycles")[0][0] == 0 and rt.sim_time_recording_s is None
     h.close()
+    for interval, expected in ((60, 10), (300, 2)):
+        cfg = with_sim_time_recording(cfg24, interval)
+        h = Historian(tmp_path / f"t{interval}.sqlite3", cfg, "s")
+        rt = SimulationRuntime(cfg, audit=h, history=h, session_id="s")
+        rt.run_for(600)
+        h.wait_idle()
+        rows = h.query("SELECT cycle_id, sim_s, cadence_s, cadence_basis FROM cycles ORDER BY cycle_pk")
+        assert len(rows) == expected
+        assert all(r["cadence_basis"] == "SIMULATION_TIME" and r["cadence_s"] == interval
+                   and r["cycle_id"].startswith(f"simtime/{rt.run_id}/") for r in rows)
+        assert [round(r["sim_s"]) for r in rows] == [interval * (i + 1) for i in range(expected)]
+        h.close()
 
 
 def test_sim_alarm_transitions_and_ack_do_not_wait_for_a_snapshot(tmp_path, cfg24):
     h = Historian(tmp_path / "s.sqlite3", cfg24, "s")
     rt = _rt(cfg24, h)
     rt.set_override("op", "analog_A.AI1", 19800, "t")
-    rt.run_for(2)                                # far before the first 60 s snapshot
+    rt.run_for(2)
     h.wait_idle()
     assert h.query("SELECT count(*) FROM cycles")[0][0] == 0
     row = h.query("SELECT occurrence_id, acknowledged FROM alarm_occurrences WHERE rule_id='RESERVOIR_LEVEL_HIGH'")
@@ -245,18 +471,10 @@ def test_sim_alarm_transitions_and_ack_do_not_wait_for_a_snapshot(tmp_path, cfg2
     h.close()
 
 
-def test_sim_snapshot_marks_stalled_acquisition_stale(tmp_path, cfg24):
-    h = Historian(tmp_path / "s.sqlite3", cfg24, "s")
-    rt = _rt(cfg24, h)
-    rt.run_for(59)
-    rt.acquisition_stalled = True
-    rt.run_for(2)                                # snapshot at 60 s with readings ~1 s old
-    h.wait_idle()
-    q = {r[0] for r in h.query("SELECT quality FROM samples")}
-    assert q == {"STALE"}
-    r = h.query("SELECT * FROM samples WHERE point_id='analog_A.AI1'")[0]
-    assert r["value"] is None and r["last_good_value"] is not None and r["sim_s"] == pytest.approx(60.0)
-    h.close()
+def _rt(cfg, h):
+    rt = SimulationRuntime(cfg, audit=h, history=h, session_id=h.session_id, start_permitted=h.can_accept_starts)
+    h.register_run(rt.run_id, rt.seed, rt.params.provenance, "test")
+    return rt
 
 
 # ---------------------------------------------------------------------------------------- config and schema
@@ -279,8 +497,10 @@ def test_config_loaded_and_changed_events(tmp_path, cfg24):
 
 
 def test_this_update_adds_no_schema_migration(tmp_path, cfg24):
+    from tests.helpers import with_sim_time_recording
     assert CURRENT_VERSION == 2                  # the schema delivered on main; 60 s/365 d needs no change
     db = tmp_path / "keep.sqlite3"
+    cfg24 = with_sim_time_recording(cfg24)
     h = Historian(db, cfg24, "s1")
     rt = _rt(cfg24, h)
     rt.run_for(120)

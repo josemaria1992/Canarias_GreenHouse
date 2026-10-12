@@ -8,12 +8,14 @@ Determinism contract
   source change) is applied *between* ticks and journaled with `(tick, seq)`. Replay applies the same
   journal before the same tick in the same order and must reproduce the state hash exactly.
 * Order inside a tick: expire overrides -> plant.step -> acquire all points -> alarms -> controller
-  -> historian stride -> ledger invariant.
+  -> alarm transitions (and the optional simulation-time recorder) -> ledger invariant. Periodic
+  history is written on wall time by the service, outside the tick.
 """
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 from ..config.schema import InstallationConfig
@@ -31,6 +33,7 @@ from .plant import Plant
 LEDGER_TOL_ABS_L = 1e-6
 LEDGER_TOL_PER_TICK_L = 1e-9
 STALE_AFTER_SIM_S = 0.5        # controller treats older observations as unusable
+SIM_WALL_STALE_S = 3.0         # wall-time snapshot: run not advanced for this long => STALE
 PLAUSIBILITY_SUSTAIN_S = 3.0   # flow reported with no pump running feedback
 
 
@@ -92,8 +95,11 @@ class SimulationRuntime:
         self.samples: dict[str, Sample] = {}
         self._prev_valid: dict[str, Any] = {}
         self._cycle = 0
+        # Installation history is recorded on wall time by the service (SimulationService.recorder). The
+        # optional simulation-time recorder below is off unless historian.sim_time_recording_s is set.
         h = cfg.historian
-        self.stride_ticks = max(1, int(round((h.sim_history_stride_s or h.recording_interval_s) / self.params.dt_s)))
+        self.stride_ticks: int | None = (max(1, int(round(h.sim_time_recording_s / self.params.dt_s)))
+                                         if h.sim_time_recording_s else None)
         self._next_history_tick = self.stride_ticks
         self.invariant_failures: list[InvariantFailure] = []
         self.max_abs_residual_L = 0.0
@@ -288,16 +294,21 @@ class SimulationRuntime:
         self._event("ACQUISITION_STALL" if stalled else "ACQUISITION_RESUMED", {}, actor)
 
     @property
-    def history_stride_s(self) -> float:
-        return self.stride_ticks * self.params.dt_s
+    def sim_time_recording_s(self) -> float | None:
+        """Cadence of the optional simulation-time recorder (simulated seconds), None when it is off."""
+        return None if self.stride_ticks is None else self.stride_ticks * self.params.dt_s
 
-    def set_history_stride(self, stride_s: float, reason: str) -> None:
-        """Change the simulation-time history cadence explicitly (never a silent omission)."""
+    def set_sim_time_recording(self, stride_s: float, reason: str) -> None:
+        """Change the simulation-time recorder's cadence explicitly (never a silent omission). No effect
+        while that recorder is off."""
+        if self.stride_ticks is None:
+            return
         ticks = max(1, int(round(stride_s / self.params.dt_s)))
         if ticks != self.stride_ticks:
             self.stride_ticks = ticks
             self._next_history_tick = self.tick + ticks
-            self._event("HISTORY_STRIDE_CHANGED", {"stride_sim_s": self.history_stride_s, "reason": reason}, "system")
+            self._event("SIM_TIME_RECORDING_CHANGED", {"cadence_sim_s": self.sim_time_recording_s,
+                                                       "reason": reason}, "system")
 
     def schedule(self, at_s: float, kind: str, actor: str, payload: dict) -> None:
         """Queue a scenario input to be applied before the tick at simulated time `at_s`."""
@@ -377,14 +388,30 @@ class SimulationRuntime:
                                    "resolution_s": self.params.dt_s, "origin": s.origin.value}, None)
             self._prev_valid[pid] = s.value
 
+    def _sim_stale(self, s: Sample) -> str | None:
+        if s.sim_time_s is not None and self.sim_s - s.sim_time_s > STALE_AFTER_SIM_S + 1e-9:
+            return f"stale: last acquired {self.sim_s - s.sim_time_s:.1f} s before the snapshot (simulated time)"
+        return None
+
     def _snapshot(self) -> list[Sample]:
-        """Complete snapshot for the historian: every point, readings older than the controller's
-        staleness limit (simulated time) recorded as STALE rather than as current values."""
-        def stale(s: Sample) -> str | None:
-            if s.sim_time_s is not None and self.sim_s - s.sim_time_s > STALE_AFTER_SIM_S + 1e-9:
-                return f"stale: last acquired {self.sim_s - s.sim_time_s:.1f} s before the snapshot (simulated time)"
-            return None
+        """Complete snapshot for the simulation-time recorder: every point, readings older than the
+        controller's staleness limit (simulated time) recorded as STALE rather than as current values."""
         return complete_snapshot(self.cfg, self.samples, now=utcnow(), ctx=self._ctx(), origin=Origin.SIMULATED,
+                                 stale_reason=self._sim_stale)
+
+    def wall_snapshot(self, at: datetime, idle_s: float) -> list[Sample]:
+        """Complete snapshot for the wall-time recorder, labelled `at`. `idle_s` is how long (monotonic
+        wall seconds) the run has not advanced. A reading is STALE if it is too old in simulated time
+        (stalled acquisition) or if the run has not advanced for SIM_WALL_STALE_S (paused or stalled
+        driver): a paused run records its frozen state as STALE with the last good value kept, never as
+        fresh readings."""
+        def stale(s: Sample) -> str | None:
+            if (why := self._sim_stale(s)) is not None:
+                return why
+            if idle_s > SIM_WALL_STALE_S:
+                return f"stale: the simulation has not advanced for {idle_s:.1f} s of wall time (paused or stalled)"
+            return None
+        return complete_snapshot(self.cfg, self.samples, now=at, ctx=self._ctx(), origin=Origin.SIMULATED,
                                  stale_reason=stale)
 
     def persist_alarm_transitions(self) -> None:
@@ -436,7 +463,8 @@ class SimulationRuntime:
             self._acquisition_age_alarm()
             self._plausibility()
             self.controller.tick(self.sim_s, self.view())
-            if self.history is not None and self.tick >= self._next_history_tick:
+            if (self.history is not None and self.stride_ticks is not None
+                    and self.tick >= self._next_history_tick):
                 self._next_history_tick = self.tick + self.stride_ticks
                 self.history.cycle(self, self._snapshot())
                 self.history.alarms(self.alarms.take_dirty())

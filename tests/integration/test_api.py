@@ -28,8 +28,8 @@ def env(tmp_path, cfg48):
 
 @pytest.fixture
 def env_dense(tmp_path, cfg48):
-    """Simulation-only 1 s snapshot stride (simulated time) so export/trend tests get rows quickly."""
-    cfg = cfg48.model_copy(update={"historian": cfg48.historian.model_copy(update={"sim_history_stride_s": 1.0})})
+    """Optional simulation-time recorder at 1 s (simulated time) so export/trend tests get rows quickly."""
+    cfg = cfg48.model_copy(update={"historian": cfg48.historian.model_copy(update={"sim_time_recording_s": 1.0})})
     with TestClient(app := _app(tmp_path, cfg), base_url=ORIGIN) as c:
         yield app, c
 
@@ -222,24 +222,34 @@ def test_scenario_and_twin_controls(env):
     assert app.state.svc.runtime.tick == t + 5
 
 
-def test_default_snapshot_interval_is_60_s_of_simulated_time(env):
+def test_default_history_is_60_s_of_wall_time_at_any_speed(env):
     app, c = env
     hdr = login(c, "oper1", PW["oper1"])
-    assert c.get("/api/status").json()["twin"]["history_stride_sim_s"] == 60.0
+    tw = c.get("/api/status").json()["twin"]
+    assert (tw["recording_interval_s"], tw["recording_basis"], tw["sim_time_recording_s"]) == (60, "WALL", None)
     c.post("/api/twin/control", json={"action": "speed", "speed": 60}, headers=hdr)
-    assert c.get("/api/status").json()["twin"]["history_stride_sim_s"] == 60.0  # max(60 s, 60 x 0.5 s)
+    tw = c.get("/api/status").json()["twin"]
+    assert (tw["recording_interval_s"], tw["recording_basis"], tw["sim_time_recording_s"]) == (60, "WALL", None)
+    assert c.get("/api/status").json()["acquisition_task"]["recorder"]["basis"] == "WALL"
 
 
-def test_history_cadence_bounded_and_labelled_at_speed(env_dense):
+def test_sim_time_recorder_is_separate_bounded_and_labelled_at_speed(env_dense):
     app, c = env_dense
     hdr = login(c, "oper1", PW["oper1"])
     c.post("/api/twin/control", json={"action": "speed", "speed": 60}, headers=hdr)
     st = c.get("/api/status").json()["twin"]
-    assert st["history_stride_sim_s"] == 30.0  # max(1 s, 60 x 0.5 s)
-    ev = [e for e in app.state.svc.runtime.events if e["kind"] == "HISTORY_STRIDE_CHANGED"]
+    assert st["sim_time_recording_s"] == 30.0 and st["recording_interval_s"] == 60  # max(1 s, 60 x 0.5 s)
+    ev = [e for e in app.state.svc.runtime.events if e["kind"] == "SIM_TIME_RECORDING_CHANGED"]
     assert ev and "speed 60x" in ev[-1]["payload"]["reason"]
     c.post("/api/twin/control", json={"action": "speed", "speed": 1}, headers=hdr)
-    assert c.get("/api/status").json()["twin"]["history_stride_sim_s"] == 1.0
+    assert c.get("/api/status").json()["twin"]["sim_time_recording_s"] == 1.0
+    time.sleep(1.5)
+    app.state.hist.wait_idle()
+    rows = app.state.hist.query("SELECT cycle_id, cadence_basis, cadence_s FROM cycles")
+    sim = [r for r in rows if r["cadence_basis"] == "SIMULATION_TIME"]
+    assert sim and all(r["cycle_id"].startswith("simtime/") for r in sim)   # its own, separately named series
+    assert all(r["cadence_s"] == 60 and r["cycle_id"].startswith("slot/60s/") for r in rows
+               if r["cadence_basis"] == "WALL")   # the installation series is untouched (a minute may pass)
 
 
 def test_trend_gap_flags_from_recorded_cadence(env_dense):

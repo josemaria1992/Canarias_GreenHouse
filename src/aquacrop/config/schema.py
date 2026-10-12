@@ -178,12 +178,16 @@ class HistorianSettings(_Strict):
     they happen, independent of the recording interval."""
     db_path: str = "var/aquacrop.sqlite3"
     acquisition_interval_s: float = Field(default=3.0, ge=0.2)    # display hint only; buses own their poll rate
-    # Complete snapshot of every configured point (unchanged values and quality included). 60 s is the
-    # owner's active setting; 300 s is allowed but only on the owner's explicit request.
+    # Complete snapshot of every configured point (unchanged values and quality included) every
+    # recording_interval_s of WALL time, in real and simulation profiles alike. 60 s is the owner's
+    # active setting; 300 s is allowed but only on the owner's explicit request.
     recording_interval_s: int = 60
-    # Simulation only: snapshot stride in simulated time. Unset = recording_interval_s.
-    sim_history_stride_s: float | None = Field(default=None, gt=0)
-    sim_history_min_wall_interval_s: float = Field(default=0.5, gt=0)  # caps write rate at high speed
+    # Optional second recorder for desktop simulation analysis, OFF by default: a complete snapshot every
+    # sim_time_recording_s of SIMULATED time, stored as its own series (cadence_basis SIMULATION_TIME).
+    # Its rows add to the database size; at high speed its cadence is raised so that it never writes
+    # more often than once per sim_time_recording_min_wall_s of wall time.
+    sim_time_recording_s: float | None = Field(default=None, gt=0)
+    sim_time_recording_min_wall_s: float = Field(default=0.5, gt=0)
     retention_days: int = Field(default=365, ge=365)   # rolling window, owner-approved 2026-10-12
     retention_provenance: Literal["DEMO", "APPROVED"] = "APPROVED"   # DEMO: nothing is ever deleted
     retention_check_interval_s: float = Field(default=3600.0, ge=60.0, le=86400.0)
