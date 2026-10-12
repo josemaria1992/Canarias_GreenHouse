@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import aquacrop.historian.writer as writer_mod
-from aquacrop.historian.quarantine import QUARANTINE_EVENT, QuarantineMismatch, confirm, propose
+from aquacrop.historian.quarantine import QUARANTINE_EVENT, RETIRED_EVENT, QuarantineMismatch, confirm, propose
 from aquacrop.historian.retention import prune_expired
 from aquacrop.historian.writer import Historian, newest_wall_label
 
@@ -152,6 +152,21 @@ def test_forward_step_then_correction_quarantine_restart_and_retention(tmp_path,
     assert not left & set(pks[3:8])    # gone a year after the quarantine, not a year after their (future) stamps
     assert h.query("SELECT count(*) FROM samples WHERE id BETWEEN ? AND ?", tuple(prop["ranges"]["samples"]))[0][0] == 0
     assert h.query("SELECT count(*) FROM events WHERE kind=?", (QUARANTINE_EVENT,))[0][0] == 1   # register kept
+    # the purged quarantine is retired: its id ranges stop applying (SQLite may hand those ids out again)
+    assert json.loads(h.query("SELECT payload_json FROM events WHERE kind=?", (RETIRED_EVENT,))[0][0])[
+        "quarantine_id"] == q.quarantine_id
+    assert h.quarantines.items == [] and h.quarantines.clock_epoch == 1     # the epoch stays
+    lo, hi = prop["ranges"]["events"]
+    now_iso = datetime.fromtimestamp(clk.wall, timezone.utc).isoformat(timespec="microseconds")
+    h.submit(lambda c: c.execute("INSERT INTO events(id,utc,kind,payload_json) VALUES(?,?,'REUSED_ID','{}')",
+                                 (hi, now_iso)), wait=True)
+    assert h.quarantines.flags("events", hi)["timestamp_suspect"] is False
+    prune_expired(h, now=qtime + timedelta(days=365, minutes=2))
+    assert h.query("SELECT count(*) FROM events WHERE id=?", (hi,))[0][0] == 1   # a new row is not deleted
+    assert h.query("SELECT count(*) FROM events WHERE kind=?", (RETIRED_EVENT,))[0][0] == 1
+    h.close()
+    h = Historian(db, cfg24, "s3")
+    assert h.quarantines.items == [] and h.quarantines.clock_epoch == 1     # also after a restart
     h.close()
 
 
@@ -279,6 +294,14 @@ def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_p
         c.execute("INSERT INTO commands(request_id,actor,target,desired,origin,issued_utc,expires_utc,"
                   "expected_config_version,priority,backend,session_id,intent_utc,outcome) VALUES('c-fut','u',"
                   "'relay_A.DO1',1,'SIMULATED',?,?,'v',5,'SIMULATED','earlier',?,'READBACK_CONFIRMED')", (ts, ts, ts))
+        # an alarm raised with the right clock and refreshed by the wrong one: no ALARM_* event in between
+        first = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="microseconds")
+        c.execute("INSERT INTO alarm_occurrences VALUES('occ-refreshed','R','t','WARNING',1,0,1,?,?,?,?)",
+                  (first, ts, ts, json.dumps({"occurrence_id": "occ-refreshed", "rule_id": "R", "target": "t",
+                                              "first_seen_utc": first, "last_seen_utc": ts})))
+        c.execute("INSERT INTO alarm_occurrences VALUES('occ-trusted','R','u','WARNING',1,0,1,?,?,?,?)",
+                  (first, first, first, json.dumps({"occurrence_id": "occ-trusted", "rule_id": "R", "target": "u",
+                                                    "first_seen_utc": first, "last_seen_utc": first})))
     h.submit(op, wait=True)
     h.close()
     with TestClient(app := _app(tmp_path, cfg48), base_url=ORIGIN) as c:
@@ -286,6 +309,7 @@ def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_p
         st = c.get("/api/history/quarantine").json()
         prop = st["proposal"]
         assert prop["needed"] and prop["counts"]["samples"] == 1 and st["clock_epoch"] == 0
+        assert prop["alarm_occurrences"] == ["occ-refreshed"]
         op_h = login(c, "oper1", PW["oper1"])
         body = {"proposal_id": prop["proposal_id"], "clock_checked": True}
         assert c.post("/api/history/quarantine", json=body, headers=op_h).status_code == 403
@@ -310,6 +334,8 @@ def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_p
         assert "DI_EDGE" in audit and ",SUSPECT,q_" in audit
         evs = c.get("/api/events?kind=DI_EDGE" + rng).json()["events"]
         assert evs and all(e["timestamp_suspect"] for e in evs)
+        hist_alarms = {a["occurrence_id"]: a["timestamp_suspect"] for a in c.get("/api/alarms").json()["history"]}
+        assert hist_alarms["occ-refreshed"] is True and hist_alarms["occ-trusted"] is False
         cmds = [x for x in c.get("/api/commands/history").json() if x["request_id"] == "c-fut"]
         assert cmds[0]["timestamp_suspect"] is True
         # values and stamps are as recorded

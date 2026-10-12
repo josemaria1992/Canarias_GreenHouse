@@ -269,10 +269,16 @@ class Offsite:
         except OSError as e:                              # the card went away or failed while writing
             return self._fail("BACKUP", "WRITE_ERROR", repr(e))
         path = Path(man["path"])
-        v = verify_backup(path)                          # re-read from the card: checksum, stream, counts
+        try:
+            v = verify_backup(path)                      # re-read from the card: checksum, stream, counts
+        except (OSError, ValueError) as e:               # the card went away, or the manifest is unreadable
+            v = {"ok": False, "integrity": f"read-back raised {e!r}"}
         if not v["ok"]:
-            manifest_path(path).unlink(missing_ok=True)   # unlisted first, then set aside for inspection
-            os.replace(path, path.with_name(path.name + ".bad"))
+            try:
+                manifest_path(path).unlink(missing_ok=True)   # unlisted first, then set aside for inspection
+                os.replace(path, path.with_name(path.name + ".bad"))
+            except OSError:
+                pass       # card gone: without a verified upload it is never queued; recorded below
             return self._fail("BACKUP", "VERIFY_FAILED", f"read-back from the card failed: {v.get('integrity')}",
                               file=path.name)
         res = {"ok": True, "file": man["file"], "bytes": man["bytes"], "sha256": man["sha256"],

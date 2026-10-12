@@ -36,6 +36,11 @@ from datetime import datetime, timezone
 from .schema import utc_iso
 
 QUARANTINE_EVENT = "HISTORY_TIMESTAMPS_QUARANTINED"
+# Written by retention once a quarantine's records were deleted whole: its id ranges no longer apply, so
+# rows that later reuse those ids (SQLite reuses the highest ids after a delete) are neither flagged nor
+# deleted with it.
+RETIRED_EVENT = "HISTORY_QUARANTINE_RETIRED"
+REGISTER_KINDS = (QUARANTINE_EVENT, RETIRED_EVENT)      # never pruned
 TABLES = ("cycles", "samples", "events", "commands")
 _ID = {"cycles": "cycle_pk", "samples": "id", "events": "id", "commands": "rowid"}
 _TIME = {"cycles": "persisted_utc", "samples": "acquired_utc", "events": "utc", "commands": "intent_utc"}
@@ -86,17 +91,23 @@ class Quarantine:
 
 @dataclass
 class QuarantineRegister:
-    """All quarantines in force (they are registers: never pruned). Loaded from the events table."""
+    """All quarantines in force (they are registers: never pruned). Loaded from the events table.
+    `retired` holds the quarantines whose records retention has deleted: they still count for the clock
+    epoch, but their id ranges no longer mark anything."""
     items: list[Quarantine] = field(default_factory=list)
+    retired: list[Quarantine] = field(default_factory=list)
 
     @classmethod
     def load(cls, c: sqlite3.Connection) -> "QuarantineRegister":
         rows = c.execute("SELECT id, payload_json FROM events WHERE kind=? ORDER BY id", (QUARANTINE_EVENT,)).fetchall()
-        return cls([_from_payload(json.loads(p), eid) for eid, p in rows])
+        gone = {json.loads(p).get("quarantine_id") for (p,) in
+                c.execute("SELECT payload_json FROM events WHERE kind=?", (RETIRED_EVENT,))}
+        qs = [_from_payload(json.loads(p), eid) for eid, p in rows]
+        return cls([q for q in qs if q.quarantine_id not in gone], [q for q in qs if q.quarantine_id in gone])
 
     @property
     def clock_epoch(self) -> int:
-        return max((q.clock_epoch for q in self.items), default=0)
+        return max((q.clock_epoch for q in self.items + self.retired), default=0)
 
     def find(self, table: str, ident: int | None) -> Quarantine | None:
         for q in self.items:
@@ -199,7 +210,7 @@ def propose(c: sqlite3.Connection, reg: QuarantineRegister, *, wall_s: float,
     now_iso = datetime.fromtimestamp(wall_s, timezone.utc).isoformat()
     base = {"wall_utc": now_iso, "future_after_utc": ahead, "current_clock_epoch": reg.clock_epoch}
     first: dict[str, tuple[int, str]] = {}
-    for t, extra in (("cycles", ""), ("events", f" AND kind != '{QUARANTINE_EVENT}'"), ("commands", "")):
+    for t, extra in (("cycles", ""), ("events", f" AND kind NOT IN {REGISTER_KINDS!r}"), ("commands", "")):
         ex, args = reg.exclude(t)
         row = c.execute(f"SELECT {_ID[t]}, session_id FROM {t} WHERE {_TIME[t]} > ?{extra}{ex} "
                         f"ORDER BY {_ID[t]} LIMIT 1", (ahead,) + args).fetchone()
@@ -281,6 +292,15 @@ def propose(c: sqlite3.Connection, reg: QuarantineRegister, *, wall_s: float,
                 o = json.loads(pj).get("occurrence_id")
                 if o:
                     occ.add(o)
+    # An alarm that was already active keeps one row that is refreshed in place (last_seen_utc,
+    # updated_utc) without a new ALARM_* event, so the events above miss it. Any occurrence stamped at or
+    # after the earliest suspect stamp was written by the wrong clock (the corrected clock is behind
+    # those stamps), so it is marked too.
+    lo = min((v[0] for t, v in spans.items() if t != "samples" and v[0]), default=None)
+    if lo is not None:
+        occ |= {r[0] for r in c.execute("SELECT occurrence_id FROM alarm_occurrences WHERE first_seen_utc >= ? "
+                                        "OR last_seen_utc >= ? OR updated_utc >= ?", (lo, lo, lo))
+                if reg.find_occurrence(r[0]) is None}
     for t in ("cycles", "commands"):
         if t in ranges:
             sessions |= {r[0] for r in c.execute(f"SELECT DISTINCT session_id FROM {t} WHERE {_ID[t]} BETWEEN ? AND ?",
@@ -315,7 +335,7 @@ def confirm(hist, proposal_id: str, *, actor: str, wall_s: float, clock_checked:
         cur = c.execute("INSERT INTO events(utc,kind,actor,session_id,payload_json) VALUES(?,?,?,?,?)",
                         (utc_iso(), QUARANTINE_EVENT, actor, hist.session_id, json.dumps(payload)))
         q = _from_payload(payload, cur.lastrowid)
-        hist.quarantines = QuarantineRegister(hist.quarantines.items + [q])
+        hist.quarantines = QuarantineRegister(hist.quarantines.items + [q], hist.quarantines.retired)
         return q, prop
 
     try:

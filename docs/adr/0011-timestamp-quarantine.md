@@ -29,7 +29,8 @@ No schema migration and no new hardware are authorized (ADR-0008).
 
 An administrator's confirmation writes one `HISTORY_TIMESTAMPS_QUARANTINED` event. Its payload
 holds the id ranges it covers per table (`cycles.cycle_pk`, `samples.id`, `events.id`,
-`commands.rowid`), the alarm occurrences raised in that range, the process sessions involved, the
+`commands.rowid`), the alarm occurrences raised in that range or stamped at or after its earliest suspect stamp (an
+alarm that was already active is refreshed in place, without a new `ALARM_*` event), the process sessions involved, the
 counts, the first and last suspect stamps, the start and end anchors (below), the new clock epoch,
 who confirmed it and when, and `clock_checked_by_administrator: true`. Nothing else is written:
 no row is changed, moved or deleted. The events of this kind are a register: retention never
@@ -78,7 +79,10 @@ confirmation of the date and the proposed cutoff (ADR-0008) releases it.
 
 Quarantined records are never judged by their suspect stamps: label- and time-based pruning skips
 their id ranges, and they are deleted whole only when the quarantine's own confirmation time (a
-trusted time) is older than the retention cutoff. The newest-record checks that decide whether the
+trusted time) is older than the retention cutoff. Then retention writes
+`HISTORY_QUARANTINE_RETIRED` for it: SQLite can hand out the highest ids again once they are deleted,
+so a retired quarantine's ranges no longer flag or delete anything (its clock epoch still counts).
+Range deletion runs from the lowest id up, so the top of a range is the last row to go. The newest-record checks that decide whether the
 clock is trusted ignore quarantined rows and sessions.
 
 ### Visible everywhere

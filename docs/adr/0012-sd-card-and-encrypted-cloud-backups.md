@@ -112,7 +112,8 @@ kept in `<state>/offsite/drills/`.
 ### Activation
 
 `offsite_backup.enabled` is false in every shipped configuration and requires the card's mount
-path, UUID and volume id; the cloud remote and account are TBD. While disabled the earlier eMMC
+path, UUID and volume id and the crypt remote with its rclone configuration (there is no card-only
+mode); the cloud remote and account are TBD. While disabled the earlier eMMC
 backups continue (ADR-0008) and every offsite command exits "not activated". Activation steps,
 account authorization, credentials and recovery keys: `docs/operations/offsite-backups.md`.
 

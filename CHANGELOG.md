@@ -23,6 +23,10 @@
   `docs/operations/offsite-backups.md` (authorization, credentials, recovery keys, activation).
 - CI installs rclone on Linux and requires the real rclone round trip there.
 - ADR-0008, ADR-0011 and ADR-0012 accepted by the owner (2026-10-12 20:04 UTC).
+- Review fixes: a quarantine whose records retention deleted is retired (`HISTORY_QUARANTINE_RETIRED`)
+  so reused ids are neither flagged nor deleted; alarm occurrences refreshed by the wrong clock are
+  quarantined too; activation requires the cloud remote; a read-back error from the card is recorded
+  as `VERIFY_FAILED`.
 - Owner choices for off-device backups recorded in `docs/operations/offsite-backups.md`: 64 GB ext4
   card, the shared folder in a colleague's personal OneDrive (with setup steps for a shared folder),
   a sealed printed key copy, and the 7 / 30 + 12 copy policy. Still not activated.

@@ -302,6 +302,14 @@ def test_failed_creation_or_verification_keeps_earlier_backups(env, monkeypatch)
     listed = [p.name for p in backup_mod.list_backups(env.bdir)]
     assert good in listed and len([n for n in listed if n.endswith(".sql.gz")]) == 1
     assert len(list(env.bdir.glob("*.bad"))) == 1
+    # the card disappears during the read-back: recorded as a failure, not an exception out of the timer
+    def gone(p, **k):
+        raise FileNotFoundError(p)
+    monkeypatch.setattr(offsite_mod, "verify_backup", gone)
+    r = env.off.backup()
+    assert r["code"] == "VERIFY_FAILED" and "FileNotFoundError" in r["error"]
+    assert env.off.store.status()["last_backup"]["code"] == "VERIFY_FAILED"
+    assert good in [p.name for p in backup_mod.list_backups(env.bdir)] and len(env.off.store.queue()) == 1
     monkeypatch.undo()
     # card full
     env.probe.free[str(env.sd.resolve())] = 1024
@@ -412,6 +420,9 @@ def test_not_activated_until_owner_confirms(cfg24, tmp_path):
         off.backup()
     with pytest.raises(ValueError):
         OffsiteBackupSettings(enabled=True)
+    with pytest.raises(ValueError, match="cloud.remote"):          # no card-only activation
+        OffsiteBackupSettings.model_validate({"enabled": True, "sd_card": {
+            "mount_path": "/media/aquacrop-sd", "filesystem_uuid": UUID, "volume_id": "vol_0123456789abcdef"}})
 
 
 def test_monitor_copies_journal_once_and_raises_alarms(env):

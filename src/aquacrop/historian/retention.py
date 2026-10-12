@@ -36,7 +36,7 @@ from pathlib import Path
 
 from .. import __version__
 from .backup import _sha256
-from .quarantine import QUARANTINE_EVENT
+from .quarantine import QUARANTINE_EVENT, REGISTER_KINDS, RETIRED_EVENT, QuarantineRegister
 from .schema import utc_iso
 
 SAMPLE_COLS = ["id", "point_id", "acquired_utc", "persisted_utc", "sequence", "quality", "reason", "raw_value",
@@ -186,7 +186,7 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
         return {"dry_run": True, "cutoff_utc": cutoff, "quarantined_rows_kept": kept,
                 "expired_quarantines": [x.quarantine_id for x in expired_q], "would_delete": {
             "samples": q("SELECT count(*) FROM samples WHERE acquired_utc < ?" + xs, xs_a),
-            "events": q(f"SELECT count(*) FROM events WHERE utc < ? AND kind != '{QUARANTINE_EVENT}'" + xe, xe_a),
+            "events": q(f"SELECT count(*) FROM events WHERE utc < ? AND kind NOT IN {REGISTER_KINDS!r}" + xe, xe_a),
             "commands": q("SELECT count(*) FROM commands WHERE intent_utc < ? AND outcome NOT IN "
                           "('ACCEPTED','EXECUTING')" + xm, xm_a),
             "alarm_occurrences": q("SELECT count(*) FROM alarm_occurrences WHERE closed=1 AND updated_utc < ?"),
@@ -210,16 +210,20 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
             for t, col in (("samples", "id"), ("events", "id"), ("commands", "rowid")):
                 if t in xq.ranges:
                     lo, hi = xq.ranges[t]
+                    # lowest ids first: the highest id of the range stays until the last chunk, so new rows
+                    # cannot reuse ids inside the range before the quarantine is retired below
                     _chunks(hist, f"DELETE FROM {t} WHERE {col} IN (SELECT {col} FROM {t} WHERE {col} BETWEEN ? AND ? "
-                                  f"AND {col} NOT IN (SELECT id FROM events WHERE kind='{QUARANTINE_EVENT}') LIMIT ?)"
+                                  f"AND kind NOT IN {REGISTER_KINDS!r} ORDER BY {col} LIMIT ?)"
                             if t == "events" else
-                            f"DELETE FROM {t} WHERE {col} IN (SELECT {col} FROM {t} WHERE {col} BETWEEN ? AND ? LIMIT ?)",
+                            f"DELETE FROM {t} WHERE {col} IN (SELECT {col} FROM {t} WHERE {col} BETWEEN ? AND ? "
+                            f"ORDER BY {col} LIMIT ?)",
                             (lo, hi), chunk_rows, guard=guard, into=d, key=t)
             if "cycles" in xq.ranges:
                 lo, hi = xq.ranges["cycles"]
                 _chunks(hist, "DELETE FROM cycles WHERE cycle_pk IN (SELECT cycle_pk FROM cycles WHERE cycle_pk "
                               "BETWEEN ? AND ? AND NOT EXISTS (SELECT 1 FROM samples s WHERE s.cycle_pk=cycles.cycle_pk) "
-                              "LIMIT ?)", (lo, hi), chunk_rows, guard=guard, into=d, key="cycles")
+                              "ORDER BY cycle_pk LIMIT ?)", (lo, hi), chunk_rows, guard=guard, into=d, key="cycles")
+            _retire(hist, xq)
         live = [x for x in reg.items if x not in expired_q]
         xs, xs_a = _excl(live, "samples", "id")
         xc, xc_a = _excl(live, "cycles", "cycle_pk")
@@ -246,8 +250,8 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
             d["cycles"] += n
             if n < chunk_rows:
                 break
-        _chunks(hist, f"DELETE FROM events WHERE id IN (SELECT id FROM events WHERE utc < ? AND kind != "
-                      f"'{QUARANTINE_EVENT}'" + xe + " ORDER BY utc LIMIT ?)", (cutoff,) + xe_a, chunk_rows,
+        _chunks(hist, f"DELETE FROM events WHERE id IN (SELECT id FROM events WHERE utc < ? AND kind NOT IN "
+                      f"{REGISTER_KINDS!r}" + xe + " ORDER BY utc LIMIT ?)", (cutoff,) + xe_a, chunk_rows,
                 guard=guard, into=d, key="events")
         _chunks(hist, "DELETE FROM commands WHERE request_id IN (SELECT request_id FROM commands "
                       "WHERE intent_utc < ? AND outcome NOT IN ('ACCEPTED','EXECUTING')" + xm +
@@ -277,6 +281,19 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     elif stopped:
         hist.event("RETENTION_DEFERRED", res, actor="system")
     return res
+
+
+def _retire(hist, xq) -> None:
+    """Record that an expired quarantine's records are gone, so its id ranges stop applying (ids can be
+    reused once the highest rows of a table are deleted). The register event itself is kept."""
+    def op(c):
+        c.execute("INSERT INTO events(utc,kind,actor,session_id,payload_json) VALUES(?,?,?,?,?)",
+                  (utc_iso(), RETIRED_EVENT, "system", hist.session_id, json.dumps(
+                      {"quarantine_id": xq.quarantine_id, "ranges": {t: list(r) for t, r in xq.ranges.items()},
+                       "note": "the quarantined records left the retention window and were deleted; their id "
+                               "ranges no longer mark records"})))
+        hist.quarantines = QuarantineRegister.load(c)
+    hist.submit(op, wait=True, timeout=120)
 
 
 def _excl(items, table: str, col: str) -> tuple[str, tuple]:

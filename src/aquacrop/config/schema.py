@@ -275,6 +275,9 @@ class OffsiteBackupSettings(_Strict):
         if self.enabled and not (sd.mount_path and sd.filesystem_uuid and sd.volume_id):
             raise ValueError("offsite_backup.enabled needs the confirmed SD card: sd_card.mount_path, "
                              "filesystem_uuid and volume_id (see `offsite enroll-card`)")
+        if self.enabled and not self.cloud.remote:
+            raise ValueError("offsite_backup.enabled needs the encrypted cloud copy: cloud.remote (an rclone crypt "
+                             "remote) and cloud.rclone_config; there is no card-only mode")
         if sd.mount_path is not None and not (sd.mount_path.startswith("/") or os.path.isabs(sd.mount_path)):
             raise ValueError("sd_card.mount_path must be an absolute path")
         for sub in (sd.backup_subdir, sd.drill_subdir):
