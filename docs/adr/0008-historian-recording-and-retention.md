@@ -86,7 +86,7 @@ commit. The allowance is therefore:
 
 | WAL state | Allowance | Basis |
 |---|---|---|
-| Between automatic checkpoints | about 6 MiB | measured maximum ⟪WAL_MAX_MIB⟫ MiB over 400 days (*Measurements*) |
+| Between automatic checkpoints | about 6 MiB | measured maximum 5.6 MiB over 400 days (*Measurements*) |
 | At rest after a reset | ≤ 64 MiB | `journal_size_limit` |
 | Transient, while a long reader holds it | ≤ 1 GiB | `wal_reader_abort_bytes`; the backup aborts there |
 
@@ -138,7 +138,7 @@ internet time. No time source is assumed. Retention deletes only while the clock
 
 Anything else holds deletion and raises `RETENTION_HELD` (WARNING) with the reason. The 30-day
 threshold of the first version is gone: it missed smaller jumps. Holding only keeps more history
-(about ⟪GROWTH_MB_DAY⟫ MB a day).
+(about 23.8 MB a day).
 
 **Release.** Acknowledging the alarm only records the acknowledgement. Deletion resumes only when an
 administrator confirms the proposed cutoff: Settings (or `GET /api/retention`) shows the reason, the
@@ -202,16 +202,16 @@ otherwise. The off-device backup destination, still an owner decision, is shown 
 
 ## Measurements (desktop, 2026-10-12)
 
-Reproduction, environment and raw output: `docs/operations/measurements/` (⟪MEAS_MD⟫). Both scripts
+Reproduction, environment and raw output: `docs/operations/measurements/` (`2026-10-12-measurements.md`). Both scripts
 create their own scratch database; nothing touches an installation.
 
 ```text
 python scripts/measure_storage.py --days 400 --inventory 48 --out OUT            # seed 1
 python scripts/measure_storage.py --days 30 --inventory 24 --out OUT24
-python scripts/stress_concurrency.py --db OUT/measure.sqlite3 --out OUT/stress
+python scripts/stress_concurrency.py --db OUT/measure.sqlite3 --out OUT/stress --backlog-days 14
 ```
 
-Environment: ⟪ENV⟫. Commit ⟪COMMIT⟫ (script checksums in the reports).
+Environment: Python 3.13.16, SQLite 3.45.1, Linux-6.18.44-fc-v114-x86_64 (Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB RAM, ext4); pydantic 2.14.0, FastAPI 0.143.0, pymodbus 3.11.3. Commit `5314251` (script checksums in the reports).
 
 **Workload** through the real write path, on a simulated timeline ending at the run's start: complete
 snapshots of 48 points every 60 s; 20 state changes per digital input per day; 200 operator commands
@@ -222,44 +222,46 @@ server's hourly bounded retention. Values are random walks.
 
 | Quantity | Measured |
 |---|---|
-| Growth while the window fills | ⟪GROWTH_MB_DAY⟫ MB (⟪GROWTH_MIB_DAY⟫ MiB) per day, linear |
-| Database file after 365 days | ⟪DB365⟫ GiB |
-| Database file after 400 days (window full, pruned hourly) | ⟪DB400⟫ GiB (⟪DB_DELTA⟫ in the 35 days after the window filled) |
-| Rows at day 400: samples, events, commands, alarm occurrences | ⟪ROWS400⟫ |
-| WAL: largest seen at the hourly samples / at rest after close | ⟪WAL_MAX_MIB⟫ MiB / ⟪WAL_REST⟫ |
-| Bytes the process wrote to storage over 400 days | ⟪WRITTEN⟫ |
-| Compressed backup of the one-year database | ⟪BK_GIB⟫ GiB (⟪BK_RATIO⟫ times smaller), written and verified in ⟪BK_MIN⟫ min |
-| Quick verification (checksum, stream, row counts) | ⟪QV_S⟫ s |
-| Restore drill (restore to scratch, integrity, foreign keys, schema, counts, fingerprints, application start-up) | ⟪DRILL⟫ |
-| 24 points, 30 days (same workload rates) | ⟪M24⟫ |
+| Growth while the window fills | 23.8 MB (22.7 MiB) per day, linear |
+| Database file after 365 days | 8.10 GiB |
+| Database file after 400 days (window full, pruned hourly) | 8.11 GiB (+12 MiB in the 35 days after the window filled) |
+| Rows at day 400: samples, events, commands, alarm occurrences | 25,228,800; 198,590; 73,000; 8,493 |
+| WAL: largest seen at the hourly samples / at rest after close | 5.6 MiB / 0 bytes |
+| Bytes the process wrote to storage over 400 days | 83 GiB, about 0.21 GiB a day (9 times the daily growth of the file) |
+| Compressed backup of the one-year database | 0.49 GiB (16.6 times smaller), written and verified in 5.8 min |
+| Quick verification (checksum, stream, row counts) | 44 s |
+| Restore drill (restore to scratch, integrity, foreign keys, schema, counts, fingerprints, application start-up) | passed in 9.1 min (7.83 GiB restored, 9.73 GiB scratch required; integrity ok, 0 foreign-key violations, schema 2, application start-up ok) |
+| 24 points, 30 days (same workload rates) | 12.0 MB (11.4 MiB) per day, about 4.1 GiB a year; backup 16.4 times smaller; restore drill passed |
 
 The bytes written are what the measurement process sent to the storage layer (WAL, checkpoints,
 page rewrites, retention deletes) on a desktop file system. They are not eMMC endurance evidence: the
 eMMC's own write amplification is unknown, and endurance is assessed in CP-00.
 
 **Concurrency stress (R1 evidence)** on the 400-day database, in real time: snapshots at 1 per
-second (60 times the approved rate), ⟪ST_EVENTS⟫ events a second with a burst of ⟪ST_BURST⟫ a second for
-⟪ST_BURST_S⟫ s and an alarm storm on every analog point, a command every 2 s; during it a consistent
-backup, year-range readers and a retention run catching up a 7-day backlog.
+second (60 times the approved rate), 5 events a second with a burst of 100 a second for
+60 s and an alarm storm on every analog point, a command every 2 s; during it a consistent
+backup, year-range readers and a retention run catching up a 14-day backlog.
 
 | Quantity | Result |
 |---|---|
-| Backup | ⟪ST_BACKUP⟫ |
-| Year-range readers | ⟪ST_READERS⟫ |
-| Retention catch-up | ⟪ST_RET⟫ |
-| Largest WAL / at rest afterwards | ⟪ST_WAL⟫ |
-| Lowest free space (drop during the run) | ⟪ST_FREE⟫ |
-| Snapshots scheduled / written; lateness p99 / max | ⟪ST_SNAP⟫ |
-| Writer round trip p99 / max; command intent p99 / max | ⟪ST_LAT⟫ |
-| Status read p99 / max | ⟪ST_STATUS⟫ |
-| Events and commands lost | ⟪ST_LOST⟫ |
+| Backup | published after 5.9 min (0.48 GiB, verified before publishing; largest WAL it saw 377 MiB) |
+| Year-range readers | trend, 16 points over a year (API limit): 5.8 s; CSV export page of 200,000 rows: 6.6 s; unbounded full-table aggregate (not an API path): 60.5 s |
+| Retention catch-up | 6 runs, 499,756 rows deleted in 108 transactions; run 1: 494,165 rows, stopped (100 delete transactions in this run); run 2: 0 rows, stopped (WAL 273 MiB above 256 MiB: a long reader is holding it back); run 3: 0 rows, stopped (WAL 304 MiB above 256 MiB: a long reader is holding it back); run 4: 0 rows, stopped (WAL 330 MiB above 256 MiB: a long reader is holding it back); run 5: 0 rows, stopped (WAL 357 MiB above 256 MiB: a long reader is holding it back); run 6: 5,591 rows, finished |
+| Largest WAL / at rest afterwards | 377 MiB (246 s above the 256 MiB warning) / 64 MiB after the readers ended, 0 bytes after close |
+| Lowest free space (drop during the run) | 19.37 GiB (869 MiB) |
+| Snapshots scheduled / written; lateness p99 / max | 485 / 485; 1.1 ms / 2.2 ms |
+| Writer round trip p99 / max; command intent p99 / max | 4.7 ms / 813 ms; 23 ms / 547 ms |
+| Status read p99 / max | 2.5 ms / 6.9 ms |
+| Events and commands lost | 0 of 8,398 events; 0 of 241 commands without outcome or refused |
+
+The first stress run (commit `c7b2ca6`) found a defect: the capacity check that runs on every poll read the oldest and newest sample times in one `SELECT min(), max()`, which SQLite answers with a full index scan, 2.4 s on the one-year database. Two threads calling it kept a reader open almost continuously, the WAL could not reset and grew past 630 MiB, and retention deferred itself every time. That run was stopped. Commit `bbe528f` splits the query into two indexed lookups (0.3 ms) and a test now checks the query plan of every per-poll status query. The results above are from the rerun after the fix, on the same database; the stopped run had already pruned part of the backlog, so the rerun moved the clock 14 days ahead and the table gives what retention actually deleted.
 
 Timings are from an x86 desktop; the CM4 and its eMMC will be slower, and growth, backup time, WAL
 behaviour and free space are to be verified on the device in CP-00 (`storage report`,
 `measure_storage.py --days 7`, `stress_concurrency.py`).
 
 Sizes: the owner's benchmark of about 7.93 GiB/year for periodic samples is consistent with this
-measurement. Real signals should change the size little (inferred: a sample row averages ⟪ROW_B⟫
+measurement. Real signals should change the size little (inferred: a sample row averages 345
 bytes in the database, of which the value takes 8). At 300 s the year would be about one fifth.
 
 ## Budget (32 GB eMMC, CM4004032)
@@ -273,20 +275,20 @@ CP-00.
 | OS, Python runtime and packages | 4.0 GiB | estimate; to be verified in CP-00 |
 | Current and previous release, wheelhouse | 1.0 GiB | estimate |
 | System journal | 0.2 GiB | `journald-aquacrop.conf` (`SystemMaxUse=200M`) |
-| Historian database (`db_budget_bytes`) | 10.0 GiB | ⟪DB400⟫ GiB measured for a full window with the workload above, plus room for more traffic |
+| Historian database (`db_budget_bytes`) | 10.0 GiB | 8.11 GiB measured for a full window with the workload above, plus room for more traffic |
 | SQLite WAL | 1.0 GiB | ≤ 64 MiB at rest; up to 1 GiB transient while a long reader holds it (`wal_reader_abort_bytes`) |
-| Local backups (7 kept + 1 being written) | ⟪BK_BUDGET⟫ GiB | 8 × ⟪BK_GIB⟫ GiB measured, plus margin; the start check keeps up to ⟪BK_EST⟫ GiB free for the one being written |
+| Local backups (7 kept + 1 being written) | 4.5 GiB | 8 × 0.49 GiB measured, plus margin; the start check keeps up to 2.0 GiB free for the one being written |
 | Free-space reserve (`free_space_reserve_bytes`) | 2.0 GiB | below it, starts, ON commands and backups are refused |
-| **Total** | **⟪TOTAL⟫ GiB** | about ⟪UNALLOC⟫ GiB of the 26.5 GiB left unallocated |
+| **Total** | **22.7 GiB** | about 3.8 GiB of the 26.5 GiB left unallocated |
 
-Expected free space once the window is full, with 7 backups: about ⟪FREE_FULL⟫ GiB (warning below
+Expected free space once the window is full, with 7 backups: about 10 GiB (warning below
 4 GiB, reserve 2 GiB, snapshot floor 512 MiB). Not in the budget, because they need a separate
-scratch destination: the restore drill and a restore (⟪SCRATCH⟫ GiB for a full window) and the safety
+scratch destination: the restore drill and a restore (9.7 GiB for a full window) and the safety
 copy before a future schema migration (the same).
 
-For comparison, the superseded 2 GiB limit: at ⟪GROWTH_MIB_DAY⟫ MiB a day, 60 days take about
-⟪D60⟫ GiB and 2 GiB holds about ⟪D2G⟫ days. Keeping 7 uncompressed copies of the database would need
-about ⟪UNCOMP⟫ GiB, which is why backups are compressed.
+For comparison, the superseded 2 GiB limit: at 22.7 MiB a day, 60 days take about
+1.33 GiB and 2 GiB holds about 90 days. Keeping 7 uncompressed copies of the database would need
+about 57 GiB, which is why backups are compressed.
 
 ## Consequences
 
@@ -299,7 +301,7 @@ about ⟪UNCOMP⟫ GiB, which is why backups are compressed.
 - An off-device backup destination is still an owner decision; local copies do not protect against
   loss of the eMMC. The same destination (or a USB disk) is needed as scratch space for the monthly
   restore drill.
-- A future schema migration takes a full-size safety copy first (about ⟪DB400⟫ GiB once the window is
+- A future schema migration takes a full-size safety copy first (about 8.11 GiB once the window is
   full, plus 20 %). That does not fit on the eMMC beside a full window while keeping the reserve, so
   such a migration refuses to start until scratch space is provided or its safety copy is switched to
   the compressed format. This update has no migration.

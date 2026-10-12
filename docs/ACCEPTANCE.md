@@ -2,11 +2,10 @@
 
 **Environment:** Linux x86_64 container, Python 3.13.16 (also 3.11.15 and 3.12.13), pymodbus
 3.11.3, FastAPI 0.143, SQLite WAL. **Run:** 2026-10-12 (historian update, ADR-0008), software
-0.2.0.dev0, tested at commit `680baca` (only documentation changed after). The 2026-10-11 run was at `0ce4842` (183 tests).
-**Results:** `python -m pytest`: 212 passed on 3.13 locally and on 3.11, 3.12 and 3.13 in GitHub CI; `pip check` clean.
+0.2.0.dev0, tested at commit `bbe528f` (only documentation changed after). The 2026-10-11 run was at `0ce4842` (183 tests).
+**Results:** `python -m pytest`: 251 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
 `demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`. Installed-wheel check
-(`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement (`scripts/measure_storage.py
---days 400`): `operations/measurements/2026-10-12-storage-48pt-60s-400d.json`.
+(`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
 
 The acceptance IDs are this project's own (`docs/IMPLEMENTATION_PLAN.md`); the owner's
 `ACCEPTANCE_TEST_PLAN.md` was never supplied, so no cross-mapping exists.
@@ -82,7 +81,7 @@ NOT RUN (could run, has not).
 ## Historian recording, retention and backups (owner requirements of 2026-10-12, ADR-0008 revised after the owner review)
 
 Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`, `test_backup.py`,
-`test_api.py`, `test_historian.py`). Desktop measurements: `operations/measurements/` (⟪MEAS_MD⟫).
+`test_api.py`, `test_historian.py`). Desktop measurements: `operations/measurements/` (`2026-10-12-measurements.md`).
 
 | ID | Status | Evidence |
 |---|---|---|
@@ -102,7 +101,7 @@ Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`
 | AT-RET-02 pruning in batches through the writer; dry run and `DEMO` delete nothing | PASS | `test_prune_runs_in_small_batches`, `test_dry_run_and_demo_policy_delete_nothing`, `test_demo_policy_never_holds_or_deletes` |
 | AT-RET-03 over budget never deletes inside the window | PASS | `test_over_budget_is_a_warning_and_nothing_inside_the_window_is_deleted` |
 | AT-RET-04 clock trust at start and while running catches small jumps either way, also for a history without snapshots (R4) | PASS | `test_start_check_catches_small_jumps[...]` (40 min restart trusted, 2 h downtime held, 3 min behind tolerated, 10 min behind held), `test_clock_steps_while_running[...]` (±2 min trusted, ±10 min held), `test_retention_holds_for_a_history_without_snapshots` |
-| AT-RET-05 size levels off once the window is full (freed pages reused) | PASS (desktop) | ⟪AT_RET05⟫ |
+| AT-RET-05 size levels off once the window is full (freed pages reused) | PASS (desktop) | `measure_storage.py --days 400`: 8.10 GiB at day 365, 8.11 GiB at day 400; samples 25,228,800 at day 365 and 25,228,800 at day 400 |
 | AT-RET-06 a hold is released only by an administrator confirming the shown cutoff, audited; acknowledging the alarm does not release it; the command line follows the same rule (R4) | PASS | `test_hold_after_downtime_is_released_only_by_confirming_the_cutoff`, `test_retention_hold_is_released_by_an_admin_confirmation_not_by_an_alarm_ack`, `test_cli_retention_apply_deletes_only_with_the_confirmed_cutoff`; headless Chromium: Settings shows the hold and proposal, the release button stays disabled until the date check is ticked, release recorded as `RETENTION_CLOCK_CONFIRMED` by the administrator |
 | AT-RET-07 forward and backward clock corrections never delete current-window records (R4) | PASS | `test_forward_jump_protects_current_window_records`, `test_clock_steps_while_running[-600-CLOCK_STEP_BACKWARD]` |
 | AT-RET-08 registers: process sessions and runs pruned only when nothing refers to them; the running session never (R4) | PASS | `test_process_and_run_registers_are_pruned_only_when_nothing_refers_to_them` |
@@ -110,7 +109,7 @@ Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`
 | AT-WAL-02 retention runs are bounded and wait while the WAL is held, keeping partial counts (R1) | PASS | `test_pruning_is_bounded_and_waits_while_the_wal_is_held` |
 | AT-WAL-03 long readers are bounded: the backup aborts on WAL growth; export, audit export and analytics are capped (R1) | PASS | `test_wal_growth_cancels_the_long_reader`, `test_csv_export_escapes_and_discloses_completeness` |
 | AT-WAL-04 the acquisition loop's storage check never waits behind a user query (R1) | PASS | `test_capacity_check_does_not_wait_behind_a_long_user_query` |
-| AT-WAL-05 concurrent acquisition, events, commands, backup, year-range readers and retention: WAL, free space and responsiveness (R1) | PASS (desktop) | ⟪AT_WAL05⟫ |
+| AT-WAL-05 concurrent acquisition, events, commands, backup, year-range readers and retention: WAL, free space and responsiveness (R1) | PASS (desktop) | `stress_concurrency.py` on the 400-day database: backup published after 5.9 min (0.48 GiB, verified before publishing; largest WAL it saw 377 MiB); largest WAL 377 MiB; snapshots 485 / 485; 1.1 ms / 2.2 ms; command intent p99/max 23 ms / 547 ms; lost: 0 of 8,398 events; 0 of 241 commands without outcome or refused |
 | AT-CAP-01 low disk, reserve, snapshot floor and write failure have defined effects | PASS | `test_capacity_levels_low_disk_reserve_and_snapshot_floor`, `test_write_failure_is_critical_and_inhibits_starts` |
 | AT-CAP-02 capacity visible: projection, thresholds, growth, WAL, snapshot gaps, DEMO growth, off-device state | PASS | `test_projection_of_the_365_day_size_is_reported`, `test_backup_state_shows_off_device_unconfigured_and_restore_drill_due`, `storage report`; headless Chromium: Overview storage line, Settings storage, retention and backup cards |
 | AT-BAK-01 compressed backup verifies and restores to a new instance; text byte-exact (quotes, CR, LF, non-ASCII) | PASS | `test_compressed_backup_verifies_and_restores_to_a_new_instance` |
@@ -118,12 +117,12 @@ Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`
 | AT-BAK-03 consistent while the historian keeps writing; manifest and dump share one snapshot (R3) | PASS | `test_backup_is_consistent_while_the_historian_keeps_writing`, `test_concurrent_backups_restore_to_their_own_snapshot` |
 | AT-BAK-04 rotation only after publication; refused when it would eat the reserve | PASS | `test_rotation_keeps_newest_and_leaves_other_copies`, `test_backup_refused_when_it_would_eat_the_reserve`, `test_cli_backup_keep_and_refusal` |
 | AT-BAK-05 earlier single-file backups still verify and restore | PASS | `test_single_file_backups_remain_verifiable_and_restorable` |
-| AT-BAK-06 backup, verification and restore drill of a one-year database | PASS (desktop) | ⟪AT_BAK06⟫ |
+| AT-BAK-06 backup, verification and restore drill of a one-year database | PASS (desktop) | `measure_storage.py`: 8.11 GiB database, 0.49 GiB backup written and verified in 5.8 min, quick verification 44 s, restore drill passed in 9.1 min (7.83 GiB restored, 9.73 GiB scratch required; integrity ok, 0 foreign-key violations, schema 2, application start-up ok) |
 | AT-BAK-07 a backup that fails verification publishes nothing and keeps earlier backups (R3) | PASS | `test_failed_verification_publishes_nothing_and_keeps_earlier_backups` |
 | AT-BAK-08 running out of space while writing, an interrupted backup and stale partials leave nothing behind (R3) | PASS | `test_running_out_of_space_while_writing_aborts_cleanly`, `test_interrupted_backup_leaves_nothing_behind`, `test_stale_partials_and_unpublished_files_are_never_listed_and_get_cleaned` |
 | AT-BAK-09 restore drill: integrity, foreign keys, schema, counts, values and application start-up; needs scratch space and keeps the reserve; writes a report (R3) | PASS | `test_restore_drill_catches_tampering_that_keeps_counts_and_checksum`, `test_restore_drill_needs_scratch_space_and_keeps_the_reserve`, `test_cli_restore_drill_writes_a_report` |
 | AT-BAK-10 the safety copy before a migration needs room for the whole database (R3) | PASS | `test_safety_copy_before_a_migration_needs_room_for_the_whole_database` |
-| AT-STO-01 growth at 60 s, 365-day size and budget, with environment and workload recorded (R5) | PASS (desktop) | ⟪AT_STO01⟫ |
+| AT-STO-01 growth at 60 s, 365-day size and budget, with environment and workload recorded (R5) | PASS (desktop) | 23.8 MB/day; 8.10 GiB at 365 days with commands, alarms and faults; budget 10 GiB database, 1 GiB transient WAL, 4.5 GiB backups (ADR-0008); environment, commit, command and seed in the report; 24 points: 12.0 MB (11.4 MiB) per day, about 4.1 GiB a year; backup 16.4 times smaller; restore drill passed |
 | AT-STO-02 growth, backup time, WAL and free space on the CM4 eMMC | BLOCKED | needs the CM4; part of CP-00 (`storage report`, `measure_storage.py --days 7`, `stress_concurrency.py`) |
 
 ## Milestone 5: hardware arrival

@@ -18,7 +18,7 @@
   trusted, otherwise held until an administrator confirms the cutoff; edges, alarm transitions,
   commands and configuration changes recorded when they happen; WAL, capacity, snapshot gaps,
   retention and backup state visible in the UI and `storage report`; backups published only after
-  verification, with a restore drill. Measured ⟪DB400⟫ GiB for one year of 48 points under a
+  verification, with a restore drill. Measured 8.11 GiB for one year of 48 points under a
   workload with commands, alarms and faults (ADR-0008, revised after the owner's review).
 
 ## What changed from v0.1
@@ -29,7 +29,7 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-⟪NTESTS⟫ tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and
+251 tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and
 the installed wheel passes 13/13 from outside the repository. A simulated 400-day history at 60 s
 with commands, alarms and device faults measured the one-year size, the rolling window, the WAL,
 the compressed backup and the restore drill; a concurrency stress run measured the WAL and

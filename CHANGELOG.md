@@ -46,6 +46,9 @@
   `scripts/stress_concurrency.py` (WAL and responsiveness under long readers).
 
 ### Fixed
+- The capacity check on every poll read the oldest and newest sample times with one full index
+  scan (2.4 s on a one-year database), which kept the WAL from resetting and deferred retention;
+  it now uses two indexed lookups. Found by the concurrency stress run.
 - Text files are read and written as UTF-8 on every platform (Windows CI failure on `main`), and
   backups keep CR/LF inside text values unchanged.
 
