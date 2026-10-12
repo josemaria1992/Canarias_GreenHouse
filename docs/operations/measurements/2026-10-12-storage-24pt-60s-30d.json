@@ -1,0 +1,209 @@
+{
+  "environment": {
+    "utc_started": "2026-10-12T13:11:16+00:00",
+    "command": [
+      "/home/claude/.venv/bin/python",
+      "scripts/measure_storage.py",
+      "--days",
+      "30",
+      "--inventory",
+      "24",
+      "--out",
+      "/tmp/claude-0/evidence/m24"
+    ],
+    "seed": 1,
+    "script": {
+      "path": "scripts/measure_storage.py",
+      "sha256": "ef5e9daf0cc38d7adb1946819a540e646e4c87ce9118ee84c731d437815668ae"
+    },
+    "git": {
+      "commit": "c1ca943233b1e3940080241c01569895756bef6f",
+      "branch": "historian-60s-365d",
+      "dirty": false
+    },
+    "python": "3.13.16",
+    "python_implementation": "CPython",
+    "sqlite_library": "3.45.1",
+    "os": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cpu_count": 4,
+    "memory_bytes": 16874930176,
+    "filesystem": {
+      "device": "/dev/vda",
+      "mount": "/",
+      "type": "ext4"
+    },
+    "packages": {
+      "pydantic": "2.14.0",
+      "fastapi": "0.143.0",
+      "starlette": "1.7.0",
+      "uvicorn": "0.54.0",
+      "pymodbus": "3.11.3",
+      "PyYAML": "6.0.3",
+      "aquacrop": "0.2.0.dev0"
+    }
+  },
+  "workload": {
+    "points": 24,
+    "inventory": 24,
+    "interval_s": 60,
+    "days": 30.0,
+    "timeline_utc": [
+      "2026-09-12T13:11:00+00:00",
+      "2026-10-12T13:11:00+00:00"
+    ],
+    "edges_per_digital_point_per_day": 20.0,
+    "commands_per_day": 200.0,
+    "alarms_per_day": 24.0,
+    "device_fault": {
+      "every_days": 7,
+      "minutes": 30,
+      "device": "analog_A",
+      "chatter_edges_per_fault": 200
+    },
+    "retention": {
+      "days": 365,
+      "run": "hourly",
+      "max_transactions": 100,
+      "wal_limit_bytes": 268435456
+    },
+    "generated": {
+      "commands": 6000,
+      "alarms_raised": 720,
+      "device_faults": 4,
+      "chatter_edges": 800,
+      "retention_runs_stopped_early": 0
+    }
+  },
+  "checkpoints": [
+    {
+      "day": 1,
+      "db_bytes": 11952128,
+      "used_bytes": 11952128,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 4449632,
+      "samples": 34560,
+      "events": 362,
+      "commands": 200,
+      "alarm_occurrences": 24,
+      "process_bytes_written": 94810112,
+      "elapsed_s": 1.8
+    },
+    {
+      "day": 7,
+      "db_bytes": 83611648,
+      "used_bytes": 83611648,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 4688592,
+      "samples": 241920,
+      "events": 2660,
+      "commands": 1400,
+      "alarm_occurrences": 163,
+      "process_bytes_written": 751071232,
+      "elapsed_s": 12.5
+    },
+    {
+      "day": 30,
+      "db_bytes": 359088128,
+      "used_bytes": 359088128,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 4919312,
+      "samples": 1036800,
+      "events": 11349,
+      "commands": 6000,
+      "alarm_occurrences": 684,
+      "process_bytes_written": 3349438464,
+      "elapsed_s": 52.7
+    }
+  ],
+  "final_storage": {
+    "db_bytes": 359088128,
+    "db_file_bytes": 359088128,
+    "wal_bytes": 0,
+    "db_used_bytes": 359088128,
+    "db_reusable_bytes": 0,
+    "oldest_sample_utc": "2026-09-12T13:10:57.164188+00:00",
+    "newest_sample_utc": "2026-10-12T13:09:59.851872+00:00",
+    "history_span_days": 29.99933666300926,
+    "window_full": false,
+    "series": {
+      "WALL": {
+        "cycles": 43200,
+        "sample_rows": 1036800
+      }
+    },
+    "registers": {
+      "process_sessions": 1,
+      "sim_runs": 0,
+      "users": 0,
+      "archives": 0,
+      "migrations": 2,
+      "alarm_occurrences": 684
+    },
+    "last_7_days": {
+      "days_covered": 7.0,
+      "samples": 241921,
+      "events": 2654,
+      "avg_db_bytes_per_sample_row": 346.3427160493827,
+      "estimated_growth_bytes_per_day": 11969653.74419753
+    },
+    "files_before_close": {
+      "db_file_bytes": 359088128,
+      "wal_bytes": 0
+    },
+    "files_after_close": {
+      "db_file_bytes": 359088128,
+      "wal_bytes": 0
+    }
+  },
+  "wal": {
+    "max_observed_bytes": 4919312,
+    "max_observed_day": 16.83,
+    "sampled": "after each hourly batch, before the retention run",
+    "journal_size_limit_bytes": 67108864
+  },
+  "bytes_written": {
+    "process_write_bytes": 3349471232,
+    "process_wchar": 3345347354,
+    "persistent_db_file_bytes": 359088128,
+    "persistent_wal_bytes": 0,
+    "note": "bytes the measurement process sent to storage over the whole run (WAL, checkpoints, page rewrites, retention deletes); a desktop figure, not eMMC endurance evidence"
+  },
+  "backup": {
+    "bytes": 21887411,
+    "seconds": 14.1,
+    "ratio": 16.4,
+    "verified_before_publish": true,
+    "estimate_bytes": 89772032,
+    "quick_verify_ok": true,
+    "quick_verify_seconds": 2.0
+  },
+  "restore_drill": {
+    "ok": true,
+    "integrity": "ok (restored: integrity, foreign keys, schema, counts, fingerprints, application smoke test)",
+    "seconds": 19.5,
+    "restore_seconds": 16.439,
+    "restored_bytes": 347443200,
+    "needed_bytes": 430905753,
+    "facts": {
+      "integrity": "ok",
+      "foreign_key_violations": 0,
+      "schema_version": 2,
+      "user_version": 0,
+      "schema_objects": 19
+    },
+    "smoke": {
+      "ok": true,
+      "schema_version": 2,
+      "migrations_applied": [],
+      "trend_rows": 100,
+      "events_read": 100,
+      "open_alarms": 0,
+      "historian_started": true,
+      "capacity_report_db_bytes": 347451472,
+      "open_alarms_loaded": 0
+    }
+  },
+  "finished_utc": "2026-10-12T13:12:45+00:00"
+}

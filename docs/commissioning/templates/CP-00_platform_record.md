@@ -44,13 +44,17 @@ Serial console disabled on Modbus ports (evidence): ______
 | `timedatectl` output attached | |
 | Time correct after power cycle with network unplugged? | |
 
-## Performance (48 points / 3 s, read-only)
+## Performance (48 points polled every 3 s, snapshots every 60 s, read-only)
 
 | Measure | Actual |
 |---|---|
 | Poll cycle time per bus (s) | |
 | CPU load average (1 h) | |
-| Database growth over 1 h (MiB) | |
+| Snapshots in 1 h (expect 60, `recorder.snapshots` in `/api/status`) | |
+| Database growth over 24 h (MiB; desktop measurement ≈ 22 MiB) | |
+| `storage report`: 365-day projection (GiB) | |
+| Free disk after OS and install (`df -h /var/lib/aquacrop`) | |
+| Backup: time and size; `backup verify --full` time | |
 | `/api/health` all true after 1 h? | |
 
 ## Result

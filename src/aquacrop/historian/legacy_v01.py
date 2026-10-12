@@ -48,7 +48,8 @@ def import_legacy(legacy_db: str | Path, hist: Historian, backup_dir: str | Path
     info = inspect_legacy(legacy_db)
     src = sqlite3.connect(f"file:{legacy_db}?mode=ro", uri=True)
     try:
-        bk = backup_to(src, Path(backup_dir) / f"legacy-v0_1-{utc_iso().replace(':', '')}.sqlite3")
+        bk = backup_to(src, Path(backup_dir) / f"legacy-v0_1-{utc_iso().replace(':', '')}.sqlite3",
+                       reserve_bytes=hist.cfg.historian.free_space_reserve_bytes)
     finally:
         src.close()
     digest = _sha256(bk)

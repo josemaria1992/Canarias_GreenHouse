@@ -77,7 +77,18 @@ class AlarmEngine:
         self.closed_recent: list[AlarmOccurrence] = []
         self.dirty: set[str] = set()
         self._pending_raise: dict[tuple[str, str], _Pending] = {}
-        self._emit = emit or (lambda kind, payload: None)
+        self._sink = emit or (lambda kind, payload: None)
+        self.transitioned = False   # a raise/clear/ack/reset/close happened since the last persist
+
+    def _emit(self, kind: str, payload: dict) -> None:
+        self.transitioned = True
+        self._sink(kind, payload)
+
+    def take_transitioned(self) -> bool:
+        """True once after any state transition: callers persist occurrences immediately on transitions
+        and only refresh still-active ones (last_seen/value) at the snapshot interval."""
+        t, self.transitioned = self.transitioned, False
+        return t
 
     # ------------------------------------------------------------------ restore
     def restore(self, occurrences: list[AlarmOccurrence]) -> None:

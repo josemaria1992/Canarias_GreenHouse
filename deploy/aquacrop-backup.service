@@ -1,5 +1,6 @@
-# One consistent backup (SQLite backup API) with manifest, then verification. Local only;
-# the off-device destination is TBD (owner policy). Runs alongside the server without stopping it.
+# Daily compressed backup (consistent SQL snapshot streamed into gzip, no full-size temporary copy) with
+# manifest, verified before the oldest copies beyond --keep are removed. Local only; the off-device
+# destination is TBD (owner policy). Runs alongside the server without stopping it.
 [Unit]
 Description=AquaCrop historian backup
 After=local-fs.target
@@ -10,8 +11,9 @@ User=aquacrop
 Group=aquacrop
 EnvironmentFile=/etc/aquacrop/aquacrop.env
 WorkingDirectory=/var/lib/aquacrop
-ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop backup create --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop --destination /var/lib/aquacrop/backups
-ExecStartPost=/opt/aquacrop/current/venv/bin/python -m aquacrop backup verify --backup /var/lib/aquacrop/backups
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop backup create --config ${AQUACROP_CONFIG} --state-dir /var/lib/aquacrop --destination /var/lib/aquacrop/backups --keep 7
+Nice=10
+IOSchedulingClass=idle
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict

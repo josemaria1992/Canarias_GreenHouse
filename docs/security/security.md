@@ -90,7 +90,8 @@ refuses that combination on any non-loopback bind.
 
 `secret.key` (session/CSRF HMAC key, created with mode 0600) and the database live in the state
 directory; the systemd unit creates that directory with mode 0700. Back up the database with `backup create`; the secret is not part of backups. Losing it only
-signs everyone out.
+signs everyone out. Backups contain the Argon2id password hashes and are written with mode 0600;
+keep any off-device copy equally private.
 
 ## Not covered by software
 

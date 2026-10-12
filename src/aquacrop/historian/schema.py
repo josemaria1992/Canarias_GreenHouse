@@ -88,8 +88,10 @@ def schema_version(con: sqlite3.Connection) -> int:
     return int(v[0]) if v else 0
 
 
-def migrate(con: sqlite3.Connection, db_path: str | Path | None = None, *, backup_dir: str | Path | None = None) -> list[int]:
-    """Apply pending migrations. If the DB already has data, a consistent backup is taken first."""
+def migrate(con: sqlite3.Connection, db_path: str | Path | None = None, *, backup_dir: str | Path | None = None,
+            reserve_bytes: int = 0) -> list[int]:
+    """Apply pending migrations. If the DB already has data, a consistent full-size safety copy is taken
+    first; it is refused (and nothing migrated) if that copy would take free disk below `reserve_bytes`."""
     from .backup import backup_to
 
     current = schema_version(con)
@@ -101,7 +103,8 @@ def migrate(con: sqlite3.Connection, db_path: str | Path | None = None, *, backu
     has_tables = con.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0] > 0
     if current < CURRENT_VERSION and has_tables and db_path and str(db_path) != ":memory:":
         bdir = Path(backup_dir or Path(db_path).parent / "backups")
-        backup_path = backup_to(con, bdir / f"pre-migrate-v{current}-{utc_iso().replace(':', '')}.sqlite3")
+        backup_path = backup_to(con, bdir / f"pre-migrate-v{current}-{utc_iso().replace(':', '')}.sqlite3",
+                                reserve_bytes=reserve_bytes)
     for v in range(current + 1, CURRENT_VERSION + 1):
         desc, sql = MIGRATIONS[v]
         con.execute("BEGIN IMMEDIATE")

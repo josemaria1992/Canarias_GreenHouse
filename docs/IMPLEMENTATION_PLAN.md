@@ -27,8 +27,9 @@ migration and a `python -m greenhouse` compatibility launcher (AT-MIG-*).
 ## 0.3 Explicitly unresolved (kept `TBD — requires operator confirmation`)
 
 Hydraulic topology, actuator wiring, pump/VFD interface, probe inventory, calibration, production
-recipe, safe-state / cause-and-effect matrix, alarm severities for physical equipment, production
-retention/backup destination, role assignments for physical rights, OS image choice for the CM4.
+recipe, safe-state / cause-and-effect matrix, alarm severities for physical equipment, off-device
+backup destination, role assignments for physical rights, OS image choice for the CM4. (History
+retention was set by the owner on 2026-10-12: 60 s snapshots, rolling 365 days, ADR-0008.)
 None of these block milestones 1–4; they block milestone 5 and any live release.
 
 ## 0.4 Milestone → acceptance mapping
@@ -76,7 +77,7 @@ None of these block milestones 1–4; they block milestone 5 and any live releas
 ### Milestone 4 — packaging / security / operations
 AT-PKG-01 wheel installed outside tree serves UI offline · AT-PKG-02 lockfiles, `pip check` ·
 AT-SEC-02 session expiry/revocation, rate limits, CSV formula escaping, XSS-safe labels ·
-AT-OPS-01 backup via SQLite backup API, verify, restore to new instance · AT-OPS-02 migrations incl.
+AT-OPS-01 backup, verify, restore to new instance · AT-OPS-02 migrations incl.
 v0.1 backup-first · AT-OPS-03 disk budget / full disk ⇒ degraded health, inhibit starts ·
 AT-OPS-04 acquisition-task supervision · AT-OPS-05 systemd unit, CM4/eMMC/UART guide, rollback doc.
 
@@ -91,6 +92,21 @@ more: `docs/architecture/v0_1_findings.md`. Results per acceptance ID: `docs/ACC
 
 ## 0.6 Repository delivery
 
-No GitHub repository is attached yet. Work is committed to a local git repository and mirrored
-(working tree + `git bundle`) into the shared project folder `aquacrop/` so it survives container
-recycling. A bundle can be cloned with `git clone aquacrop.bundle aquacrop`.
+Since 2026-10-12 the code lives at `github.com/josemaria1992/Canarias_GreenHouse` (ADR-0007):
+the delivered history is `main`, later work arrives as pull requests. The shared project folder
+`aquacrop/` (working tree + `git bundle`) is kept as a convenience copy.
+
+### 2026-10-12 historian update (ADR-0008)
+AT-HIS-02 … AT-HIS-09 recording interval, boundaries, separate timing, immediate events, stale
+readings, restart, simulation, no migration · AT-RET-01 … AT-RET-05 rolling window, batches, no
+deletion inside the window, clock guard, one-year steady state · AT-CAP-01/02 low/full disk and
+visible capacity · AT-BAK-01 … AT-BAK-06 compressed backups · AT-STO-01 measured growth (desktop),
+AT-STO-02 on the CM4 (blocked until hardware).
+
+### 2026-10-12 owner review of ADR-0008 (R1 to R5)
+AT-HIS-10 … AT-HIS-13 durable labels, clock steps, simulation pause, optional simulation-time
+series (R2; AT-HIS-03 and AT-HIS-08 revised for wall time) · AT-RET-04 revised, AT-RET-06 …
+AT-RET-08 clock trust, administrator release, protection of the current window, registers (R4) ·
+AT-WAL-01 … AT-WAL-05 WAL reporting, bounded writers and readers, acquisition responsiveness,
+concurrency stress (R1) · AT-BAK-07 … AT-BAK-10 publication after verification, failures and space,
+restore drill, migration safety copy (R3) · AT-STO-01 revised with environment and workload (R5).

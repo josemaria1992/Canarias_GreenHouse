@@ -6,6 +6,11 @@ the configuration version at the moment it runs (CommandService re-validates bef
 
 Starting, polling, reconnecting and stopping send read frames only. Nothing here writes on start,
 on reconnect, on lease expiry or on shutdown.
+
+Polling, edge detection, alarm evaluation and the dashboard keep the bus poll rate. The historian is
+separate: a recorder thread writes one complete snapshot of every point on each wall-clock boundary of
+`historian.recording_interval_s` from what acquisition already holds (it never touches a bus). Edges,
+alarm transitions, commands and outcomes are written when they happen.
 """
 from __future__ import annotations
 
@@ -22,9 +27,10 @@ from ..config.schema import InstallationConfig
 from ..control.alarms import AlarmEngine
 from ..control.bench import BenchGate, close_stale_leases, historian_persistence
 from ..control.commands import CommandService
-from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Outcome, OutputCommand, PointKind, Sample,
-                            new_id, utcnow)
-from ..historian.retention import evaluate_storage_alarm
+from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Origin, Outcome, OutputCommand, PointKind,
+                            Sample, utcnow)
+from ..historian.recording import HistoryRecorder, complete_snapshot, stale_limit_s
+from ..historian.retention import RetentionTask, evaluate_recorder_alarm, evaluate_storage_alarm
 from ..historian.writer import Historian
 from ..io.modbus_backend import ModbusBackend
 from ..io.sampling import AcqContext
@@ -115,7 +121,9 @@ class BusWorker:
 class HardwareService:
     kind = "hardware"
 
-    def __init__(self, cfg: InstallationConfig, hist: Historian, session_id: str, *, monotonic=time.monotonic):
+    def __init__(self, cfg: InstallationConfig, hist: Historian, session_id: str, *, monotonic=time.monotonic,
+                 recording_interval_s: float | None = None, wall=time.time):
+        # recording_interval_s is a test hook only; installations use historian.recording_interval_s.
         self.cfg, self.hist, self.session_id, self._mono = cfg, hist, session_id, monotonic
         self.lock = threading.RLock()
         self.samples: dict[str, Sample] = {}
@@ -135,16 +143,28 @@ class HardwareService:
         self._sync_authorizer()
         self._prev_valid: dict[str, tuple[bool, datetime]] = {}
         self._clock_ref: tuple[float, float] | None = None   # (monotonic, wall epoch) for jump detection
+        self._stale_after = {b.bus_id: stale_limit_s(b.poll_interval_s) for b in cfg.buses}
+        self.recorder = HistoryRecorder(recording_interval_s or cfg.historian.recording_interval_s,
+                                        self.record_snapshot,
+                                        on_event=lambda kind, payload: hist.event(kind, payload, actor="system"),
+                                        high_water=hist.newest_wall_label, wall=wall, monotonic=monotonic)
+        self.retention = RetentionTask(hist, wall=wall, monotonic=monotonic)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
         for w in self.workers.values():
             w.start()
+        self.recorder.start()
 
     def stop(self) -> None:
+        self.recorder.stop()
         for w in self.workers.values():
             w.stop(self._cancel)
         self.backend.close()   # releases ports; sends nothing
+        with self.lock:
+            dirty = self.alarms.take_dirty()
+        if dirty:
+            self.hist.alarms(dirty)
 
     def _ctx(self) -> AcqContext:
         return AcqContext(session_id=self.session_id, cycle_id=f"{self.session_id}:{next(self._cycle)}")
@@ -176,10 +196,10 @@ class HardwareService:
             self.alarms.evaluate_devices(status, None)
             self.alarms.evaluate_samples(self.samples, self._mono(), None)
             evaluate_storage_alarm(self.hist, self.alarms)
-            dirty = self.alarms.take_dirty()
-        cycle_id = got[0].cycle_id if got else new_id("cyc")
-        self.hist.write_cycle(f"{bus_id}:{cycle_id}", got, run_id=None, sim_s=None,
-                              cadence_s=self.cfg.bus(bus_id).poll_interval_s, cadence_basis="WALL")
+            evaluate_recorder_alarm(self.recorder, self.alarms)
+            self.retention.tick(self.alarms)     # clock trust is checked even while snapshots are held
+            # Transitions are written now; refreshes of still-active alarms ride with the snapshot.
+            dirty = self.alarms.take_dirty() if self.alarms.take_transitioned() else []
         if dirty:
             self.hist.alarms(dirty)
         for kind, payload in edges:
@@ -188,6 +208,30 @@ class HardwareService:
         if took > self.cfg.bus(bus_id).poll_interval_s:
             self.hist.event("POLL_OVERRUN", {"bus_id": bus_id, "cycle_s": round(took, 3),
                                              "interval_s": self.cfg.bus(bus_id).poll_interval_s}, actor="system")
+
+    # ------------------------------------------------------------------ historian snapshots
+    def _stale_reason(self, s: Sample, now: datetime) -> str | None:
+        limit = self._stale_after.get(s.bus_id, 9.0)
+        age = (now - s.acquired_utc).total_seconds()
+        if age > limit:
+            return f"stale: last acquired {age:.1f} s before the snapshot (limit {limit:.1f} s)"
+        return None
+
+    def record_snapshot(self, at: datetime, interval_s: float) -> bool:
+        """Runs on the recorder thread at each boundary: copy the latest samples, mark stale or missing
+        points, write one complete cycle. Never touches a bus."""
+        now = datetime.now(timezone.utc)
+        with self.lock:
+            latest = dict(self.samples)
+            evaluate_storage_alarm(self.hist, self.alarms)
+            dirty = self.alarms.take_dirty()
+            self.alarms.take_transitioned()
+        snap = complete_snapshot(self.cfg, latest, now=at, ctx=self._ctx(), origin=Origin.REAL,
+                                 stale_reason=lambda s: self._stale_reason(s, now))
+        stored = self.hist.snapshot(at, snap, interval_s)
+        if dirty:
+            self.hist.alarms(dirty)
+        return stored
 
     def _edges(self, got: list[Sample], interval_s: float) -> list[tuple[str, dict]]:
         """Physical DI/DO edges = differences between consecutive valid observations. The change
@@ -290,11 +334,14 @@ class HardwareService:
 
     def task_health(self) -> dict:
         hs = [w.health() for w in self.workers.values()]
-        return {"state": "RUNNING" if all(h["ok"] for h in hs) else
+        rec = self.recorder.health()
+        rec_ok = rec["ok"] or rec["state"] == "NOT_STARTED"
+        return {"state": "RUNNING" if all(h["ok"] for h in hs) and rec_ok else
                 ("FAILED" if any(h["state"] == "FAILED" for h in hs) else "DEGRADED"),
-                "ok": all(h["ok"] for h in hs), "buses": hs, "restarts": 0,
+                "ok": all(h["ok"] for h in hs) and rec_ok, "buses": hs, "restarts": 0,
                 "last_error": next((h["last_error"] for h in hs if h["last_error"]), None),
-                "heartbeat_age_s": max((h["heartbeat_age_s"] or 0) for h in hs) if hs else None}
+                "heartbeat_age_s": max((h["heartbeat_age_s"] or 0) for h in hs) if hs else None,
+                "recorder": rec, "retention": self.retention.view()}
 
     def relay_mode_view(self) -> dict:
         return {uid: (m.describe() if m is not None else None) for uid, m in self.backend.relay_modes.items()}

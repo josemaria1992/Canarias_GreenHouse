@@ -45,8 +45,9 @@ python -m aquacrop demo verify --config demo-48 --seed 42
 | `serve --config C [--host 127.0.0.1] [--port 8000]` | Serves `SIMULATED` or `HARDWARE_READ_ONLY`; refuses non-loopback plain HTTP |
 | `demo verify --config C --seed 42` | Every scenario preset, determinism, replay, no-serial check |
 | `diagnostics read --config C --device relay_A --cycles 5` | Read-only module inspection on a real bus |
-| `backup create --config C --destination D` / `backup verify --backup B` / `backup restore ...` | SQLite backup API with manifest; restore to a new instance first |
-| `archive create ...` / `archive verify ...` / `retention apply [--dry-run]` | Checksummed exports; pruning only under an approved policy |
+| `backup create --config C --destination D [--keep 7]` / `backup verify --backup B [--full]` / `backup restore ...` | Compressed consistent snapshot with manifest, verified before old copies are rotated; restore to a new instance first |
+| `storage report --config C` | Measured growth, 365-day projection and free-space thresholds (read-only, server may run) |
+| `archive create ...` / `archive verify ...` / `retention apply [--dry-run]` | Checksummed exports; the rolling 365-day window (the server also applies it hourly) |
 | `migrate-v01 --config C --legacy-db greenhouse.sqlite3` | Backup-first import of a v0.1 database |
 | `python -m greenhouse` | v0.1 compatibility launcher (simulation only) |
 

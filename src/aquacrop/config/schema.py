@@ -167,15 +167,52 @@ class AlarmRule(_Strict):
         return self
 
 
+RECORDING_INTERVALS_S = (60, 300)
+GIB = 1024**3
+
+
 class HistorianSettings(_Strict):
+    """What the historian records periodically and how long it keeps it (owner requirements of
+    2026-10-12, ADR-0008). Acquisition (each bus's poll_interval_s), alarm evaluation, control and
+    dashboard updates keep their own timing; events, commands and alarm transitions are written when
+    they happen, independent of the recording interval."""
     db_path: str = "var/aquacrop.sqlite3"
-    acquisition_interval_s: float = Field(default=3.0, ge=0.2)    # real wall-time cadence
-    sim_history_stride_s: float = Field(default=1.0, gt=0)         # simulation-time cadence
-    sim_history_min_wall_interval_s: float = Field(default=0.5, gt=0)  # caps write rate at high speed
-    retention_days: float | None = 7.0      # DEMO proposal; production policy TBD
-    db_budget_bytes: int = 2 * 1024**3
-    free_space_reserve_bytes: int = 1024**3
-    retention_provenance: Literal["DEMO", "APPROVED"] = "DEMO"
+    acquisition_interval_s: float = Field(default=3.0, ge=0.2)    # display hint only; buses own their poll rate
+    # Complete snapshot of every configured point (unchanged values and quality included) every
+    # recording_interval_s of WALL time, in real and simulation profiles alike. 60 s is the owner's
+    # active setting; 300 s is allowed but only on the owner's explicit request.
+    recording_interval_s: int = 60
+    # Optional second recorder for desktop simulation analysis, OFF by default: a complete snapshot every
+    # sim_time_recording_s of SIMULATED time, stored as its own series (cadence_basis SIMULATION_TIME).
+    # Its rows add to the database size; at high speed its cadence is raised so that it never writes
+    # more often than once per sim_time_recording_min_wall_s of wall time.
+    sim_time_recording_s: float | None = Field(default=None, gt=0)
+    sim_time_recording_min_wall_s: float = Field(default=0.5, gt=0)
+    retention_days: int = Field(default=365, ge=365)   # rolling window, owner-approved 2026-10-12
+    retention_provenance: Literal["DEMO", "APPROVED"] = "APPROVED"   # DEMO: nothing is ever deleted
+    retention_check_interval_s: float = Field(default=3600.0, ge=60.0, le=86400.0)
+    db_budget_bytes: int = Field(default=10 * GIB, gt=0)             # planning budget: warns, never deletes
+    free_space_warning_bytes: int = Field(default=4 * GIB, ge=0)     # low disk: WARNING
+    free_space_reserve_bytes: int = Field(default=2 * GIB, ge=0)     # CRITICAL: new starts and ON refused
+    snapshot_floor_bytes: int = Field(default=512 * 1024**2, ge=0)   # periodic snapshots pause below this
+    # WAL: about 64 MiB at rest after a checkpoint reset (journal_size_limit); it grows while a long
+    # reader holds an old snapshot. Above the warning: STORAGE_CAPACITY warning and retention pruning
+    # defers; above the abort size: long readers (backup, restore drill) cancel themselves.
+    wal_warning_bytes: int = Field(default=256 * 1024**2, gt=0)
+    wal_reader_abort_bytes: int = Field(default=1 * GIB, gt=0)
+    backup_keep: int = Field(default=7, ge=1)                        # local compressed backups kept
+    backup_max_seconds: float = Field(default=3 * 3600.0, gt=0)      # a backup running longer aborts
+    restore_drill_interval_days: int = Field(default=30, ge=1)       # full restore drill cadence
+
+    @model_validator(mode="after")
+    def _check(self) -> "HistorianSettings":
+        if self.recording_interval_s not in RECORDING_INTERVALS_S:
+            raise ValueError(f"recording_interval_s must be one of {RECORDING_INTERVALS_S}")
+        if not self.snapshot_floor_bytes <= self.free_space_reserve_bytes <= self.free_space_warning_bytes:
+            raise ValueError("free-space thresholds must satisfy snapshot_floor <= reserve <= warning")
+        if self.wal_warning_bytes > self.wal_reader_abort_bytes:
+            raise ValueError("wal_warning_bytes must not exceed wal_reader_abort_bytes")
+        return self
 
 
 class SecuritySettings(_Strict):

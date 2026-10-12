@@ -510,8 +510,8 @@ def test_physical_edges_overrun_and_gaps_are_events(fake_bus, tmp_path):
     assert "relay_A.DI2" in ev["DI_EDGE"] and "not_before_utc" in ev["DI_EDGE"]
     assert "OBSERVATION_GAP" in ev
     assert "POLL_OVERRUN" in ev           # timeouts with retries exceed the 0.2 s test interval
-    n = hist.query("SELECT count(*) FROM cycles")[0][0]
-    assert n == 3
+    # Polls feed the live view, edges and alarms; they write no periodic history themselves.
+    assert hist.query("SELECT count(*) FROM cycles")[0][0] == 0
     svc.stop()
     hist.close()
     assert bus.write_frames() == []

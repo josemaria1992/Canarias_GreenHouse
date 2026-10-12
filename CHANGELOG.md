@@ -1,5 +1,62 @@
 # Changelog
 
+## Unreleased (2026-10-12): historian at 60 s, rolling 365 days (ADR-0008, revised after review)
+
+### Changed
+- History is a complete snapshot of every point every 60 s of wall time (`historian.recording_interval_s`,
+  60 or 300; 60 stays active until the owner asks for 300), in real and simulation profiles alike;
+  a simulation's run id and simulated time are stored with each snapshot. Bus polling (3 s), alarm
+  evaluation, edges and the dashboard keep their timing, and polls no longer write history rows.
+- The recorder schedules on the monotonic clock and labels each snapshot with its wall-clock
+  boundary (hh:mm:00; hh:00, hh:05, ... for 300 s). A label is written at most once per database,
+  checked inside the writing transaction, across restarts and clock corrections. A clock set back
+  holds snapshots until it passes the newest label (`HISTORY_CLOCK_BEHIND`); missed labels are
+  logged with their cause and never back-filled.
+- Readings older than three polls are recorded as `STALE` (null value, last good value kept);
+  points not yet acquired are `UNAVAILABLE`; a paused simulation's frozen state is `STALE`.
+- Alarm transitions (raise, clear, ack, reset) are written immediately; DI/DO edges and commands
+  already were. New `CONFIG_LOADED` / `CONFIG_CHANGED` start events with a diff.
+- Retention is a rolling 365-day window applied hourly in bounded runs (5,000 rows per transaction,
+  100 transactions per run, waits while the WAL is large). It deletes only while the clock is
+  trusted (restart within 1 h, no step over 5 min); otherwise it holds (`RETENTION_HELD`) until an
+  administrator confirms the proposed cutoff (`RETENTION_CLOCK_CONFIRMED`). Acknowledging the alarm
+  no longer releases it. No size limit deletes history inside the window.
+- The 2 GiB demo budget is replaced by a 10 GiB database budget and free-space thresholds
+  (warning 4 GiB, reserve 2 GiB, snapshot floor 512 MiB) with defined alarms and effects.
+- Backups are gzip-compressed SQL dumps of one consistent snapshot (`*.sql.gz`) with the schema
+  objects and versions in the manifest. They are verified before an atomic publish, removed cleanly
+  on failure (earlier backups kept), and abort below the reserve, above a 1 GiB WAL or after 3 h.
+  Earlier `.sqlite3` backups still verify and restore.
+- Status reads used by the acquisition loop use their own database connection, so a long export
+  never delays a poll cycle.
+
+### Added
+- WAL size, checkpoint progress and a WAL warning (`wal_warning_bytes`) in the storage report,
+  Overview and Settings.
+- Restore drill: `backup verify --full` restores to a separate scratch directory and checks
+  integrity, foreign keys, schema, counts, fingerprints and the application's own start-up and
+  queries, with a JSON report; monthly `aquacrop-restore-drill.timer`; Settings shows the drill
+  and the off-device copy as not configured.
+- Settings: retention hold, proposed cutoff and an administrator release; snapshots not written
+  during a low-disk pause; the DEMO no-deletion note.
+- Optional simulation-time series (`historian.sim_time_recording_s`, off by default), labelled
+  separately and counted separately.
+- `aquacrop storage report` (growth, 365-day projection, thresholds, database and WAL separately,
+  series and registers); `scripts/measure_storage.py` (commands, alarms, faults, environment) and
+  `scripts/stress_concurrency.py` (WAL and responsiveness under long readers).
+
+### Fixed
+- Login and request rate limits use a sliding 60 s window. The fixed per-minute window allowed up
+  to twice the limit across a minute boundary, and made the login test fail when it straddled one.
+- The capacity check on every poll read the oldest and newest sample times with one full index
+  scan (2.4 s on a one-year database), which kept the WAL from resetting and deferred retention;
+  it now uses two indexed lookups. Found by the concurrency stress run.
+- Text files are read and written as UTF-8 on every platform (Windows CI failure on `main`), and
+  backups keep CR/LF inside text values unchanged.
+
+### Unchanged
+- Database schema (version 2) and existing history: no migration. No hardware change.
+
 ## 0.2.0.dev0 (2026-10-11)
 
 Replaces the v0.1 prototype (kept unchanged in `legacy/`, SHA-256 `fa118eb2…6dd8`).

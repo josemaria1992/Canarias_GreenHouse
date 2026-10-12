@@ -16,6 +16,7 @@ import os
 import secrets
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -220,20 +221,23 @@ class Accounts:
 
 
 class RateLimiter:
-    """Fixed-window counter per key. In-memory: one process owns the installation."""
+    """Sliding 60 s window per key: at most `limit_per_minute` allowed hits in any 60 s, so a burst
+    cannot get twice the limit across a minute boundary. In-memory: one process owns the installation."""
 
-    def __init__(self) -> None:
-        self._w: dict[str, tuple[int, int]] = {}
+    def __init__(self, clock=time.monotonic) -> None:
+        self._w: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
+        self._clock = clock
 
     def hit(self, key: str, limit_per_minute: int) -> bool:
-        window = int(time.monotonic() // 60)
+        now = self._clock()
         with self._lock:
-            w, n = self._w.get(key, (window, 0))
-            if w != window:
-                w, n = window, 0
-            n += 1
-            self._w[key] = (w, n)
+            q = self._w.setdefault(key, deque())
+            while q and q[0] <= now - 60:
+                q.popleft()
+            ok = len(q) < limit_per_minute
+            if ok:
+                q.append(now)
             if len(self._w) > 10000:
-                self._w = {k: v for k, v in self._w.items() if v[0] == window}
-            return n <= limit_per_minute
+                self._w = {k: v for k, v in self._w.items() if v and v[-1] > now - 60}
+            return ok

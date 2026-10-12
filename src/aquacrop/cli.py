@@ -6,6 +6,7 @@ import getpass
 import json
 import secrets
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import __version__
@@ -185,19 +186,56 @@ def cmd_demo_verify(args) -> int:
 
 # ------------------------------------------------------------------------------------------ backup
 def cmd_backup_create(args) -> int:
-    from .historian.backup import create_backup
+    from .historian.backup import BackupAborted, BackupFailed, BackupRefused, create_backup
     cfg = _cfg(args.config)
-    man = create_backup(_db_path(cfg, _state_dir(args)), args.destination, config_id=cfg.config_id,
-                        config_version=cfg.config_version)
-    print(json.dumps(man, indent=2))
+    h = cfg.historian
+    try:
+        man = create_backup(_db_path(cfg, _state_dir(args)), args.destination, config_id=cfg.config_id,
+                            config_version=cfg.config_version, keep=args.keep,
+                            reserve_bytes=h.free_space_reserve_bytes, wal_abort_bytes=h.wal_reader_abort_bytes,
+                            max_seconds=h.backup_max_seconds)
+    except BackupRefused as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 3
+    except (BackupAborted, BackupFailed) as e:
+        print(f"FAILED (nothing published; earlier backups kept): {e}", file=sys.stderr)
+        return 1
+    print(json.dumps({k: v for k, v in man.items() if k != "fingerprints"}, indent=2))
     return 0
 
 
 def cmd_backup_verify(args) -> int:
+    """Without --full: checksum, stream and row counts. With --full: the restore drill (restore into
+    --scratch-dir, integrity/foreign keys/schema/counts/fingerprints, application smoke test)."""
+    from .config.schema import HistorianSettings
     from .historian.backup import verify_backup
-    v = verify_backup(args.backup)
+    cfg = _cfg(args.config) if args.config else None
+    reserve = (cfg.historian if cfg else HistorianSettings()).free_space_reserve_bytes
+    v = verify_backup(args.backup, full=args.full, scratch_dir=args.scratch_dir, reserve_bytes=reserve, cfg=cfg,
+                      report_dir=args.report_dir)
+    if not args.verbose and isinstance(v.get("manifest"), dict):
+        v["manifest"] = {k: x for k, x in v["manifest"].items() if k != "fingerprints"}
     print(json.dumps(v, indent=2, default=str))
     return 0 if v["ok"] else 1
+
+
+def cmd_storage_report(args) -> int:
+    """Measured capacity of an installation's database (read-only; safe while the server runs)."""
+    import sqlite3
+
+    from .historian.writer import capacity_report
+    cfg = _cfg(args.config)
+    db = _db_path(cfg, _state_dir(args))
+    if not db.exists():
+        print(f"no database at {db}", file=sys.stderr)
+        return 2
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        rep = capacity_report(con, db, cfg, detail=True)
+    finally:
+        con.close()
+    print(json.dumps(rep, indent=2))
+    return 0
 
 
 def cmd_backup_restore(args) -> int:
@@ -217,7 +255,14 @@ def cmd_backup_restore(args) -> int:
             except OwnershipError:
                 print("the installation is running; stop it before a maintenance restore", file=sys.stderr)
                 return 4
-    res = restore_backup(args.backup, target, allow_existing=args.maintenance)
+    from .config.schema import HistorianSettings
+    from .historian.backup import _same_device
+    # The free-space reserve protects the live database's disk; a restore elsewhere only needs room.
+    reserve = (_cfg(args.config).historian if args.config else HistorianSettings()).free_space_reserve_bytes
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if _state_dir(args).exists() and not _same_device(target.parent, _state_dir(args)):
+        reserve = 0
+    res = restore_backup(args.backup, target, allow_existing=args.maintenance, reserve_bytes=reserve)
     print(json.dumps(res, indent=2, default=str))
     return 0
 
@@ -259,10 +304,30 @@ def cmd_archive_verify(args) -> int:
 
 
 def cmd_retention_apply(args) -> int:
-    from .historian.retention import apply_retention
+    """Deletes nothing unless --confirm-cutoff echoes the cutoff this command proposes for the current
+    clock: the operator checks the date and the counts first (the same rule as the server's hold)."""
+    import time as _time
+
+    from .historian.retention import ProposalMismatch, confirm_cutoff, prune_expired, retention_proposal
     h, lk = _maintenance_historian(args, "cli_retention")
     try:
-        print(json.dumps(apply_retention(h, dry_run=args.dry_run), indent=2))
+        prop = retention_proposal(h, wall_s=_time.time())
+        if args.dry_run or not args.confirm_cutoff or prop["cutoff_utc"] is None:
+            print(json.dumps(prop, indent=2))
+            if args.dry_run or prop["cutoff_utc"] is None:
+                return 0
+            print(f"\nNothing deleted. Check the date and time, then run again with --confirm-cutoff "
+                  f"{prop['cutoff_utc']}", file=sys.stderr)
+            return 3
+        try:
+            prop = confirm_cutoff(h, args.confirm_cutoff, wall_s=_time.time(), trusted_s=None,
+                                  actor=f"cli:{getpass.getuser()}", hold=None)
+        except ProposalMismatch as e:
+            print(json.dumps(e.proposal, indent=2))
+            print(f"REFUSED: {e}", file=sys.stderr)
+            return 4
+        res = prune_expired(h, now=datetime.fromisoformat(prop["cutoff_utc"]) + timedelta(days=h.cfg.historian.retention_days))
+        print(json.dumps(res, indent=2))
         return 0
     finally:
         h.close()
@@ -341,9 +406,20 @@ def build_parser() -> argparse.ArgumentParser:
     bc = bk.add_parser("create")
     common(bc)
     bc.add_argument("--destination", required=True)
+    bc.add_argument("--keep", type=int, default=None,
+                    help="after the new backup verifies, keep only this many compressed backups")
     bc.set_defaults(fn=cmd_backup_create)
     bv = bk.add_parser("verify")
     bv.add_argument("--backup", required=True)
+    bv.add_argument("--full", action="store_true",
+                    help="restore drill: restore into a scratch DB, check integrity, foreign keys, schema, counts, "
+                         "fingerprints and run the application smoke test")
+    bv.add_argument("--scratch-dir", default=None,
+                    help="where --full restores (needs room for one database plus 20 %%; on the live database's "
+                         "disk the free-space reserve must also remain)")
+    bv.add_argument("--config", default=None, help="also start the historian on the restored copy with this config")
+    bv.add_argument("--report-dir", default=None, help="write a restore-drill report (JSON) here")
+    bv.add_argument("--verbose", action="store_true", help="include the per-table fingerprints in the output")
     bv.set_defaults(fn=cmd_backup_verify)
     br = bk.add_parser("restore")
     br.add_argument("--backup", required=True)
@@ -364,10 +440,16 @@ def build_parser() -> argparse.ArgumentParser:
     av.add_argument("--archive", required=True)
     av.set_defaults(fn=cmd_archive_verify)
     rt = sub.add_parser("retention").add_subparsers(dest="sub", required=True)
-    ra = rt.add_parser("apply", help="prune archived samples older than an APPROVED retention window")
+    ra = rt.add_parser("apply", help="delete history older than the APPROVED rolling window (server stopped)")
     common(ra)
-    ra.add_argument("--dry-run", action="store_true")
+    ra.add_argument("--dry-run", action="store_true", help="show the proposed cutoff and counts only")
+    ra.add_argument("--confirm-cutoff", default=None,
+                    help="the cutoff_utc shown by a run without this option, after checking the date and time")
     ra.set_defaults(fn=cmd_retention_apply)
+    sr = sub.add_parser("storage").add_subparsers(dest="sub", required=True)
+    srr = sr.add_parser("report", help="measured database growth, projection and free-space thresholds")
+    common(srr)
+    srr.set_defaults(fn=cmd_storage_report)
 
     mg = sub.add_parser("migrate-v01", help="backup-first import of a v0.1 greenhouse.sqlite3")
     common(mg)

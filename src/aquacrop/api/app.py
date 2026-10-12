@@ -11,6 +11,7 @@ import csv
 import io
 import ipaddress
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
@@ -37,6 +38,10 @@ from .service import SimulationService
 COOKIE = "aquacrop_session"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 WEB_DIR = resources.files("aquacrop") / "web"
+# Bounded readers (ADR-0008, WAL): every user query ends in one short read transaction.
+AUDIT_EXPORT_MAX_ROWS = 200000
+ANALYTICS_MAX_DAYS = 31
+ANALYTICS_MAX_ROWS_PER_POINT = 100000
 
 
 def _is_loopback(host: str | None) -> bool:
@@ -149,6 +154,10 @@ class UserUpdateIn(Body):
     disabled: bool | None = None
 
 
+class RetentionConfirmIn(Body):
+    cutoff_utc: str = Field(min_length=20, max_length=40)   # the cutoff shown by GET /api/retention
+
+
 def _escape_csv(v):
     """Prevent spreadsheet formula injection in textual fields."""
     if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
@@ -180,6 +189,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         idle_minutes=sec.session_idle_minutes, absolute_hours=sec.session_absolute_hours)
     limiter = RateLimiter()
     _check_namespace(hist, cfg, session_id)
+    hist.record_config(cfg)
     is_sim = cfg.profile == AccessPolicy.SIMULATED
     if is_sim:
         svc = SimulationService(cfg, hist, session_id)
@@ -425,9 +435,12 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "twin": {"activity": svc.clock.activity.value, "speed": svc.clock.speed, "run_id": r.run_id,
                          "sim_s": r.sim_s, "tick": r.tick, "source": r.backend.source.value, "scenario": svc.scenario,
                          "seed": r.seed, "acquisition_stalled": r.acquisition_stalled, "overruns": svc.clock.overruns,
-                         "history_stride_sim_s": r.history_stride_s,
-                         "history_cadence_note": "simulation-time stride; wall-time acquisition interval applies to "
-                                                 "real hardware"},
+                         "recording_interval_s": cfg.historian.recording_interval_s, "recording_basis": "WALL",
+                         "sim_time_recording_s": r.sim_time_recording_s,
+                         "history_cadence_note": "complete snapshot every recording_interval_s of wall time, at any "
+                                                 "speed or while paused (run id and simulated time stored with each); "
+                                                 "sim_time_recording_s is the optional simulation-time series "
+                                                 "(null = off)"},
                 "devices": devs, "storage": hist.storage() | {"ok": ok_store, "reason": why},
                 "historian": {k: v for k, v in hist.health.items()}, "acquisition_task": svc.task_health(),
                 "alarms": {"active": sum(o.active for o in alarms), "unacknowledged": sum(not o.acknowledged for o in alarms),
@@ -676,7 +689,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     # ------------------------------------------------------------------ trends / export / analytics
     @app.get("/api/trends")
     def trends(p: Principal = Depends(require(Perm.READ)), points: str = Query(..., max_length=2000),
-               start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000)):
+               start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000),
+               basis: str | None = Query(None, pattern="^(WALL|SIMULATION_TIME|LEGACY_UNKNOWN)$")):
+        # `basis` selects one series when the optional simulation-time recorder is also on.
         s, e = _range(start, end)
         ids = [x for x in points.split(",") if x][:16]
         series, truncated = {}, False
@@ -684,13 +699,16 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             rows = hist.query("SELECT s.acquired_utc, s.value, s.raw_value, s.quality, s.origin, s.unit, s.sim_s, "
                               "s.sim_run_id, c.cadence_s, c.cadence_basis FROM samples s JOIN cycles c ON "
                               "c.cycle_pk=s.cycle_pk WHERE s.point_id=? AND s.acquired_utc>=? AND s.acquired_utc<=? "
-                              "ORDER BY s.acquired_utc LIMIT ?", (pid, s, e, limit + 1))
+                              "AND (? IS NULL OR c.cadence_basis=?) ORDER BY s.acquired_utc LIMIT ?",
+                              (pid, s, e, basis, basis, limit + 1))
             truncated |= len(rows) > limit
             out, prev = [], None
             for r in rows[:limit]:
                 gap = False
                 if prev is not None:
                     if r["sim_run_id"] != prev["sim_run_id"] or r["origin"] != prev["origin"]:
+                        gap = True
+                    elif r["cadence_basis"] != prev["cadence_basis"]:
                         gap = True
                     elif r["cadence_basis"] == "SIMULATION_TIME" and r["sim_s"] is not None and prev["sim_s"] is not None:
                         gap = (r["sim_s"] - prev["sim_s"]) > 1.5 * max(r["cadence_s"] or 0, prev["cadence_s"] or 0)
@@ -711,8 +729,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/export.csv")
     def export_csv(p: Principal = Depends(require(Perm.READ)), points: str | None = None, start: str | None = None,
-                   end: str | None = None, after_id: int = 0, limit: int = Query(200000, ge=1, le=1000000),
+                   end: str | None = None, after_id: int = 0, limit: int = Query(100000, ge=1, le=200000),
                    display_tz: str | None = None):
+        # Bounded reader: at most 200 000 rows (one short read transaction) per page; continue with after_id.
         s, e = _range(start, end, 60)
         zone = ZoneInfo(display_tz) if display_tz else tz
         ids = [x for x in (points or "").split(",") if x]
@@ -765,27 +784,36 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def export_audit(p: Principal = Depends(require(Perm.EXPORT_AUDIT)), start: str | None = None,
                      end: str | None = None):
         s, e = _range(start, end, 24 * 60)
+        cap = AUDIT_EXPORT_MAX_ROWS   # bounded reader; narrow the range for more
         rows = hist.query("SELECT 'event' AS type, utc AS t, kind AS what, actor, payload_json AS detail FROM events "
                           "WHERE utc>=? AND utc<=? UNION ALL SELECT 'command', intent_utc, target||'='||desired||' '||"
                           "outcome, actor, coalesce(detail,'') FROM commands WHERE intent_utc>=? AND intent_utc<=? "
-                          "ORDER BY 2", (s, e, s, e))
+                          "ORDER BY 2 LIMIT ?", (s, e, s, e, cap + 1))
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["type", "utc", "what", "actor", "detail"])
-        for r in rows:
+        for r in rows[:cap]:
             w.writerow([_escape_csv(v) for v in r])
+        if len(rows) > cap:
+            w.writerow([f"# TRUNCATED at {cap} rows; narrow the time range"])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": "attachment; filename=aquacrop-audit.csv"})
 
     @app.get("/api/analytics")
     def analytics(p: Principal = Depends(require(Perm.READ)), start: str | None = None, end: str | None = None):
-        """Runtime / delivered-volume estimates per origin with coverage disclosure. Origins are never summed."""
+        """Runtime / delivered-volume estimates per origin with coverage disclosure. Origins are never summed.
+        Bounded reader: at most ANALYTICS_MAX_DAYS per request and ANALYTICS_MAX_ROWS_PER_POINT rows a point."""
         s, e = _range(start, end, 60)
-        out = {}
+        if datetime.fromisoformat(e) - datetime.fromisoformat(s) > timedelta(days=ANALYTICS_MAX_DAYS):
+            raise HTTPException(422, f"range longer than {ANALYTICS_MAX_DAYS} days; request it in parts")
+        out, truncated = {}, False
         for m in cfg.virtual_mapping:
             if m.signal.endswith(".running") or m.signal.endswith("flow_transmitter"):
                 rows = hist.query("SELECT acquired_utc, value, quality, origin FROM samples WHERE point_id=? AND "
-                                  "acquired_utc>=? AND acquired_utc<=? ORDER BY acquired_utc", (m.point, s, e))
+                                  "acquired_utc>=? AND acquired_utc<=? ORDER BY acquired_utc LIMIT ?",
+                                  (m.point, s, e, ANALYTICS_MAX_ROWS_PER_POINT + 1))
+                truncated |= len(rows) > ANALYTICS_MAX_ROWS_PER_POINT
+                rows = rows[:ANALYTICS_MAX_ROWS_PER_POINT]
                 by_origin: dict[str, dict] = {}
                 prev = None
                 for t, v, q, o in rows:
@@ -807,6 +835,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         alarm_counts = hist.query("SELECT rule_id, count(*) FROM alarm_occurrences WHERE first_seen_utc>=? AND "
                                   "first_seen_utc<=? GROUP BY rule_id", (s, e))
         return {"start": s, "end": e, "estimates": out, "alarm_counts": {r[0]: r[1] for r in alarm_counts},
+                "truncated": truncated,
                 "note": "Estimates from sampled history; gaps reduce coverage. Simulated and measured origins are "
                         "reported separately and never summed. Twin ledger totals are in /api/twin."}
 
@@ -822,7 +851,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
              "production_fields": {"hydraulic_topology": "TBD — requires operator confirmation",
                                    "physical_mapping": "empty (no approved wiring)",
                                    "calibration": "none verified", "safe_state_matrix": "TBD",
-                                   "retention_policy": "DEMO proposal only"}}
+                                   "retention_policy": (f"rolling {cfg.historian.retention_days} days, snapshots every "
+                                                        f"{cfg.historian.recording_interval_s} s "
+                                                        f"({cfg.historian.retention_provenance})")}}
         if p.can(Perm.USER_ADMIN):
             d["users"] = accounts.list_users()
         return d
@@ -867,13 +898,78 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         hist.event("SESSIONS_REVOKED", {"username": username}, actor=p.username)
         return {"ok": True}
 
-    @app.post("/api/backup")
+    # ------------------------------------------------------------------ retention hold / confirmation
+    @app.get("/api/retention")
+    def retention_state(p: Principal = Depends(require(Perm.READ))):
+        """Retention state; while held, also the proposed cutoff and the rows it would delete."""
+        v = svc.retention.view()
+        if v["held"] is not None:
+            v["proposal"] = svc.retention.proposal()
+        return v
+
+    @app.post("/api/retention/confirm-clock")
+    def retention_confirm(body: RetentionConfirmIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        """Administrator's release of a retention hold. It is separate from alarm acknowledgement and
+        must echo the cutoff that was shown; a stale or different cutoff is refused with the new one."""
+        from ..historian.retention import ProposalMismatch
+        try:
+            prop = svc.retention.confirm(p.username, body.cutoff_utc)
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except ProposalMismatch as e:
+            raise HTTPException(409, {"error": str(e), "proposal": e.proposal})
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"released": True, "cutoff_utc": prop["cutoff_utc"], "would_delete": prop["would_delete"]}
+
+    backup_job: dict = {"running": False, "last": None}
+    backup_lock = threading.Lock()
+
+    def _run_backup(user: str) -> None:
+        h = cfg.historian
+        try:
+            hist.wait_idle()
+            man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
+                                config_version=cfg.config_version, reserve_bytes=h.free_space_reserve_bytes,
+                                wal_abort_bytes=h.wal_reader_abort_bytes, max_seconds=h.backup_max_seconds)
+            hist.event("BACKUP_CREATED", {k: v for k, v in man.items() if k not in ("row_counts", "fingerprints")},
+                       actor=user)
+            backup_job["last"] = {"ok": True, "file": man["file"], "bytes": man["bytes"]}
+        except Exception as e:   # refused for space, or failed: recorded, never silent
+            hist.event("BACKUP_FAILED", {"error": str(e)}, actor=user)
+            backup_job["last"] = {"ok": False, "error": str(e)}
+        finally:
+            backup_job["running"] = False
+
+    @app.post("/api/backup", status_code=202)
     def backup(p: Principal = Depends(require(Perm.BACKUP))):
-        hist.wait_idle()
-        man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
-                            config_version=cfg.config_version)
-        hist.event("BACKUP_CREATED", man, actor=p.username)
-        return man
+        """A one-year database takes minutes to dump: the backup runs in the background and ends in a
+        BACKUP_CREATED or BACKUP_FAILED event."""
+        with backup_lock:
+            if backup_job["running"]:
+                raise HTTPException(409, "a backup is already running")
+            backup_job["running"] = True
+        threading.Thread(target=_run_backup, args=(p.username,), name="api-backup", daemon=True).start()
+        return {"started": True, "destination": str(state_dir / "backups")}
+
+    @app.get("/api/backup")
+    def backup_state(p: Principal = Depends(require(Perm.READ))):
+        """Local backups, the latest restore drill and the off-device copy (an owner decision)."""
+        from ..historian.backup import latest_drill, list_backups
+        dest = state_dir / "backups"
+        local = [b for b in list_backups(dest) if b.name.endswith(".sql.gz")] if dest.exists() else []
+        drill = latest_drill(dest / "restore-drills")
+        due = None
+        if drill and drill.get("utc"):
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(drill["utc"])
+            due = age.days >= cfg.historian.restore_drill_interval_days
+        return backup_job | {
+            "destination": str(dest), "local_count": len(local), "keep": cfg.historian.backup_keep,
+            "local_bytes": sum(b.stat().st_size for b in local), "newest": local[-1].name if local else None,
+            "restore_drill": drill, "restore_drill_due": True if drill is None else due,
+            "restore_drill_interval_days": cfg.historian.restore_drill_interval_days,
+            "off_device": "NOT CONFIGURED: the off-device backup destination is an open owner decision; local "
+                          "backups do not survive loss of this device"}
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")

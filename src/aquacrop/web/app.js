@@ -172,6 +172,51 @@
         h("td", { class: "mono" }, d.last_error || ""), h("td", null, d.last_ok_utc ? age(d.last_ok_utc) : "never")))));
   }
 
+  function gib(b) { return b == null ? "—" : (b / 1073741824).toFixed(2) + " GiB"; }
+  function mib(b) { return b == null ? "—" : (b / 1048576).toFixed(0) + " MiB"; }
+  function storageText(x) {
+    const pause = x.snapshot_pause && x.snapshot_pause.count ? ` · ${x.snapshot_pause.count} snapshots not written (low disk)` : "";
+    return `DB ${gib(x.db_bytes)} of ${gib(x.budget_bytes)} budget · ${gib(x.free_bytes)} free` +
+      (x.projected_window_bytes != null ? ` · ${x.retention_days}-day projection ${gib(x.projected_window_bytes)}` : "") +
+      ` · snapshot every ${x.recording_interval_s} s` + (x.snapshots_paused ? " · SNAPSHOTS PAUSED (low disk)" : "") + pause +
+      (x.wal_over_warning ? ` · WAL ${mib(x.wal_bytes)} (a long reader is holding it)` : "") +
+      (x.retention_provenance === "DEMO" ? " · DEMO retention: nothing is deleted" : "");
+  }
+  function retentionCard(r) {
+    const v = r || {}, held = v.held, prop = v.proposal, last = v.last_result;
+    const rows = [h("dt", null, "Policy"), h("dd", null, v.policy === "DEMO" ? pill("DEMO: nothing is deleted; the database grows without bound", "warn") : (v.policy || "—")),
+      h("dt", null, "State"), h("dd", null, held ? pill("HELD: " + held.code, "bad") : (v.running ? pill("running", "ok") : pill(v.policy === "APPROVED" ? "active" : "off", "ok")))];
+    if (held) rows.push(h("dt", null, "Why"), h("dd", null, held.reason));
+    if (last && last.deleted) rows.push(h("dt", null, "Last run"), h("dd", null, `${Object.values(last.deleted).reduce((a, b) => a + b, 0)} rows older than ${last.cutoff_utc}` + (last.incomplete ? ` (stopped early: ${last.incomplete})` : "")));
+    const kids = [h("h2", null, "Retention"), h("dl", { class: "kv" }, ...rows)];
+    if (held && prop) {
+      kids.push(h("p", null, `Proposed cutoff ${prop.cutoff_utc} (clock reads ${prop.wall_utc}). Newest record of an earlier process: ${prop.newest_earlier_process_record_utc || "none"}.`),
+        h("p", null, "Rows a release would delete: " + Object.entries(prop.would_delete || {}).map(([k, n]) => `${k} ${n}`).join(", ")),
+        h("p", { class: "muted" }, prop.note + " Acknowledging the RETENTION_HELD alarm does not release it."));
+      if (can("config_admin")) {
+        const ok = h("input", { type: "checkbox" });
+        const btn = h("button", { class: "cmd small", disabled: true, onclick: async () => {
+          const res = await act("POST", "/api/retention/confirm-clock", { cutoff_utc: prop.cutoff_utc }, "retention released; the cutoff and your name are recorded");
+          if (res) { S.settingsLoaded = false; VIEWS.settings(); }
+        } }, "Confirm date and release");
+        ok.onchange = () => { btn.disabled = !ok.checked; };
+        kids.push(h("div", { class: "row" }, h("label", null, ok, h("span", null, " I checked the date and time against an independent source")), btn));
+      } else {
+        kids.push(h("p", { class: "muted" }, "Releasing a hold requires an administrator."));
+      }
+    }
+    return h("div", { class: "card" }, ...kids);
+  }
+  function backupCard(b) {
+    const d = b.restore_drill;
+    return h("div", { class: "card" }, h("h2", null, "Backups"), h("dl", { class: "kv" },
+      h("dt", null, "Local copies"), h("dd", null, `${b.local_count} of ${b.keep} kept, ${gib(b.local_bytes)}` + (b.newest ? `, newest ${b.newest}` : "")),
+      h("dt", null, "Last run"), h("dd", null, b.running ? pill("running", "ok") : (b.last ? (b.last.ok ? pill("published " + b.last.file, "ok") : pill("FAILED: " + b.last.error, "bad")) : "none in this process")),
+      h("dt", null, "Restore drill"), h("dd", null, d ? [d.ok ? pill("ok", "ok") : pill("FAILED", "bad"), ` ${d.utc}`] : "never run", b.restore_drill_due ? [" ", pill(`due (every ${b.restore_drill_interval_days} days)`, "warn")] : null),
+      h("dt", null, "Off-device"), h("dd", null, pill("NOT CONFIGURED", "warn"), " ", b.off_device)),
+      h("button", { class: "cmd small", disabled: !can("backup") || b.running, onclick: () => act("POST", "/api/backup", undefined, "backup started; it ends with a BACKUP_CREATED or BACKUP_FAILED event") }, "Create backup now"));
+  }
+
   async function hwOverview() {
     const st = S.status, al = await api("GET", "/api/alarms"), lease = st.bench_lease;
     mount("v-overview",
@@ -180,7 +225,8 @@
           h("dt", null, "Profile"), h("dd", null, st.profile),
           h("dt", null, "Physical writes"), h("dd", null, lease ? pill(st.physical_writes, "bad") : pill(st.physical_writes, "ok")),
           h("dt", null, "Bus workers"), h("dd", null, st.acquisition_task.ok ? pill("polling", "ok") : pill(st.acquisition_task.state, "bad")),
-          h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad")),
+          h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad"),
+            " ", storageText(st.storage)),
           h("dt", null, "Live control"), h("dd", null, st.live_control))),
         h("div", { class: "card" }, h("h2", null, "Relay channel modes"),
           h("table", null, h("tbody", null, Object.entries(st.relay_modes).map(([k, m]) => h("tr", null, h("td", null, k),
@@ -260,7 +306,7 @@
           h("dt", null, "Signal source"), h("dd", null, st.twin.source),
           h("dt", null, "Acquisition task"), h("dd", null, st.acquisition_task.ok ? pill("running", "ok") : pill(st.acquisition_task.state, "bad")),
           h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad"),
-            ` ${(st.storage.db_bytes / 1048576).toFixed(1)} MiB / budget ${(st.storage.budget_bytes / 1073741824).toFixed(1)} GiB`),
+            " ", storageText(st.storage)),
           h("dt", null, "Live control"), h("dd", null, st.live_control))),
         h("div", { class: "card" }, h("h2", null, "Water (simulated)"), h("dl", { class: "kv" },
           ...Object.entries(pl.tanks).flatMap(([k, t]) => [h("dt", null, k), h("dd", null, `${t.volume_L.toFixed(1)} / ${t.capacity_L} L`)]),
@@ -507,7 +553,8 @@
   // ------------------------------------------------ settings
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
-    const s = await api("GET", "/api/settings"), c = s.config;
+    const [s, ret, bk] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
+      api("GET", "/api/backup").catch(() => null)]), c = s.config;
     S.settingsLoaded = true;
     const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
     const userForm = can("user_admin") ? (() => {
@@ -523,10 +570,21 @@
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
           h("dt", null, "Software"), h("dd", null, s.software_version), h("dt", null, "Python"), h("dd", null, s.python), h("dt", null, "Platform"), h("dd", null, s.platform),
           h("dt", null, "Config"), h("dd", null, `${c.config_id}@${c.config_version} (${c.profile})`))),
-        h("div", { class: "card" }, h("h2", null, "Storage & backup"), h("dl", { class: "kv" },
-          h("dt", null, "DB size"), h("dd", null, (s.storage.db_bytes / 1048576).toFixed(2) + " MiB"), h("dt", null, "Free disk"), h("dd", null, (s.storage.free_bytes / 1073741824).toFixed(2) + " GiB"),
-          h("dt", null, "Retention"), h("dd", null, `${s.storage.retention_days} days (${s.storage.retention_provenance})`)),
-          h("button", { class: "cmd small", disabled: !can("backup"), onclick: () => act("POST", "/api/backup", undefined, "backup created") }, "Create backup now")),
+        h("div", { class: "card" }, h("h2", null, "Storage"), h("dl", { class: "kv" },
+          h("dt", null, "Recording"), h("dd", null, `complete snapshot every ${s.storage.recording_interval_s} s of wall time` +
+            (s.storage.sim_time_recording_s ? `; plus a separate simulation-time series every ${s.storage.sim_time_recording_s} simulated s` : ""),
+            s.storage.snapshots_paused ? [" ", pill("PAUSED: low disk", "bad")] : null),
+          h("dt", null, "Not written"), h("dd", null, s.storage.snapshot_pause && s.storage.snapshot_pause.count ?
+            `${s.storage.snapshot_pause.count} snapshots from ${s.storage.snapshot_pause.first} to ${s.storage.snapshot_pause.last} (shown as a gap; never backfilled)` : "none"),
+          h("dt", null, "Retention"), h("dd", null, `rolling ${s.storage.retention_days} days (${s.storage.retention_provenance}). ${s.storage.retention_note || ""}`),
+          h("dt", null, "History held"), h("dd", null, s.storage.oldest_sample_utc ? `${(s.storage.history_span_days || 0).toFixed(1)} days, since ${s.storage.oldest_sample_utc}` : "none yet"),
+          h("dt", null, "DB size"), h("dd", null, `${gib(s.storage.db_bytes)} of ${gib(s.storage.budget_bytes)} budget (file ${gib(s.storage.db_file_bytes)}, WAL ${mib(s.storage.wal_bytes)})`),
+          h("dt", null, "WAL"), h("dd", null, s.storage.wal_over_warning ? pill(`${mib(s.storage.wal_bytes)}: above ${mib(s.storage.wal_warning_bytes)}`, "warn") : `${mib(s.storage.wal_bytes)} (warning above ${mib(s.storage.wal_warning_bytes)})`,
+            s.storage.wal_checkpoint && s.storage.wal_checkpoint.behind_since_utc ? ` · checkpoints held back since ${s.storage.wal_checkpoint.behind_since_utc}` : ""),
+          h("dt", null, "Projection"), h("dd", null, s.storage.projected_window_bytes != null ? `${gib(s.storage.projected_window_bytes)} at ${s.storage.retention_days} days` + (s.storage.projected_over_budget ? " (over budget)" : "") : "after one day of history"),
+          h("dt", null, "Free disk"), h("dd", null, `${gib(s.storage.free_bytes)} (warning below ${gib(s.storage.warning_free_bytes)}, starts refused below ${gib(s.storage.reserve_bytes)}, snapshots pause below ${gib(s.storage.snapshot_floor_bytes)})`))),
+        retentionCard(ret),
+        bk ? backupCard(bk) : h("div", { class: "card" }, h("h2", null, "Backups"), h("p", { class: "muted" }, "Backup state unavailable.")),
         h("div", { class: "card" }, h("h2", null, "Production status"), h("dl", { class: "kv" }, ...Object.entries(s.production_fields).flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)])),
           h("p", { class: "muted" }, s.commissioning_evidence))),
       h("div", { class: "card" }, h("h2", null, "Buses"), tbl(["Bus", "Kind", "Port", "Serial", "Poll s"], c.buses.map(b => [b.bus_id, b.kind, b.port, `${b.serial.baudrate} ${b.serial.bytesize}${b.serial.parity}${b.serial.stopbits}`, b.poll_interval_s]))),
