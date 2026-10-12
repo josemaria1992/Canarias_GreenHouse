@@ -1,5 +1,5 @@
 # ADR-0011 Timestamp quarantine after a clock correction
-Status: proposed 2026-10-12 (owner request of 2026-10-12 16:01 UTC); awaiting the owner's acceptance.
+Status: accepted by the owner 2026-10-12 20:04 UTC (owner request of 2026-10-12 16:01 UTC).
 Builds on ADR-0008 (wall-time labels, clock holds, retention release).
 
 ## Context

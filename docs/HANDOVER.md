@@ -68,20 +68,21 @@ Resolved on 2026-10-12: the repository is `github.com/josemaria1992/Canarias_Gre
 (ADR-0007), and history is 60 s snapshots kept for a rolling 365 days within the existing 32 GB
 eMMC and SQLite database (ADR-0008).
 
-1. **Accept ADR-0008** (revised; R1 to R5 answered), **ADR-0011** (timestamp quarantine) and
-   **ADR-0012** (SD card and OneDrive); all three are "proposed".
-2. **Activate off-device backups**: the owner chose a 64 GB ext4 card, the shared folder
+ADR-0008 (revised), ADR-0011 (timestamp quarantine) and ADR-0012 (SD card and OneDrive) were
+accepted by the owner on 2026-10-12 20:04 UTC.
+
+1. **Activate off-device backups**: the owner chose a 64 GB ext4 card, the shared folder
    `AQUACROP_DATOS_CANARIAS` (a colleague's personal OneDrive), a sealed printed key copy and the
    7 / 30 + 12 copy policy; rclone signs in with the owner's personal Microsoft account; the folder
    owner's plan has 1 TB (2026-10-12). Left: the colleague shares the folder by name with edit
    rights, then card enrolment and rclone setup on the controller (on site, with the hardware).
    `operations/offsite-backups.md` sections 1 and 3.1.
-3. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
+2. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
    future-dated records are now resolved by the administrator's quarantine (ADR-0011).
-4. Production facts still `TBD`: hydraulic topology, wiring/physical mapping (also unblocks shadow
+3. Production facts still `TBD`: hydraulic topology, wiring/physical mapping (also unblocks shadow
    mode), VFD interface, probes and calibration, recipes, safe-state/cause-and-effect matrix,
    physical alarm severities, role assignments and remote rights, OS update policy.
-5. The supporting files named in the brief (`ACCEPTANCE_TEST_PLAN.md` and others) were never
+4. The supporting files named in the brief (`ACCEPTANCE_TEST_PLAN.md` and others) were never
    supplied. The acceptance IDs here are this project's own.
 
 ## Physical tests still required (milestone 5, none performed)

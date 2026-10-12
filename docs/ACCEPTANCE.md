@@ -180,7 +180,7 @@ OneDrive account was used.**
 | AI channel modes on real modules | UNKNOWN until CP-01/CP-02; values stay UNSCALED |
 | Shadow / what-if | Not served (ADR-0002) |
 | Alarm severities for physical equipment | TBD; only DEMO rules shipped |
-| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 revised, awaiting acceptance); off-device: 64 GB ext4 SD card and the shared OneDrive folder `AQUACROP_DATOS_CANARIAS` chosen (owner, 2026-10-12), card UUID and rclone remote TBD until set up on the controller |
+| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 accepted); off-device: 64 GB ext4 SD card and the shared OneDrive folder `AQUACROP_DATOS_CANARIAS` chosen (owner, 2026-10-12), card UUID and rclone remote TBD until set up on the controller |
 | Role assignments and remote physical rights | Proposal only; owner approval required |
 | CM4 performance, UART mapping, RTC | Not measured / not verified |
 | Safety functions (E-stop, motor protection, dry-run, overfill) | Outside software; never replaced by it |

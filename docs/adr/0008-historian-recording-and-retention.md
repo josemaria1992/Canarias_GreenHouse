@@ -1,6 +1,5 @@
 # ADR-0008 Historian recording interval, 365-day retention and storage budget
-Status: proposed, revised 2026-10-12 after the owner's review (R1 to R5); awaiting the owner's
-acceptance. Supersedes the open "demo retention versus demo budget" question of 2026-10-11.
+Status: accepted by the owner 2026-10-12 20:04 UTC (revised the same day after the owner's review, R1 to R5). Supersedes the open "demo retention versus demo budget" question of 2026-10-11.
 
 ## Context
 

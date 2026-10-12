@@ -1,5 +1,5 @@
 # ADR-0012 SD-card daily backups and encrypted OneDrive copies
-Status: proposed 2026-10-12 (owner request of 2026-10-12 16:01 UTC); implemented and shipped
+Status: accepted by the owner 2026-10-12 20:04 UTC (owner request of 2026-10-12 16:01 UTC); implemented and shipped
 **disabled**. Owner choices recorded 2026-10-12 19:19 UTC: a 64 GB ext4 card, the folder
 `AQUACROP_DATOS_CANARIAS` in a colleague's personal OneDrive (1 TB plan) shared with the owner's
 personal Microsoft account, a sealed
