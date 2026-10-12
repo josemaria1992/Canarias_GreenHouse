@@ -22,6 +22,7 @@ nav a.active { background: var(--accent); color: #fff; }
 .statusline { padding: 6px 16px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
 main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.grid > .wide { grid-column: 1 / -1; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; overflow-x: auto; }
 .card.armed { border: 2px solid var(--bad); }
 .card h2, .card h3 { margin: 0 0 8px; font-size: 15px; }
@@ -74,6 +75,8 @@ svg text { fill: var(--ink); font-size: 12px; }
 .chart .series { fill: none; stroke-width: 1.8; }
 .chart .ev { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 2 3; }
 .chart .gap { fill: var(--bad); opacity: .08; }
+.chart .suspect-pt { fill: none; stroke-width: 1.2; }
+.chart .series.suspect { stroke-width: 1.4; opacity: .85; }
 .legend span { margin-right: 12px; font-size: 12px; }
 .disabled-by-stale button.cmd { pointer-events: none; opacity: .4; }
 details summary { cursor: pointer; color: var(--muted); }

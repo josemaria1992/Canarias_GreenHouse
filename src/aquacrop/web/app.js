@@ -207,13 +207,92 @@
     }
     return h("div", { class: "card" }, ...kids);
   }
+  // Records whose UTC stamps an administrator quarantined (ADR-0011): the stored time is shown unchanged, flagged.
+  function susPill(r) {
+    return r && r.timestamp_suspect ? [" ", h("span", { class: "pill warn", title: `stored time unchanged; quarantined by ${r.quarantine_id}` }, "SUSPECT TIME")] : null;
+  }
+  function quarantineCard(q) {
+    if (!q) return h("div", { class: "card" }, h("h2", null, "Clock and timestamps"), h("p", { class: "muted" }, "Timestamp state unavailable."));
+    const prop = q.proposal || {}, rec = q.recorder || {};
+    const kids = [h("h2", null, "Clock and timestamps"), h("dl", { class: "kv" },
+      h("dt", null, "Clock epoch"), h("dd", null, String(q.clock_epoch), q.clock_epoch ? h("span", { class: "muted" }, " (snapshot ids carry /e" + q.clock_epoch + "/)") : null),
+      h("dt", null, "Recorder"), h("dd", null, rec.clock_behind ? [pill("WAITING: stored snapshots are later than the clock", "bad"), h("div", { class: "muted" }, `since ${fmtTime(rec.clock_behind.since_utc)}; newest stored ${fmtTime(rec.clock_behind.newest_label_utc)}`)] : pill(rec.state === "RUNNING" ? "recording" : (rec.state || "unknown"), rec.state === "RUNNING" ? "ok" : "warn")),
+      h("dt", null, "Quarantines"), h("dd", null, q.quarantines.length ? `${q.quarantines.length} in force` : "none"))];
+    q.quarantines.slice().reverse().forEach(x => kids.push(h("p", { class: "muted" },
+      `${x.quarantine_id}: epoch ${x.clock_epoch}, confirmed by ${x.confirmed_by} at ${fmtTime(x.confirmed_utc)}; ids ` +
+      Object.entries(x.ranges).map(([t, r]) => `${t} ${r[0]}–${r[1]}`).join(", ") + ". Records kept with their original stamps.")));
+    if (prop.needed) {
+      kids.push(h("h3", null, "Records stamped later than the clock"),
+        h("p", null, `The clock reads ${fmtTime(prop.wall_utc)} (${S.tz}).`),
+        h("table", null, h("thead", null, h("tr", null, ["Records", "Count", "Stamped from", "to"].map(x => h("th", null, x)))),
+          h("tbody", null, Object.entries(prop.counts || {}).filter(([, n]) => n).map(([t, n]) => {
+            const sp = (prop.stamped_utc || {})[t] || []; return h("tr", null, h("td", null, t), h("td", null, String(n)), h("td", null, fmtTime(sp[0])), h("td", null, fmtTime(sp[1]))); }))),
+        h("p", null, `From ${prop.start.kind}${prop.start.utc ? " at " + fmtTime(prop.start.utc) : ""}: ${prop.start.why}. To ${prop.end.kind}${prop.end.utc ? " at " + fmtTime(prop.end.utc) : ""}: ${prop.end.why}.`),
+        h("p", { class: "muted" }, prop.note));
+      if (can("config_admin")) {
+        const ok = h("input", { type: "checkbox" });
+        const btn = h("button", { class: "cmd small", disabled: true, onclick: async () => {
+          const res = await act("POST", "/api/history/quarantine", { proposal_id: prop.proposal_id, clock_checked: true },
+            "records flagged as suspect; recording resumes and retention stays held until you confirm a cutoff");
+          if (res) { S.settingsLoaded = false; VIEWS.settings(); }
+        } }, "Quarantine suspect records");
+        ok.onchange = () => { btn.disabled = !ok.checked; };
+        kids.push(h("div", { class: "row" }, h("label", null, ok, h("span", null, " I checked the current date and time against an independent source")), btn),
+          h("p", { class: "muted" }, "This keeps every record and its stored time, flags them, and holds retention. It deletes nothing and authorizes no deletion."));
+      } else {
+        kids.push(h("p", { class: "muted" }, "Quarantining requires an administrator."));
+      }
+    } else {
+      kids.push(h("p", { class: "muted" }, prop.note || ""));
+    }
+    return h("div", { class: "card wide" }, ...kids);
+  }
+  // SD-card backups and encrypted cloud copies (ADR-0012). Everything shown comes from the controller's
+  // state files; the page never contacts the cloud.
+  function offsiteCard(o) {
+    if (!o) return h("div", { class: "card" }, h("h2", null, "Off-device backups"), h("p", { class: "muted" }, "Off-device backup state unavailable."));
+    const res = (r, okText) => !r ? "none yet" : r.ok ? [pill(okText || "ok", "ok"), " ", fmtTime(r.utc)] : [pill("FAILED" + (r.code ? ": " + r.code : ""), "bad"), " ", fmtTime(r.utc), h("div", { class: "muted" }, r.error || r.integrity || "")];
+    const card = o.sd_card.last_check, q = o.queue || [], pol = o.policy, plan = pol.last_plan;
+    const rows = [
+      h("dt", null, "State"), h("dd", null, o.enabled ? pill("ACTIVATED", "ok") : pill("NOT ACTIVATED", "warn"), o.activation.note ? h("div", { class: "muted" }, o.activation.note) : null),
+      h("dt", null, "SD card"), h("dd", null, o.sd_card.mount_path ? `${o.sd_card.mount_path} (UUID ${o.sd_card.filesystem_uuid})` : "TBD",
+        card ? h("div", null, card.ok ? [pill("identity verified", "ok"), ` ${gib(card.free_bytes)} free · checked ${fmtTime(card.utc)}`] : [pill(card.code, "bad"), h("div", { class: "muted" }, card.error)]) : null),
+      h("dt", null, "Last SD backup"), h("dd", null, res(o.last_backup, o.last_backup && o.last_backup.file ? `${o.last_backup.file} · ${gib(o.last_backup.bytes)}` : "ok")),
+      h("dt", null, "On the card"), h("dd", null, o.local ? `${o.local.count} backups, ${gib(o.local.bytes)}; newest ${o.local.newest || "—"}` : "—"),
+      h("dt", null, "Upload queue"), h("dd", null, q.length ? [pill(`${q.length} waiting`, "warn"), h("div", { class: "muted" }, `oldest ${q[0].name}; ${q[0].attempts} attempt(s); next try ${fmtTime(q[0].next_attempt_utc)}${q[0].last_error ? "; last error: " + q[0].last_error : ""}`)] : "empty"),
+      h("dt", null, "Cloud copies"), h("dd", null, o.cloud.remote ? `${o.cloud.copies || 0} verified (cryptcheck) in ${o.cloud.remote}${o.cloud.newest ? "; newest " + o.cloud.newest : ""}` : "TBD (account and folder not confirmed)",
+        o.cloud.account_note ? h("div", { class: "muted" }, o.cloud.account_note) : null),
+      h("dt", null, "Last upload"), h("dd", null, res(o.last_upload)),
+      h("dt", null, "Restore drill"), h("dd", null, res(o.drill.last, o.drill.last && o.drill.last.backup ? "restored " + o.drill.last.backup : "ok"),
+        o.drill.due ? [" ", pill(`due (every ${o.drill.interval_days} days)`, "warn")] : null,
+        h("div", { class: "muted" }, `from the newest cloud copy into SD-card scratch space; needs ${gib(o.drill.min_scratch_bytes)} free plus ${gib(o.drill.headroom_bytes)} headroom`))];
+    const probs = Object.values(o.problems || {}).filter(Boolean);
+    const kids = [h("h2", null, "Off-device backups"), h("dl", { class: "kv" }, ...rows)];
+    if (probs.length) kids.push(h("div", null, probs.map(m => h("p", { class: "error" }, m))));
+    kids.push(h("h3", null, "Copy policy"),
+      h("p", null, `${pol.local_daily} daily copies on the SD card; ${pol.cloud_daily} daily plus ${pol.cloud_monthly} monthly copies in the cloud.`),
+      h("p", null, pol.active ? [pill("pruning enabled", "ok"), ` confirmed by ${pol.confirmed.confirmed_by} at ${fmtTime(pol.confirmed.confirmed_utc)}`]
+        : [pill("pruning off until confirmed", "warn"), pol.confirmed ? " (the policy changed since the last confirmation)" : " Nothing is deleted from the card or the cloud until an administrator confirms these counts."]));
+    if (plan) kids.push(h("p", { class: "muted" }, `Last plan (${fmtTime(plan.utc)}): would delete ${plan.local.delete.length} from the card and ${plan.cloud.delete.length} from the cloud` +
+      (plan.local.kept_for_upload && plan.local.kept_for_upload.length ? `; ${plan.local.kept_for_upload.length} kept until uploaded` : "") + (plan.refused ? `; refused: ${plan.refused}` : "")));
+    if (!pol.active && can("config_admin")) {
+      const ok = h("input", { type: "checkbox" });
+      const btn = h("button", { class: "cmd small", disabled: true, onclick: async () => {
+        const r = await act("POST", "/api/offsite/policy", { policy_hash: pol.policy_hash, confirm: true }, "copy policy confirmed; pruning follows it from the next daily run");
+        if (r) { S.settingsLoaded = false; VIEWS.settings(); }
+      } }, "Confirm policy and enable pruning");
+      ok.onchange = () => { btn.disabled = !ok.checked; };
+      kids.push(h("div", { class: "row" }, h("label", null, ok, h("span", null, ` I reviewed these copy counts (policy ${pol.policy_hash})`)), btn));
+    }
+    return h("div", { class: "card wide" }, ...kids);
+  }
   function backupCard(b) {
     const d = b.restore_drill;
     return h("div", { class: "card" }, h("h2", null, "Backups"), h("dl", { class: "kv" },
       h("dt", null, "Local copies"), h("dd", null, `${b.local_count} of ${b.keep} kept, ${gib(b.local_bytes)}` + (b.newest ? `, newest ${b.newest}` : "")),
       h("dt", null, "Last run"), h("dd", null, b.running ? pill("running", "ok") : (b.last ? (b.last.ok ? pill("published " + b.last.file, "ok") : pill("FAILED: " + b.last.error, "bad")) : "none in this process")),
       h("dt", null, "Restore drill"), h("dd", null, d ? [d.ok ? pill("ok", "ok") : pill("FAILED", "bad"), ` ${d.utc}`] : "never run", b.restore_drill_due ? [" ", pill(`due (every ${b.restore_drill_interval_days} days)`, "warn")] : null),
-      h("dt", null, "Off-device"), h("dd", null, pill("NOT CONFIGURED", "warn"), " ", b.off_device)),
+      h("dt", null, "Off-device"), h("dd", null, b.offsite_enabled ? pill("SD card + cloud", "ok") : pill("NOT ACTIVATED", "warn"), " ", b.off_device)),
       h("button", { class: "cmd small", disabled: !can("backup") || b.running, onclick: () => act("POST", "/api/backup", undefined, "backup started; it ends with a BACKUP_CREATED or BACKUP_FAILED event") }, "Create backup now"));
   }
 
@@ -499,11 +578,23 @@
     const end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000);
     const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
     const tr = await api("GET", "/api/trends?" + q);
-    const series = S.trendSel.map(pid => {
-      const meta = S.allPoints.find(p => p.id === pid) || {};
-      const pts = (tr.series[pid] || []).map(r => [Date.parse(r[0]), r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", r[8]]);
-      const unit = (tr.series[pid] || []).map(r => r[5]).find(u => u) || "";
-      return { name: `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`, digital: meta.kind !== "AI", points: pts, dashed: false };
+    // Records whose stamps an administrator quarantined are split into their own dashed grey series; neither
+    // half draws a line across the other, so a suspect stamp never joins a trusted trace.
+    const iSus = tr.columns.indexOf("timestamp_suspect");
+    const series = S.trendSel.flatMap(pid => {
+      const meta = S.allPoints.find(p => p.id === pid) || {}, rows = tr.series[pid] || [];
+      const trusted = [], suspect = [];
+      rows.forEach((r, i) => {
+        const sus = iSus >= 0 && !!r[iSus], t = Date.parse(r[0]), own = sus ? suspect : trusted;
+        // The server flags a gap between neighbouring rows of the merged list; where the other kind sits
+        // in between (same stamps can interleave), each half breaks only on a missed snapshot of its own.
+        const switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
+        const gap = switched ? (own.length === 0 || t - own[own.length - 1][0] > 150000) : !!r[8];
+        own.push([t, r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", gap]);
+      });
+      const unit = rows.map(r => r[5]).find(u => u) || "", name = `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`;
+      return [{ name, digital: meta.kind !== "AI", points: trusted, dashed: false },
+        { name: name + " SUSPECT timestamps (quarantined)", digital: meta.kind !== "AI", points: suspect, suspect: true }];
     });
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");
@@ -523,7 +614,7 @@
             h("tr", null, h("td", null, sig), h("td", null, e.kind), h("td", null, oBadge(o)), h("td", null, num(v.estimate, 2)), h("td", null, (v.coverage * 100).toFixed(0) + " %")))))),
         h("p", { class: "muted" }, an.note)));
     const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz });
-    legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, "■ " + l.name)));
+    legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
   };
 
   // ------------------------------------------------ alarms/events
@@ -532,7 +623,7 @@
     const occRow = o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")), h("td", null, o.rule_id), h("td", { class: "mono" }, o.target),
       h("td", null, o.message), h("td", null, o.active ? pill("ACTIVE", "bad") : pill("cleared")), h("td", null, o.acknowledged ? `ack ${o.ack_user}` : pill("UNACK", "warn")),
       h("td", null, o.latched ? (o.reset_required ? pill("RESET REQUIRED", "warn") : "reset " + (o.reset_user || "")) : "—"),
-      h("td", null, fmtTime(o.first_seen_utc)), h("td", null, fmtTime(o.last_seen_utc)), h("td", { class: "mono" }, o.value == null ? "" : String(o.value)),
+      h("td", null, fmtTime(o.first_seen_utc), susPill(o)), h("td", null, fmtTime(o.last_seen_utc)), h("td", { class: "mono" }, o.value == null ? "" : String(o.value)),
       h("td", null, !o.closed && !o.acknowledged ? h("button", { class: "cmd small", disabled: !can("alarm_ack"), onclick: () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "acknowledged") }, "Ack") : null,
         !o.closed && o.reset_required && !o.active && o.acknowledged && o.target !== "controller" ? h("button", { class: "cmd small ghost", disabled: !can("lockout_reset"), onclick: () => act("POST", "/api/alarms/reset", { rule_id: o.rule_id, target: o.target }, "reset") }, "Reset") : null));
     const hdr = ["Sev", "Rule", "Target", "Message", "Condition", "Ack", "Latch/reset", "First", "Last", "Value", ""];
@@ -541,10 +632,10 @@
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.open.map(occRow)))),
       h("div", { class: "card" }, h("h2", null, "Commands (incl. rejected / uncertain)"),
         h("table", null, h("thead", null, h("tr", null, ["Time", "Actor", "Target", "Desired", "Origin", "Outcome", "Detail"].map(x => h("th", null, x)))),
-          h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
+          h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc), susPill(c)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
             h("td", null, c.origin), h("td", null, pill(c.outcome, c.outcome === "READBACK_CONFIRMED" ? "ok" : c.outcome === "REJECTED" ? "warn" : "bad")), h("td", { class: "muted" }, c.detail || "")))))),
       h("div", { class: "card" }, h("h2", null, "Events"),
-        h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc)), h("td", null, e.kind), h("td", null, e.actor || ""),
+        h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc), susPill(e)), h("td", null, e.kind), h("td", null, e.actor || ""),
           h("td", { class: "mono" }, JSON.stringify(e.payload).slice(0, 200))))))),
       h("div", { class: "card" }, h("h2", null, "Alarm history (closed)"),
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.history.map(occRow)))));
@@ -553,8 +644,9 @@
   // ------------------------------------------------ settings
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
-    const [s, ret, bk] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
-      api("GET", "/api/backup").catch(() => null)]), c = s.config;
+    const [s, ret, bk, qu, off] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
+      api("GET", "/api/backup").catch(() => null), api("GET", "/api/history/quarantine").catch(() => null),
+      api("GET", "/api/offsite").catch(() => null)]), c = s.config;
     S.settingsLoaded = true;
     const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
     const userForm = can("user_admin") ? (() => {
@@ -584,7 +676,9 @@
           h("dt", null, "Projection"), h("dd", null, s.storage.projected_window_bytes != null ? `${gib(s.storage.projected_window_bytes)} at ${s.storage.retention_days} days` + (s.storage.projected_over_budget ? " (over budget)" : "") : "after one day of history"),
           h("dt", null, "Free disk"), h("dd", null, `${gib(s.storage.free_bytes)} (warning below ${gib(s.storage.warning_free_bytes)}, starts refused below ${gib(s.storage.reserve_bytes)}, snapshots pause below ${gib(s.storage.snapshot_floor_bytes)})`))),
         retentionCard(ret),
+        quarantineCard(qu),
         bk ? backupCard(bk) : h("div", { class: "card" }, h("h2", null, "Backups"), h("p", { class: "muted" }, "Backup state unavailable.")),
+        offsiteCard(off),
         h("div", { class: "card" }, h("h2", null, "Production status"), h("dl", { class: "kv" }, ...Object.entries(s.production_fields).flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)])),
           h("p", { class: "muted" }, s.commissioning_evidence))),
       h("div", { class: "card" }, h("h2", null, "Buses"), tbl(["Bus", "Kind", "Port", "Serial", "Poll s"], c.buses.map(b => [b.bus_id, b.kind, b.port, `${b.serial.baudrate} ${b.serial.bytesize}${b.serial.parity}${b.serial.stopbits}`, b.poll_interval_s]))),

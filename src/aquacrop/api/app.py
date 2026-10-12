@@ -12,6 +12,7 @@ import io
 import ipaddress
 import json
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
@@ -29,6 +30,7 @@ from ..config.catalog import CATALOG
 from ..config.schema import InstallationConfig
 from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
 from ..historian.backup import create_backup
+from ..historian.recording import slot_clock_epoch
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
@@ -158,6 +160,16 @@ class RetentionConfirmIn(Body):
     cutoff_utc: str = Field(min_length=20, max_length=40)   # the cutoff shown by GET /api/retention
 
 
+class OffsitePolicyIn(Body):
+    policy_hash: str = Field(min_length=16, max_length=16, pattern="^[0-9a-f]{16}$")   # from GET /api/offsite
+    confirm: Literal[True]
+
+
+class QuarantineConfirmIn(Body):
+    proposal_id: str = Field(min_length=16, max_length=16, pattern="^[0-9a-f]{16}$")   # from GET /api/history/quarantine
+    clock_checked: bool          # the administrator checked the date and time against an independent source
+
+
 def _escape_csv(v):
     """Prevent spreadsheet formula injection in textual fields."""
     if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
@@ -201,6 +213,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         raise ValueError(f"profile {cfg.profile.value} is not served by this release")
     if reconciled:
         hist.event("COMMANDS_RECONCILED", {"request_ids": reconciled}, actor="system")
+    from ..historian.offsite import Busy, NotActivated, Offsite, OffsiteMonitor, PolicyMismatch
+    offsite = OffsiteMonitor(cfg, state_dir, hist)
+    svc.offsite = offsite
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -631,8 +646,13 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     async def alarms(p: Principal = Depends(require(Perm.READ)), limit: int = Query(200, ge=1, le=1000)):
         hist_rows = hist.query("SELECT json FROM alarm_occurrences WHERE closed=1 ORDER BY updated_utc DESC LIMIT ?",
                                (limit,))
-        return {"open": [o.to_dict() for o in list(_alarm_engine().open.values())],
-                "history": [json.loads(x[0]) for x in hist_rows]}
+        reg = hist.quarantines
+
+        def flag(d: dict) -> dict:
+            q = reg.find_occurrence(d.get("occurrence_id", ""))
+            return d | {"timestamp_suspect": q is not None, "quarantine_id": q.quarantine_id if q else None}
+        return {"open": [flag(o.to_dict()) for o in list(_alarm_engine().open.values())],
+                "history": [flag(json.loads(x[0])) for x in hist_rows]}
 
     @app.post("/api/alarms/ack")
     async def ack(body: AlarmRefIn, p: Principal = Depends(require(Perm.ALARM_ACK))):
@@ -673,7 +693,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             sql += " AND kind=?"
             args.append(kind)
         rows = hist.query(sql + " ORDER BY id DESC LIMIT ?", tuple(args + [limit + 1]))
-        out = [dict(r) | {"payload": json.loads(r["payload_json"])} for r in rows[:limit]]
+        reg = hist.quarantines
+        out = [dict(r) | {"payload": json.loads(r["payload_json"])} | reg.flags("events", r["id"]) for r in rows[:limit]]
         for o in out:
             o.pop("payload_json")
             if not p.can(Perm.EXPORT_AUDIT) and o["kind"] in ("LOGIN", "LOGOUT", "REQUEST_REJECTED"):
@@ -682,9 +703,10 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/commands/history")
     def command_history(p: Principal = Depends(require(Perm.READ)), limit: int = Query(200, ge=1, le=2000)):
-        rows = hist.query("SELECT request_id, actor, target, desired, origin, reason, intent_utc, outcome, detail, "
-                          "readback, outcome_utc, backend FROM commands ORDER BY intent_utc DESC LIMIT ?", (limit,))
-        return [dict(r) for r in rows]
+        rows = hist.query("SELECT rowid AS seq, request_id, actor, target, desired, origin, reason, intent_utc, outcome, "
+                          "detail, readback, outcome_utc, backend FROM commands ORDER BY intent_utc DESC LIMIT ?", (limit,))
+        reg = hist.quarantines
+        return [dict(r) | reg.flags("commands", r["seq"]) for r in rows]
 
     # ------------------------------------------------------------------ trends / export / analytics
     @app.get("/api/trends")
@@ -696,17 +718,21 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         ids = [x for x in points.split(",") if x][:16]
         series, truncated = {}, False
         for pid in ids:
-            rows = hist.query("SELECT s.acquired_utc, s.value, s.raw_value, s.quality, s.origin, s.unit, s.sim_s, "
-                              "s.sim_run_id, c.cadence_s, c.cadence_basis FROM samples s JOIN cycles c ON "
+            rows = hist.query("SELECT s.id, s.acquired_utc, s.value, s.raw_value, s.quality, s.origin, s.unit, s.sim_s, "
+                              "s.sim_run_id, c.cadence_s, c.cadence_basis, c.cycle_id FROM samples s JOIN cycles c ON "
                               "c.cycle_pk=s.cycle_pk WHERE s.point_id=? AND s.acquired_utc>=? AND s.acquired_utc<=? "
                               "AND (? IS NULL OR c.cadence_basis=?) ORDER BY s.acquired_utc LIMIT ?",
                               (pid, s, e, basis, basis, limit + 1))
             truncated |= len(rows) > limit
-            out, prev = [], None
+            out, prev, prev_q = [], None, None
+            reg = hist.quarantines
             for r in rows[:limit]:
+                q = reg.find("samples", r["id"])
                 gap = False
                 if prev is not None:
                     if r["sim_run_id"] != prev["sim_run_id"] or r["origin"] != prev["origin"]:
+                        gap = True
+                    elif q is not prev_q:      # never draw a line between suspect and trusted stamps
                         gap = True
                     elif r["cadence_basis"] != prev["cadence_basis"]:
                         gap = True
@@ -716,14 +742,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         dt = (datetime.fromisoformat(r["acquired_utc"]) - datetime.fromisoformat(prev["acquired_utc"]))
                         gap = dt.total_seconds() > 2.5 * (r["cadence_s"] or cfg.historian.acquisition_interval_s)
                 out.append([r["acquired_utc"], r["value"], r["raw_value"], r["quality"], r["origin"], r["unit"],
-                            r["sim_s"], r["sim_run_id"], gap])
-                prev = r
+                            r["sim_s"], r["sim_run_id"], gap, q is not None, slot_clock_epoch(r["cycle_id"])])
+                prev, prev_q = r, q
             series[pid] = out
         ev = hist.query("SELECT utc, kind, actor FROM events WHERE utc>=? AND utc<=? AND kind IN "
                         "('CONTROLLER_TRANSITION','ALARM_RAISED','ALARM_CLEARED','RUN_STARTED','RUN_RESET',"
                         "'OVERRIDE_SET','ACTUATOR_FAULT','DEVICE_FAULT') ORDER BY utc LIMIT 2000", (s, e))
         return {"start": s, "end": e, "columns": ["acquired_utc", "value", "raw", "quality", "origin", "unit",
-                                                  "sim_s", "sim_run_id", "gap_before"],
+                                                  "sim_s", "sim_run_id", "gap_before", "timestamp_suspect",
+                                                  "clock_epoch"],
                 "series": series, "events": [list(x) for x in ev], "truncated": truncated, "limit": limit,
                 "display_timezone": cfg.site.timezone}
 
@@ -737,7 +764,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         ids = [x for x in (points or "").split(",") if x]
         sql = ("SELECT id, acquired_utc, point_id, raw_value, raw_type, raw_unit, value, unit, quality, reason, origin, "
                "calibration_ref, config_version, source_profile, device_uid, bus_id, session_id, sim_run_id, sim_s, "
-               "override_json FROM samples WHERE acquired_utc>=? AND acquired_utc<=? AND id>?")
+               "override_json, cycle_pk FROM samples WHERE acquired_utc>=? AND acquired_utc<=? AND id>?")
         args: list = [s, e, after_id]
         if ids:
             sql += f" AND point_id IN ({','.join('?' * len(ids))})"
@@ -747,22 +774,28 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         rows = hist.query(sql, tuple(args))
         more = len(rows) > limit
         rows = rows[:limit]
+        reg = hist.quarantines
 
         def gen():
             buf = io.StringIO()
             w = csv.writer(buf)
+            if reg.items:
+                w.writerow(["# timestamp_suspect=SUSPECT marks rows whose UTC stamps were quarantined (written while the "
+                            "clock was wrong); values and stamps are as recorded"])
             w.writerow(["# AquaCrop export", f"range_utc={s}..{e}", f"display_tz={zone.key}",
                         f"config={cfg.config_id}@{cfg.config_version}", f"exported_by={p.username}"])
             w.writerow(["id", "acquired_utc", "acquired_local", "local_tz_abbrev", "point_id", "raw_value", "raw_type",
                         "raw_unit", "value", "unit", "quality", "reason", "origin", "calibration_ref",
                         "config_version", "source_profile", "device_uid", "bus_id", "session_id", "sim_run_id",
-                        "sim_s", "override"])
+                        "sim_s", "override", "snapshot_seq", "timestamp_suspect", "quarantine_id"])
             for r in rows:
                 loc = datetime.fromisoformat(r["acquired_utc"]).astimezone(zone)
                 vals = [r["id"], r["acquired_utc"], loc.isoformat(), loc.tzname()] + [r[k] for k in (
                     "point_id", "raw_value", "raw_type", "raw_unit", "value", "unit", "quality", "reason", "origin",
                     "calibration_ref", "config_version", "source_profile", "device_uid", "bus_id", "session_id",
                     "sim_run_id", "sim_s", "override_json")]
+                q = reg.find("samples", r["id"])
+                vals += [r["cycle_pk"], "SUSPECT" if q else "", q.quarantine_id if q else ""]
                 w.writerow([_escape_csv(v) for v in vals])
                 if buf.tell() > 65536:
                     yield buf.getvalue()
@@ -785,15 +818,17 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                      end: str | None = None):
         s, e = _range(start, end, 24 * 60)
         cap = AUDIT_EXPORT_MAX_ROWS   # bounded reader; narrow the range for more
-        rows = hist.query("SELECT 'event' AS type, utc AS t, kind AS what, actor, payload_json AS detail FROM events "
-                          "WHERE utc>=? AND utc<=? UNION ALL SELECT 'command', intent_utc, target||'='||desired||' '||"
-                          "outcome, actor, coalesce(detail,'') FROM commands WHERE intent_utc>=? AND intent_utc<=? "
-                          "ORDER BY 2 LIMIT ?", (s, e, s, e, cap + 1))
+        rows = hist.query("SELECT 'event' AS type, utc AS t, kind AS what, actor, payload_json AS detail, id AS seq "
+                          "FROM events WHERE utc>=? AND utc<=? UNION ALL SELECT 'command', intent_utc, target||'='||"
+                          "desired||' '||outcome, actor, coalesce(detail,''), rowid FROM commands WHERE intent_utc>=? "
+                          "AND intent_utc<=? ORDER BY 2 LIMIT ?", (s, e, s, e, cap + 1))
+        reg = hist.quarantines
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["type", "utc", "what", "actor", "detail"])
+        w.writerow(["type", "utc", "what", "actor", "detail", "seq", "timestamp_suspect", "quarantine_id"])
         for r in rows[:cap]:
-            w.writerow([_escape_csv(v) for v in r])
+            q = reg.find("events" if r["type"] == "event" else "commands", r["seq"])
+            w.writerow([_escape_csv(v) for v in list(r)] + ["SUSPECT" if q else "", q.quarantine_id if q else ""])
         if len(rows) > cap:
             w.writerow([f"# TRUNCATED at {cap} rows; narrow the time range"])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
@@ -922,11 +957,51 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             raise HTTPException(422, str(e))
         return {"released": True, "cutoff_utc": prop["cutoff_utc"], "would_delete": prop["would_delete"]}
 
+    # ------------------------------------------------------------------ timestamp quarantine (ADR-0011)
+    @app.get("/api/history/quarantine")
+    def quarantine_state(p: Principal = Depends(require(Perm.READ))):
+        """Quarantines in force and, when records are stamped later than the current clock, the proposal
+        an administrator can confirm. Read-only."""
+        from ..historian.quarantine import propose
+        prop = hist.read(lambda c: propose(c, hist.quarantines, wall_s=time.time()))
+        return {"clock_epoch": hist.quarantines.clock_epoch, "quarantines": hist.quarantines.view(),
+                "proposal": prop, "recorder": svc.recorder.health(), "retention_held": svc.retention.held}
+
+    @app.post("/api/history/quarantine")
+    def quarantine_confirm(body: QuarantineConfirmIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        """Administrator's audited quarantine of records with future-dated stamps: flags them, starts a new
+        clock epoch so recording resumes, and holds retention. Deletes and rewrites nothing."""
+        from ..historian.quarantine import QuarantineMismatch, confirm
+        try:
+            q = confirm(hist, body.proposal_id, actor=p.username, wall_s=time.time(), clock_checked=body.clock_checked)
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except QuarantineMismatch as e:
+            raise HTTPException(409, {"error": str(e), "proposal": e.proposal})
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        svc.retention.hold_for_quarantine(q.quarantine_id)
+        svc.recorder.rebase(f"timestamp quarantine {q.quarantine_id}")
+        return {"quarantined": q.view(), "retention_held": svc.retention.held}
+
     backup_job: dict = {"running": False, "last": None}
     backup_lock = threading.Lock()
 
     def _run_backup(user: str) -> None:
         h = cfg.historian
+        if cfg.offsite_backup.enabled:      # SD card only (verified identity); never the eMMC (ADR-0012)
+            try:
+                with Offsite(cfg, state_dir, hist.db_path) as off:
+                    res = off.backup(actor=user)
+                b = res.get("backup", res)
+                backup_job["last"] = ({"ok": True, "file": b["file"], "bytes": b["bytes"]} if b.get("ok") else
+                                      {"ok": False, "error": f"{b.get('code')}: {b.get('error')}"})
+            except Exception as e:     # Busy, NotActivated or an error: recorded, never silent
+                hist.event("BACKUP_FAILED", {"error": str(e), "destination": "sd_card"}, actor=user)
+                backup_job["last"] = {"ok": False, "error": str(e)}
+            finally:
+                backup_job["running"] = False
+            return
         try:
             hist.wait_idle()
             man = create_backup(hist.db_path, state_dir / "backups", config_id=cfg.config_id,
@@ -950,7 +1025,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 raise HTTPException(409, "a backup is already running")
             backup_job["running"] = True
         threading.Thread(target=_run_backup, args=(p.username,), name="api-backup", daemon=True).start()
-        return {"started": True, "destination": str(state_dir / "backups")}
+        return {"started": True, "destination": "sd_card" if cfg.offsite_backup.enabled else str(state_dir / "backups")}
 
     @app.get("/api/backup")
     def backup_state(p: Principal = Depends(require(Perm.READ))):
@@ -968,8 +1043,28 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             "local_bytes": sum(b.stat().st_size for b in local), "newest": local[-1].name if local else None,
             "restore_drill": drill, "restore_drill_due": True if drill is None else due,
             "restore_drill_interval_days": cfg.historian.restore_drill_interval_days,
-            "off_device": "NOT CONFIGURED: the off-device backup destination is an open owner decision; local "
-                          "backups do not survive loss of this device"}
+            "offsite_enabled": cfg.offsite_backup.enabled,
+            "off_device": ("SD card plus encrypted cloud copies (see Off-device backups)" if cfg.offsite_backup.enabled
+                           else "NOT ACTIVATED: SD-card and encrypted OneDrive backups are implemented but wait for the "
+                                "owner to confirm the card and the account/folder; until then these eMMC backups do "
+                                "not survive loss of this device")}
+
+    @app.get("/api/offsite")
+    def offsite_state(p: Principal = Depends(require(Perm.READ))):
+        """SD-card backups, upload queue, cloud copies, restore drills and the copy policy (ADR-0012).
+        Read from state files; nothing is contacted."""
+        return offsite.view()
+
+    @app.post("/api/offsite/policy")
+    def offsite_policy(body: OffsitePolicyIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        """An administrator confirms the configured copy policy; only then is pruning enabled. A later
+        change to the policy needs a new confirmation."""
+        try:
+            entry = Offsite(cfg, state_dir, hist.db_path).confirm_policy(p.username, body.policy_hash)
+        except PolicyMismatch as e:
+            raise HTTPException(409, {"error": str(e), "policy": e.policy})
+        offsite.record(entry)
+        return {"confirmed": entry["payload"]}
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")

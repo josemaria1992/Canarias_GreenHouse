@@ -88,6 +88,12 @@ refuses that combination on any non-loopback bind.
 
 ## Secrets and files
 
+Off-device backups (ADR-0012, not activated): the rclone configuration with the OneDrive token and
+the obscured crypt keys lives at `/var/lib/aquacrop/rclone/rclone.conf` (0600, user `aquacrop`), never
+in git; the plain crypt password and salt are escrowed away from the controller; the rclone wrapper
+allows copy operations only and refuses a remote that is not a crypt remote
+(`operations/offsite-backups.md`).
+
 `secret.key` (session/CSRF HMAC key, created with mode 0600) and the database live in the state
 directory; the systemd unit creates that directory with mode 0700. Back up the database with `backup create`; the secret is not part of backups. Losing it only
 signs everyone out. Backups contain the Argon2id password hashes and are written with mode 0600;

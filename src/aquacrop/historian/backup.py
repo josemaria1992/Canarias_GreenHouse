@@ -437,12 +437,29 @@ def _db_facts(db: Path, *, deep: bool = False) -> dict:
     return facts
 
 
+def _neutralize_permissions(db: Path) -> dict:
+    """A restored copy used only for a drill keeps no login sessions and no bench leases, so nothing
+    restored can carry a session or a hardware write permission (checked after counts/fingerprints)."""
+    con = sqlite3.connect(db)
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        out = {}
+        for t in ("bench_leases", "auth_sessions"):
+            if t in tables:
+                out[t] = con.execute(f'DELETE FROM "{t}"').rowcount
+        con.commit()
+    finally:
+        con.close()
+    return out
+
+
 def _app_smoke(db: Path, cfg=None) -> dict:
     """The application's own startup path and queries against a restored copy: schema check/migration,
     the queries behind trends, events, alarms and the snapshot high-water mark; with a configuration,
     a full historian start and stop and the capacity report."""
     from .schema import CURRENT_VERSION, connect, migrate, schema_version
-    from .writer import NEWEST_WALL_CYCLE_SQL, Historian
+    from .quarantine import QuarantineRegister
+    from .writer import Historian, newest_wall_label
     con = connect(db)
     try:
         ver = schema_version(con)
@@ -457,9 +474,10 @@ def _app_smoke(db: Path, cfg=None) -> dict:
         for e in events:
             json.loads(e[3])
         alarms = [json.loads(r[0]) for r in con.execute("SELECT json FROM alarm_occurrences WHERE closed=0")]
-        con.execute(NEWEST_WALL_CYCLE_SQL).fetchone()
+        reg = QuarantineRegister.load(con)
+        newest_wall_label(con, reg)
         out = {"ok": True, "schema_version": ver, "migrations_applied": applied, "trend_rows": len(trend),
-               "events_read": len(events), "open_alarms": len(alarms)}
+               "events_read": len(events), "open_alarms": len(alarms), "timestamp_quarantines": len(reg.items)}
     finally:
         con.close()
     if cfg is not None:
@@ -474,7 +492,8 @@ def _app_smoke(db: Path, cfg=None) -> dict:
 
 
 def _verify_sql_gz(path: Path, man: dict, *, full: bool = False, scratch_dir: str | Path | None = None,
-                   reserve_bytes: int = 0, cfg=None) -> dict:
+                   reserve_bytes: int = 0, cfg=None, scratch_reserve_bytes: int | None = None,
+                   neutralize_permissions: bool = False) -> dict:
     result: dict = {"path": str(path), "ok": False, "manifest": man}
     result["checksum_ok"] = man.get("sha256") == _sha256(path)
     try:
@@ -492,7 +511,9 @@ def _verify_sql_gz(path: Path, man: dict, *, full: bool = False, scratch_dir: st
     if result["counts"] != man["row_counts"]:
         problems.append(f"row counts {result['counts']} differ from manifest {man['row_counts']}")
     if full and not problems:
-        full_res = _full_restore_check(path, man, scratch_dir=scratch_dir, reserve_bytes=reserve_bytes, cfg=cfg)
+        full_res = _full_restore_check(path, man, scratch_dir=scratch_dir, reserve_bytes=reserve_bytes, cfg=cfg,
+                                       scratch_reserve_bytes=scratch_reserve_bytes,
+                                       neutralize_permissions=neutralize_permissions)
         result["full"] = full_res
         problems += full_res["problems"]
     result["integrity"] = "; ".join(problems) if problems else (
@@ -502,12 +523,15 @@ def _verify_sql_gz(path: Path, man: dict, *, full: bool = False, scratch_dir: st
     return result
 
 
-def _full_restore_check(path: Path, man: dict, *, scratch_dir, reserve_bytes: int, cfg) -> dict:
+def _full_restore_check(path: Path, man: dict, *, scratch_dir, reserve_bytes: int, cfg,
+                        scratch_reserve_bytes: int | None = None, neutralize_permissions: bool = False) -> dict:
     scratch = Path(scratch_dir) if scratch_dir else Path(tempfile.gettempdir())
     scratch.mkdir(parents=True, exist_ok=True)
     need = int((man.get("source_db_used_bytes") or man.get("source_db_bytes") or 0) * SCRATCH_FACTOR)
     source = Path(man.get("source_db") or "")
     keep = reserve_bytes if (not source.exists() or _same_device(scratch, source.parent)) else 0
+    if scratch_reserve_bytes is not None:      # an explicit headroom for this scratch space (offsite drill)
+        keep = max(keep, scratch_reserve_bytes)
     free = _free_bytes(scratch)
     out: dict = {"scratch_dir": str(scratch), "needed_bytes": need, "free_bytes_before": free,
                  "reserve_kept_bytes": keep, "problems": []}
@@ -546,6 +570,8 @@ def _full_restore_check(path: Path, man: dict, *, scratch_dir, reserve_bytes: in
             bad = [t for t, f in man["fingerprints"].items() if facts["fingerprints"].get(t) != f]
             if bad:
                 p.append(f"first/last-row fingerprints differ for {bad}")
+        if neutralize_permissions:
+            out["permissions_removed"] = _neutralize_permissions(db)
         try:
             out["smoke"] = _app_smoke(db, cfg)
             if not out["smoke"]["ok"]:
@@ -559,7 +585,8 @@ def _full_restore_check(path: Path, man: dict, *, scratch_dir, reserve_bytes: in
 
 
 def verify_backup(path: str | Path, *, full: bool = False, scratch_dir: str | Path | None = None,
-                  reserve_bytes: int = 0, cfg=None, report_dir: str | Path | None = None) -> dict:
+                  reserve_bytes: int = 0, cfg=None, report_dir: str | Path | None = None,
+                  scratch_reserve_bytes: int | None = None, neutralize_permissions: bool = False) -> dict:
     """Never touches the live database. A directory means its newest published backup. `full=True` is
     the restore drill (see the module notes); `report_dir` keeps a JSON report of it."""
     path = Path(path)
@@ -576,7 +603,8 @@ def verify_backup(path: str | Path, *, full: bool = False, scratch_dir: str | Pa
                       "integrity": "manifest missing"}
         else:
             result = _verify_sql_gz(path, man, full=full, scratch_dir=scratch_dir, reserve_bytes=reserve_bytes,
-                                    cfg=cfg)
+                                    cfg=cfg, scratch_reserve_bytes=scratch_reserve_bytes,
+                                    neutralize_permissions=neutralize_permissions)
     else:
         result = {"path": str(path), "manifest": man}
         result["checksum_ok"] = (man.get("sha256") == _sha256(path)) if man else None

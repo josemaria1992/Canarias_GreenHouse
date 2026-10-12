@@ -12,3 +12,5 @@
 | 0008 | Historian: 60 s snapshots, rolling 365 days, storage budget | accepted |
 | 0009 | No controller or twin on a real profile | accepted |
 | 0010 | Polling instead of streams | accepted |
+| 0011 | Timestamp quarantine after a clock correction | accepted |
+| 0012 | SD-card daily backups and encrypted OneDrive copies | accepted, not activated |

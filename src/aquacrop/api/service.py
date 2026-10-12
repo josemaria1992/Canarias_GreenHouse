@@ -35,6 +35,7 @@ class SimulationService:
         self.task = {"state": "NOT_STARTED", "heartbeat_monotonic": None, "failures": deque(maxlen=20),
                      "last_error": None, "restarts": 0}
         self.retention = RetentionTask(hist, wall=wall, monotonic=monotonic)
+        self.offsite = None                 # OffsiteMonitor, attached by the app (needs the state directory)
         self.new_run("process start", restore_alarms=True)
         # Installation history: a complete snapshot every recording_interval_s of WALL time, whatever the
         # simulation speed or pause state; the run id and simulated time are stored with each snapshot.
@@ -155,6 +156,8 @@ class SimulationService:
         if self._next_storage_check is None or now >= self._next_storage_check:
             self._next_storage_check = now + STORAGE_CHECK_S
             self.retention.tick(rt.alarms, rt.sim_s)
+            if self.offsite is not None:
+                self.offsite.tick(rt.alarms, rt.sim_s)
             evaluate_storage_alarm(self.hist, rt.alarms, rt.sim_s)
         self.recorder.tick()
         evaluate_recorder_alarm(self.recorder, rt.alarms, rt.sim_s)

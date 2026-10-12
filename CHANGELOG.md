@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
+
+### Added
+- Timestamp quarantine: when records are stamped later than the clock (a clock that ran ahead and
+  was corrected), Settings proposes which records and why; an administrator who checked the date
+  quarantines them (`HISTORY_TIMESTAMPS_QUARANTINED`). Records, values and stamps are kept and
+  flagged; recording resumes at once in a new clock epoch (`slot/60s/e<n>/<label>`); retention stays
+  held until the date and cutoff are confirmed separately. No schema migration.
+- Suspect stamps are visible everywhere: a dashed grey series with rings in trends,
+  `timestamp_suspect`/`quarantine_id` (and `snapshot_seq`/`seq`) in the sample and audit exports,
+  `SUSPECT TIME` on events, alarm occurrences and commands.
+- Clock events carry a watermark (the newest id of each table) so a quarantine maps exactly to records.
+- Off-device backups, **not activated**: `offsite_backup` configuration; `offsite enroll-card`,
+  `check`, `backup`, `upload`, `plan`, `drill`, `status`; SD-card identity checks (mount, UUID,
+  read-write, enrolment marker, never the eMMC); daily verified backups on the card; encrypted
+  copies with rclone `copyto` through a crypt remote, verified with `cryptcheck`; a persistent
+  upload queue with backoff; monthly restore drills from the cloud copy into SD scratch space with a
+  10 GiB-plus-headroom preflight; a copy policy (proposed 7 local, 30 daily + 12 monthly in the
+  cloud) that prunes only after an administrator confirms it; `OFFSITE_*` events and the
+  `OFFSITE_BACKUP` alarm; a Settings card; systemd units and an fstab example;
+  `docs/operations/offsite-backups.md` (authorization, credentials, recovery keys, activation).
+- CI installs rclone on Linux and requires the real rclone round trip there.
+- ADR-0008, ADR-0011 and ADR-0012 accepted by the owner (2026-10-12 20:04 UTC).
+- Review fixes: a quarantine whose records retention deleted is retired (`HISTORY_QUARANTINE_RETIRED`)
+  so reused ids are neither flagged nor deleted; alarm occurrences refreshed by the wrong clock are
+  quarantined too; activation requires the cloud remote; a read-back error from the card is recorded
+  as `VERIFY_FAILED`.
+- Owner choices for off-device backups recorded in `docs/operations/offsite-backups.md`: 64 GB ext4
+  card, the shared folder in a colleague's personal OneDrive (with setup steps for a shared folder),
+  a sealed printed key copy, and the 7 / 30 + 12 copy policy. Still not activated.
+
+### Changed
+- A confirmed quarantine supersedes the clock hold it answers (`TIMESTAMPS_QUARANTINED`); a hold
+  that was in force at shutdown is restored at start.
+
 ## Unreleased (2026-10-12): historian at 60 s, rolling 365 days (ADR-0008, revised after review)
 
 ### Changed

@@ -1,4 +1,4 @@
-# Handover: AquaCrop platform 0.2.0.dev0 (2026-10-11, historian update and review revisions 2026-10-12)
+# Handover: AquaCrop platform 0.2.0.dev0 (2026-10-11, historian update, quarantine and off-device backups 2026-10-12)
 
 ## What works (software, verified on a desktop)
 
@@ -20,6 +20,17 @@
   retention and backup state visible in the UI and `storage report`; backups published only after
   verification, with a restore drill. Measured 8.11 GiB for one year of 48 points under a
   workload with commands, alarms and faults (ADR-0008, revised after the owner's review).
+- **Timestamp quarantine (2026-10-12)**: after a clock correction an administrator can quarantine
+  records stamped later than the clock. Records, values and stamps are kept and flagged
+  `SUSPECT` in trends, exports, events, alarms and commands; recording resumes at once in a new
+  clock epoch without duplicates; retention stays held until the date and cutoff are confirmed
+  separately (ADR-0011).
+- **Off-device backups (2026-10-12, not activated)**: daily backups to a verified SD card (never the
+  eMMC as fallback), encrypted copies to OneDrive with rclone (copy and cryptcheck, no mirror sync),
+  a persistent upload queue that retries when the connection returns, monthly restore drills from
+  the cloud copy into SD scratch space, and pruning only after an administrator confirms the copy
+  policy. Shipped disabled until the card and the account/folder are confirmed (ADR-0012,
+  `operations/offsite-backups.md`).
 
 ## What changed from v0.1
 
@@ -29,7 +40,8 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-252 tests pass on Python 3.11, 3.12 and 3.13. `demo verify` gives 21/21 on both fixtures, and
+271 tests pass on Python 3.11, 3.12 and 3.13 (one of them runs the real rclone binary against a
+local encrypted remote; it is skipped where rclone is not installed and required on CI's Linux jobs). `demo verify` gives 21/21 on both fixtures, and
 the installed wheel passes 13/13 from outside the repository. A simulated 400-day history at 60 s
 with commands, alarms and device faults measured the one-year size, the rolling window, the WAL,
 the compressed backup and the restore drill; a concurrency stress run measured the WAL and
@@ -56,23 +68,28 @@ Resolved on 2026-10-12: the repository is `github.com/josemaria1992/Canarias_Gre
 (ADR-0007), and history is 60 s snapshots kept for a rolling 365 days within the existing 32 GB
 eMMC and SQLite database (ADR-0008).
 
-1. **Accept the revised ADR-0008** (R1 to R5 of the owner's review answered; status "proposed").
-2. **Off-device backup destination**: the device keeps 7 compressed daily backups, which do not
-   protect against losing the eMMC. The same destination (or a USB disk) is needed as scratch
-   space for the monthly restore drill, which cannot run on the eMMC beside a full year.
-3. **A clock set back**: snapshots are held until the clock passes the newest stored label (no
-   duplicates, nothing deleted). After a large backward correction that can mean a long gap; an
-   administrator-authorized resume path can be added if wanted.
-4. Production facts still `TBD`: hydraulic topology, wiring/physical mapping (also unblocks shadow
+ADR-0008 (revised), ADR-0011 (timestamp quarantine) and ADR-0012 (SD card and OneDrive) were
+accepted by the owner on 2026-10-12 20:04 UTC.
+
+1. **Activate off-device backups**: the owner chose a 64 GB ext4 card, the shared folder
+   `AQUACROP_DATOS_CANARIAS` (a colleague's personal OneDrive), a sealed printed key copy and the
+   7 / 30 + 12 copy policy; rclone signs in with the owner's personal Microsoft account; the folder
+   owner's plan has 1 TB (2026-10-12). Left: the colleague shares the folder by name with edit
+   rights, then card enrolment and rclone setup on the controller (on site, with the hardware).
+   `operations/offsite-backups.md` sections 1 and 3.1.
+2. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
+   future-dated records are now resolved by the administrator's quarantine (ADR-0011).
+3. Production facts still `TBD`: hydraulic topology, wiring/physical mapping (also unblocks shadow
    mode), VFD interface, probes and calibration, recipes, safe-state/cause-and-effect matrix,
    physical alarm severities, role assignments and remote rights, OS update policy.
-5. The supporting files named in the brief (`ACCEPTANCE_TEST_PLAN.md` and others) were never
+4. The supporting files named in the brief (`ACCEPTANCE_TEST_PLAN.md` and others) were never
    supplied. The acceptance IDs here are this project's own.
 
 ## Physical tests still required (milestone 5, none performed)
 
 CP-00 platform record (OS image, UART/tty mapping, RTC, CM4 performance, storage growth, WAL
-behaviour, backup time and free space on the eMMC); CP-01 read-only
+behaviour, backup time and free space on the eMMC, the SD card in its USB reader, the first
+OneDrive upload and drill, the recovery-key escrow test); CP-01 read-only
 identification of each module; CP-02 AI stimulus; CP-03 DI stimulus; CP-04 DO on dummy loads under
 a bench lease with teardown; CP-05 disconnect/restart/power-loss with a passive bus monitor proving
 zero write frames. Each needs the hardware on an isolated bench and your written authorization of

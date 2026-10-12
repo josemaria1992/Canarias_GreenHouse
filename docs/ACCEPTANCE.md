@@ -1,9 +1,10 @@
 # Acceptance matrix
 
 **Environment:** Linux x86_64 container, Python 3.13.16 (also 3.11.15 and 3.12.13), pymodbus
-3.11.3, FastAPI 0.143, SQLite WAL. **Run:** 2026-10-12 (historian update, ADR-0008), software
-0.2.0.dev0, tested at commit `f0b18e2` (only documentation changed after). The 2026-10-11 run was at `0ce4842` (183 tests).
-**Results:** `python -m pytest`: 252 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
+3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-12 (historian update ADR-0008;
+quarantine ADR-0011 and off-device backups ADR-0012), software 0.2.0.dev0. The 2026-10-11 run was at
+`0ce4842` (183 tests); the ADR-0008 run at `f0b18e2` (252 tests).
+**Results:** `python -m pytest`: 271 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
 `demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`. Installed-wheel check
 (`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
 
@@ -125,6 +126,43 @@ Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`
 | AT-STO-01 growth at 60 s, 365-day size and budget, with environment and workload recorded (R5) | PASS (desktop) | 23.8 MB/day; 8.10 GiB at 365 days with commands, alarms and faults; budget 10 GiB database, 1 GiB transient WAL, 4.5 GiB backups (ADR-0008); environment, commit, command and seed in the report; 24 points: 12.0 MB (11.4 MiB) per day, about 4.1 GiB a year; backup 16.4 times smaller; restore drill passed |
 | AT-STO-02 growth, backup time, WAL and free space on the CM4 eMMC | BLOCKED | needs the CM4; part of CP-00 (`storage report`, `measure_storage.py --days 7`, `stress_concurrency.py`) |
 
+## Timestamp quarantine (owner request of 2026-10-12 16:01 UTC, ADR-0011)
+
+Tests in `tests/integration/test_quarantine.py`; every UTC stamp the historian writes follows a fake
+wall clock, so clock steps, quarantine, restart and retention run together in one process.
+
+| ID | Status | Evidence |
+|---|---|---|
+| AT-QUA-01 original records, values and stamps kept; affected records flagged; nothing deleted or rewritten | PASS | `test_forward_step_then_correction_quarantine_restart_and_retention` (row counts and every sample's id, stamp and value identical before and after) |
+| AT-QUA-02 recording resumes right after the quarantine in a new clock epoch; old future-dated labels no longer block; no back-fill | PASS | same test (11 snapshots after the quarantine, ids `slot/60s/e1/...`, `HISTORY_CLOCK_BEHIND` cleared) |
+| AT-QUA-03 genuine duplicates still refused: identity is epoch plus label, ordered by sequence | PASS | `test_label_identity_is_epoch_and_label` |
+| AT-QUA-04 retention held until a separate date-and-cutoff confirmation, also across a restart; quarantined records go only a window after the quarantine; the register is never pruned | PASS | `test_forward_step_then_correction_quarantine_restart_and_retention` |
+| AT-QUA-05 a process whose clock was wrong from boot, corrected at restart, is proposed from its start to the correction | PASS | `test_clock_wrong_from_boot_corrected_at_restart`, `test_nothing_to_quarantine_without_future_stamps` |
+| AT-QUA-06 administrator only, date check required, a changed proposal refused, audited with the actor | PASS | `test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports` |
+| AT-QUA-07 suspect records distinguished in trends, sample and audit exports, events, alarms and command history | PASS | same test; headless Chromium: dashed grey suspect series with rings and caption, `SUSPECT TIME` markers, Settings card before and after the quarantine |
+
+## Off-device backups (owner request of 2026-10-12 16:01 UTC, ADR-0012; not activated)
+
+Tests in `tests/integration/test_offsite.py`. The card is simulated (a replaceable kernel probe) and
+the cloud is a local remote; `test_real_rclone_crypt_round_trip` runs the real rclone binary
+(1.60.1 here; Ubuntu's package in CI) through a local crypt remote. **No physical card, USB reader or
+OneDrive account was used.**
+
+| ID | Status | Evidence |
+|---|---|---|
+| AT-OFF-01 card identity verified before writing: mount point, not the eMMC, confirmed UUID, read-write, enrolment marker | PASS | `test_card_identity_checks_fail_closed`, `test_linux_mountinfo_parsing` |
+| AT-OFF-02 card missing: nothing written anywhere, no fallback to the eMMC, failure recorded | PASS | `test_missing_card_writes_nothing_and_never_falls_back` |
+| AT-OFF-03 daily consistent compressed backup with checksum and manifest on the card, re-verified from the card | PASS | `test_backup_verified_queued_offline_then_uploaded_when_back` |
+| AT-OFF-04 upload is copy only (`copyto`), through a crypt remote, verified with `cryptcheck`; an unverified upload is not counted; a non-crypt remote is refused | PASS | same test, `test_rclone_wrapper_issues_only_copy_operations`, `test_real_rclone_crypt_round_trip` (names and contents encrypted at rest) |
+| AT-OFF-05 offline: uploads queued with backoff, recording continues, the queue survives a restart and drains when the connection returns | PASS | `test_backup_verified_queued_offline_then_uploaded_when_back` |
+| AT-OFF-06 failed creation, failed verification (before or after publication) and a full card keep earlier backups | PASS | `test_failed_creation_or_verification_keeps_earlier_backups` |
+| AT-OFF-07 7 local / 30 + 12 cloud proposed and shown; nothing pruned before an administrator confirms that policy; a changed policy pauses pruning; queued and unknown copies never pruned; refused when names are later than the clock | PASS | `test_copy_policy_selection`, `test_pruning_waits_for_confirmation_and_never_deletes_unuploaded` |
+| AT-OFF-08 monthly drill from the downloaded, decrypted cloud copy into SD scratch space; 10 GiB plus headroom preflight; sessions and bench leases removed from the copy; production database untouched; scratch removed (also after a crash) | PASS | `test_monthly_drill_from_cloud_copy_into_card_scratch`, `test_real_rclone_crypt_round_trip` |
+| AT-OFF-09 shipped disabled; nothing runs until the card and account are confirmed | PASS | `test_not_activated_until_owner_confirms` |
+| AT-OFF-10 outcomes recorded once as events (also after a restart); alarms for failed backups, upload backlog and drills | PASS | `test_monitor_copies_journal_once_and_raises_alarms` |
+| AT-OFF-11 status in the API and Settings; policy confirmation administrator only, audited | PASS | `test_api_shows_state_and_policy_confirmation_is_admin_only`; headless Chromium: Settings card with a simulated card and an offline queue, policy confirmation |
+| AT-OFF-12 the physical card in its USB reader on the CM4, the owner's OneDrive account, token refresh, throughput, the escrow test | BLOCKED | card and folder chosen 2026-10-12; needs the hardware, the folder shared with the signing-in account, and the rclone setup on the controller (CP-00) |
+
 ## Milestone 5: hardware arrival
 
 | ID | Status | Evidence |
@@ -142,7 +180,7 @@ Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`
 | AI channel modes on real modules | UNKNOWN until CP-01/CP-02; values stay UNSCALED |
 | Shadow / what-if | Not served (ADR-0002) |
 | Alarm severities for physical equipment | TBD; only DEMO rules shipped |
-| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 revised, awaiting acceptance); off-device backup destination and restore-drill scratch TBD |
+| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 accepted); off-device: 64 GB ext4 SD card and the shared OneDrive folder `AQUACROP_DATOS_CANARIAS` chosen (owner, 2026-10-12), card UUID and rclone remote TBD until set up on the controller |
 | Role assignments and remote physical rights | Proposal only; owner approval required |
 | CM4 performance, UART mapping, RTC | Not measured / not verified |
 | Safety functions (E-stop, motor protection, dry-run, overfill) | Outside software; never replaced by it |

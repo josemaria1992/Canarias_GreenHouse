@@ -32,8 +32,13 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.lock
           python -m pip install --no-deps -e .
           python -m pip check
+      - name: Install rclone (offsite backup round trip through a local crypt remote)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update -q && sudo apt-get install -y -q rclone && rclone version
       - name: Tests
         run: python -m pytest -q -p no:warnings
+        env:
+          AQUACROP_REQUIRE_RCLONE: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
       - name: Headless demo verification
         run: |
           python -m aquacrop demo verify --config demo-48 --seed 42

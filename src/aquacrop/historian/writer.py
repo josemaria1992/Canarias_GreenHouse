@@ -22,21 +22,25 @@ from .. import __version__
 from ..config.schema import InstallationConfig
 from ..control.alarms import AlarmOccurrence
 from ..domain.model import CommandRecord, Sample
+from .quarantine import (MARKER_KINDS, NEWEST_WALL_BEFORE_SQL, QuarantineRegister, newest_trusted_wall_cycle,
+                         watermark)
 from .recording import slot_cycle_id, slot_epoch
 from .schema import connect, migrate, utc_iso
 
-# Newest wall-time snapshot. Wall-time labels only ever increase with cycle_pk (the writer refuses any
-# label that is not after this one), so this is a reverse rowid scan that stops at the first match.
-NEWEST_WALL_CYCLE_SQL = ("SELECT cycle_id, persisted_utc FROM cycles WHERE cadence_basis='WALL' "
-                         "ORDER BY cycle_pk DESC LIMIT 1")
+# Newest wall-time snapshot below a primary-key bound. Wall-time labels only ever increase with
+# cycle_pk within the trusted history (the writer refuses any label that is not after the newest
+# trusted one), so this is a reverse rowid walk that stops at the first match; quarantined ranges
+# (ADR-0011) are jumped over, one index lookup each.
+NEWEST_WALL_CYCLE_SQL = NEWEST_WALL_BEFORE_SQL
 
 
-def newest_wall_label(c: sqlite3.Connection) -> float | None:
-    row = c.execute(NEWEST_WALL_CYCLE_SQL).fetchone()
+def newest_wall_label(c: sqlite3.Connection, reg: QuarantineRegister | None = None) -> float | None:
+    """Newest stored wall-time label that is not quarantined (epoch seconds), or None."""
+    row = newest_trusted_wall_cycle(c, reg)
     if row is None:
         return None
-    t = slot_epoch(row[0])
-    return t if t is not None else datetime.fromisoformat(row[1]).timestamp()
+    t = slot_epoch(row[1])
+    return t if t is not None else datetime.fromisoformat(row[2]).timestamp()
 
 
 def _num(v: Any) -> float | None:
@@ -152,6 +156,7 @@ class Historian:
         con = connect(self.db_path)
         self.applied_migrations = migrate(con, self.db_path, reserve_bytes=cfg.historian.free_space_reserve_bytes)
         self._con = con
+        self.quarantines = QuarantineRegister.load(con)   # timestamp quarantines in force (ADR-0011)
         # Two read connections: user queries (trends, exports, audit) on one, the short reads the
         # acquisition loop and status page depend on (capacity, open alarms, newest label) on the other,
         # so a long export never delays a poll cycle's storage check.
@@ -313,7 +318,7 @@ class Historian:
 
         def op(c: sqlite3.Connection):
             if label_s is not None:
-                newest = newest_wall_label(c)
+                newest = newest_wall_label(c, self.quarantines)
                 if newest is not None and label_s <= newest + 1e-6:
                     self.health["labels_refused"] += 1
                     c.execute("INSERT INTO events(utc,kind,actor,session_id,run_id,sim_s,payload_json) "
@@ -349,14 +354,19 @@ class Historian:
         simulation's provenance. False if paused for disk (the label is then reported, not written)."""
         if not self.snapshot_permitted(at):
             return False
-        self.write_cycle(slot_cycle_id(at, interval_s), samples, run_id=run_id, sim_s=sim_s, cadence_s=interval_s,
+        self.write_cycle(slot_cycle_id(at, interval_s, self.quarantines.clock_epoch), samples, run_id=run_id, sim_s=sim_s, cadence_s=interval_s,
                          cadence_basis="WALL", label_s=at.timestamp())
         return True
 
     def newest_wall_label(self) -> float | None:
         """Newest wall-time label stored (epoch seconds): where a restarted recorder continues."""
         with self._status_lock:
-            return newest_wall_label(self._status)
+            return newest_wall_label(self._status, self.quarantines)
+
+    def reload_quarantines(self) -> QuarantineRegister:
+        with self._status_lock:
+            self.quarantines = QuarantineRegister.load(self._status)
+        return self.quarantines
 
     def snapshot_permitted(self, at: datetime | None = None) -> bool:
         """Low/full-disk handling: below `snapshot_floor_bytes` free, periodic snapshots pause (counted,
@@ -427,8 +437,18 @@ class Historian:
             "UPDATE commands SET outcome=?, detail=?, readback=?, outcome_utc=? WHERE request_id=?", row), wait=True)
 
     def event(self, kind: str, payload: dict, *, actor: str | None = None, sim_s: float | None = None) -> None:
-        row = (utc_iso(), kind, actor, self.session_id, payload.get("run_id"), sim_s,
-               json.dumps(payload, default=str))
+        """Queue one event. Clock events (MARKER_KINDS) also record the storage watermark, the newest id of
+        each history table when they are written, which places them exactly in the record sequence for a
+        later timestamp quarantine (ADR-0011)."""
+        utc, run = utc_iso(), payload.get("run_id")
+        if kind in MARKER_KINDS:
+            def op(c):
+                body = json.dumps(payload | {"watermark": watermark(c)}, default=str)
+                c.execute("INSERT INTO events(utc,kind,actor,session_id,run_id,sim_s,payload_json)"
+                          " VALUES(?,?,?,?,?,?,?)", (utc, kind, actor, self.session_id, run, sim_s, body))
+            self.submit(op)
+            return
+        row = (utc, kind, actor, self.session_id, run, sim_s, json.dumps(payload, default=str))
         self.submit(lambda c: c.execute("INSERT INTO events(utc,kind,actor,session_id,run_id,sim_s,payload_json)"
                                         " VALUES(?,?,?,?,?,?,?)", row))
 
@@ -471,6 +491,15 @@ class Historian:
         with self._read_lock:
             self._read.row_factory = sqlite3.Row
             return self._read.execute(sql, params).fetchall()
+
+    def read(self, fn: Callable[[sqlite3.Connection], Any]) -> Any:
+        """Run a read-only function on the user-query connection (not the status connection)."""
+        with self._read_lock:
+            self._read.row_factory = None
+            try:
+                return fn(self._read)
+            finally:
+                self._read.row_factory = sqlite3.Row
 
     def storage(self) -> dict:
         """Capacity picture for alarms, /api/status and `storage report`."""

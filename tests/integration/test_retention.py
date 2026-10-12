@@ -515,7 +515,7 @@ def test_per_poll_status_queries_are_index_lookups_not_scans(h):
     sqls = []
     con = sqlite3.connect(h.db_path)
     con.set_trace_callback(sqls.append)
-    from aquacrop.historian.writer import NEWEST_WALL_CYCLE_SQL, capacity_report, newest_wall_label
+    from aquacrop.historian.writer import capacity_report, newest_wall_label
     capacity_report(con, h.db_path, h.cfg)
     newest_wall_label(con)
     con.set_trace_callback(None)
@@ -523,10 +523,7 @@ def test_per_poll_status_queries_are_index_lookups_not_scans(h):
     assert selects
     for q in selects:
         plan = " ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + q))
-        if q == NEWEST_WALL_CYCLE_SQL:                          # reverse rowid walk, stops at the first match
-            assert plan == "SCAN cycles", plan
-            continue
-        assert "SCAN" not in plan, (q, plan)
+        assert "SCAN" not in plan, (q, plan)   # the newest-label walk is a bounded rowid search
     # The walk really does stop: its cost does not grow with the number of earlier snapshots.
     steps = []
 
