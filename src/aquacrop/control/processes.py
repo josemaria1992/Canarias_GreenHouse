@@ -116,7 +116,7 @@ class Irrigation(Process):
             bad = self._initial_permissives(ctx, step.sector)
             if bad:
                 return self.fault("PRECHECK_FAILED", f"{step.sector}: {bad}")
-            why = self.sup.global_blockers(ctx) + self._level_bad(ctx)     # wait (e.g. for the refill)
+            why = self.sup.run_blockers(self.pid, ctx) + self._level_bad(ctx)     # wait (e.g. for the refill)
             if why:
                 self.inhibit = "; ".join(why)
                 return
@@ -571,7 +571,7 @@ class Refill(_PathProcess):
             self.below_since = self.below_since if self.below_since is not None else ctx.now
             held = ctx.now - self.below_since + 1e-9
             if held >= rf.trigger_debounce_s:
-                why = self.sup.global_blockers(ctx)
+                why = self.sup.run_blockers(self.pid, ctx)
                 if why:
                     self.inhibit = "; ".join(why)
                     return
@@ -792,10 +792,18 @@ class Refill(_PathProcess):
         if path == "WATER":
             p = self._water_path(ctx, vol, None, rf.water.max_time_s)
         elif path in ("A", "B"):
-            mx = max(rf.fixed.a_L or 0, rf.fixed.b_L or 0, rf.ec.max_a_L or 0, rf.ec.max_b_L or 0)
+            # the requested stock's batch quantity in the recipe's active nutrient mode, never another
+            # stock's or the inactive mode's value
+            if rf.nutrient_mode == "FIXED_VOLUMES":
+                mx, src = (rf.fixed.a_L if path == "A" else rf.fixed.b_L), "fixed volume"
+            else:
+                mx, src = (rf.ec.max_a_L if path == "A" else rf.ec.max_b_L), "EC-target batch maximum"
+            if mx is None:
+                self.batch = None
+                return False, f"the active recipe sets no {src} for stock {path}"
             if vol > mx:
                 self.batch = None
-                return False, f"a manual {path} transfer is limited to {mx:g} L (recipe batch maximum)"
+                return False, f"a manual {path} transfer is limited to {mx:g} L (recipe {src} for stock {path})"
             stock_lv = ctx.obs.num(f"tank.{path}.level")
             ok, why = self.sup.stock_ready(path, stock_lv)
             if not ok:
@@ -880,9 +888,11 @@ class Acid(_PathProcess):
             out.append(f"main level {lv:.0f} L at the high-level inhibit")
         st = o.num("tank.ACID.level")
         ok, why = self.sup.stock_ready("ACID", st)
-        if not ok:
+        if st is None:
+            out.append(f"acid stock level unavailable ({o.why('tank.ACID.level')}): the reserve cannot be checked")
+        elif not ok:
             out.append(f"acid stock not ready: {why}")
-        elif st is not None and st <= self.recipe.body.refill.stock_reserve_L:
+        elif st <= self.recipe.body.refill.stock_reserve_L:
             out.append(f"acid stock at reserve ({st:.0f} L)")
         return out
 
@@ -890,12 +900,19 @@ class Acid(_PathProcess):
         a = self.recipe.body.acid
         main_guard = Refill._guards_main(self, None)
 
+        reserve = self.recipe.body.refill.stock_reserve_L
+
         def guard(c: Ctx) -> str | None:
             why = main_guard(c)
             if why and not why.startswith("FILL_STOP"):
                 return why
             if c.obs.num("main.ph") is None:
                 return f"FAIL:PH_UNAVAILABLE ({c.obs.why('main.ph')})"
+            st = c.obs.num("tank.ACID.level")
+            if st is None:
+                return f"FAIL:STOCK_LEVEL_UNAVAILABLE ({c.obs.why('tank.ACID.level')})"
+            if st <= reserve:
+                return f"STOCK_RESERVE_REACHED ({st:.0f} <= {reserve:g} L: acid stock empty)"
             return None
         return Path(self, "ACID", valve="valve.OUT_ACID.cmd", pump="pump.TP_ACID.cmd", run_feedback="pump.TP_ACID.running",
                     open_feedback="valve.OUT_ACID.open_limit", flow="flow.TP_ACID", target_L=vol,
@@ -944,7 +961,7 @@ class Acid(_PathProcess):
             else:
                 self.no_response = 0
             self._to(None, "MONITOR", f"settled: pH {ph:.2f} (drop {drop:.2f})")
-        why = self.sup.global_blockers(ctx) + (self._dose_blockers(ctx, ph))
+        why = self.sup.run_blockers(self.pid, ctx) + (self._dose_blockers(ctx, ph))
         if ph is not None and ph <= a.ph_target + a.ph_tolerance:
             self.inhibit = None
             if self.batch is not None:
@@ -1153,7 +1170,7 @@ class Return(Process):
                 self.next_step = f"starts when the sump reaches {rt.sump_start_L:g} L (now {sump:.0f} L)"
                 return
             if sump >= rt.sump_start_L:
-                why = self.sup.global_blockers(ctx)
+                why = self.sup.run_blockers(self.pid, ctx)
                 if why:
                     self.inhibit = "; ".join(why)
                     return
@@ -1224,6 +1241,8 @@ class Return(Process):
                     self.low_since = None
             if main >= rt.main_inhibit_L:
                 return self._stop_run(ctx, f"destination full: main {main:.0f} L >= {rt.main_inhibit_L:g} L", hold=True)
+            if o.get("tank.MAIN.high_high"):
+                return self._stop_run(ctx, "main high-high switch active: no inflow to the main tank", hold=True)
             if sump <= rt.sump_stop_L:
                 return self._stop_run(ctx, f"sump {sump:.0f} L <= stop level {rt.sump_stop_L:g} L")
             if now - self.run_t0 + 1e-9 >= rt.max_runtime_s:
@@ -1397,7 +1416,7 @@ class StockFill(_PathProcess):
             return
         self.inhibit = None
         if lv <= sf.auto_trigger_L:
-            why = self.sup.global_blockers(ctx)
+            why = self.sup.run_blockers(self.pid, ctx)
             if why:
                 self.inhibit = "; ".join(why)
                 return

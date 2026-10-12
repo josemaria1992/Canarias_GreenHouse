@@ -18,7 +18,10 @@ cleared, outputs verified off), then a deliberate AUTO or MANUAL request.
 | A process commands equipment owned by another process | Refused and logged (`PROCESS_COMMAND_REFUSED`). |
 | Recipe activated | Applies from each process's next cycle, batch or dose; running operations keep their version. |
 
-## Start interlocks (AUTO request or a MANUAL operation)
+## Start interlocks (AUTO request, every start in AUTO, or a MANUAL operation)
+
+A process in AUTO checks these again before each step, batch, run, dose or fill it starts, not only when AUTO
+is requested; while one is active it waits with the reason shown.
 
 | Condition | Blocks |
 |---|---|
@@ -63,6 +66,7 @@ sector valves, verify, deselect pumps, verify.
 | Main level unavailable | No batch can latch (inhibit shown). |
 | Water path: high-high switch, main level unavailable | Water path fails. |
 | Water path: final level (`FINAL_LEVEL`) or fixed volume (`FIXED_ADDITIONS`) reached, or `fill_stop_L` | Water path ends normally. |
+| MANUAL A or B transfer above the requested stock's quantity in the active nutrient mode (`fixed.a_L`/`fixed.b_L` in FIXED_VOLUMES, `ec.max_a_L`/`ec.max_b_L` in EC_TARGET) | Refused with the limit. |
 | Nutrient path: stock at `stock_reserve_L`, stock not acknowledged as prepared | That path (and in EC_TARGET its partner, so the ratio is kept) does not start or stops; alarm `REFILL_PATH_NOT_STARTED`; batch `INCOMPLETE`. Water continues. |
 | Any path: valve not open, pump not running, flow below minimum after grace, meter unusable, maximum time | Path fails (`PROC_PATH_FAULT` on `process.REFILL.<path>`); in EC_TARGET the partner stops; water continues; at batch end lockout `PATH_FAILED`. |
 | FIXED_VOLUMES: EC outside the band after the settling window | Alarm `REFILL_EC_VALIDATION_FAILED`, batch `OUT_OF_SPEC`; no automatic correction. |
@@ -76,11 +80,12 @@ sector valves, verify, deselect pumps, verify.
 |---|---|
 | pH at or below target + tolerance | No dose; an open batch ends `PH_IN_BAND`. |
 | pH below target − undershoot margin | Lockout `PH_UNDERSHOOT`; operator action (for example dilution by a refill), then reset. |
-| pH, main level or acid level unavailable; main below `min_dosing_L` or at `high_inhibit_L`; acid stock not acknowledged or at reserve; any addition within `settle_s`; 24 h limit reached | Waits with the reason shown. |
+| pH, main level or acid level unavailable; main below `min_dosing_L` or at `high_inhibit_L`; acid stock not acknowledged or at reserve; any addition within `settle_s` or commanded in the same scan (a refill or transfer starting); 24 h limit reached | Waits with the reason shown. |
 | Settled dose: pH rose by more than the tolerance | Lockout `PH_WRONG_RESPONSE`. |
 | `max_no_response` consecutive settled doses below `min_response_ph` | Lockout `PH_NO_RESPONSE`. |
 | Batch maximum dosed with pH still high | Lockout `ACID_BATCH_LIMIT`. |
-| Dose path fails (flow, run feedback, pH lost during the dose, time) | Lockout `DOSE_FAILED`. |
+| Dose path fails (flow, run feedback, pH or acid stock level lost during the dose, time) | Lockout `DOSE_FAILED`. |
+| Acid stock reaches `stock_reserve_L` during a dose | The dose ends; the next one waits (stock at reserve). |
 
 ## RETURN
 
@@ -88,6 +93,7 @@ sector valves, verify, deselect pumps, verify.
 |---|---|
 | Sump at `sump_start_L` (or high switch) and the main tank below `main_inhibit_L` | Start the pump chosen by `duty_policy` (no implicit rotation or failover). |
 | Main tank at `main_inhibit_L` | Hold; resumes below `main_resume_L`. If the sump high switch is also active: CRITICAL alarm `SUMP_HIGH_MAIN_FULL` (the main tank is never filled above the inhibit to hide it). |
+| Main high-high switch active while running (even with the analog level below `main_inhibit_L`) | Stop, verify, hold; no new run while the switch is active. |
 | Sump at `sump_stop_L` | Stop, verify, record the run. |
 | Sump low switch while running | Lockout `SUMP_DRY_RUN`. |
 | No running feedback, feedback lost, no flow, `max_runtime_s` | Lockout `RUN_FEEDBACK_TIMEOUT` / `PUMP_STOPPED` / `NO_FLOW` / `MAX_RUNTIME`. |
