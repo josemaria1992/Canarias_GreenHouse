@@ -7,9 +7,11 @@ Determinism contract
 * Every external input (operator command, injection, override, fault, state request, ack, reset,
   source change) is applied *between* ticks and journaled with `(tick, seq)`. Replay applies the same
   journal before the same tick in the same order and must reproduce the state hash exactly.
-* Order inside a tick: expire overrides -> plant.step -> acquire all points -> alarms -> controller
-  -> alarm transitions (and the optional simulation-time recorder) -> ledger invariant. Periodic
-  history is written on wall time by the service, outside the tick.
+* Order inside a tick: expire overrides -> plant.step -> [scan: acquire all points -> alarms] ->
+  controller -> alarm transitions (and the optional simulation-time recorder) -> [scan: ledger
+  invariant]. The demo topology scans every tick; the installation scans once per control period,
+  like the configured bus poll. Periodic history is written on wall time by the service, outside
+  the tick.
 """
 from __future__ import annotations
 
@@ -79,16 +81,18 @@ class SimulationRuntime:
         self.audit = audit or MemoryAudit()
         self.history = history
         self.rng = random.Random(self.seed)
-        self.plant = Plant(self.params)
-        self._obs = observe(self.plant, self.rng)
+        self.stale_after_s = STALE_AFTER_SIM_S
+        self.scan_stride = 1           # ticks per acquisition scan (installation: one control period)
+        self.plant = self._make_plant()
+        self._obs = self._observe()
         self.backend = VirtualBackend(cfg, observations=lambda: self._obs, actuate=self.plant.command,
                                       context=self._ctx, source=source)
         self.alarms = AlarmEngine(cfg, emit=self._alarm_event)
-        self.commands = CommandService(cfg, self.backend, self.audit, self._policy, lambda: self.controller.state)
-        self.controller = Controller(self.params, issue=self._issue_signal, alarms=self.alarms,
-                                     emit=self._event, mapped_outputs_on=self._mapped_on)
+        self.commands = CommandService(cfg, self.backend, self.audit, self._policy, self._controller_state)
         self.start_permitted = start_permitted or (lambda: (True, None))
-        self.controller.start_permitted = self.start_permitted
+        self.events: list[dict] = []   # recent events for UI (bounded); durable copy goes to audit
+        self.on_event: Callable[[dict], None] | None = None
+        self._make_control()
         self.journal: list[JournalEntry] = []
         self._seq = 0
         self._scheduled: list[tuple[int, int, str, str, dict]] = []
@@ -103,15 +107,35 @@ class SimulationRuntime:
         self._next_history_tick = self.stride_ticks
         self.invariant_failures: list[InvariantFailure] = []
         self.max_abs_residual_L = 0.0
-        self.events: list[dict] = []   # recent events for UI (bounded); durable copy goes to audit
-        self.on_event: Callable[[dict], None] | None = None
         self.acquisition_stalled = False
         self._implausible_since: dict[str, float] = {}
         self._device_status: dict[str, tuple[bool, str | None]] = {}
         self._acquire()
         self._event("RUN_STARTED", {"run_id": self.run_id, "seed": self.seed, "config_id": cfg.config_id,
                                     "config_version": cfg.config_version, "source": source.value,
-                                    "dt_s": self.params.dt_s, "provenance": self.params.provenance}, "system")
+                                    "dt_s": self.params.dt_s, "provenance": self.params.provenance,
+                                    "topology": cfg.topology} | self._run_started_extra(), "system")
+
+    # ------------------------------------------------------------------ topology hooks (demo_small here)
+    def _make_plant(self):
+        return Plant(self.params)
+
+    def _observe(self) -> dict:
+        return observe(self.plant, self.rng)
+
+    def _make_control(self) -> None:
+        self.controller = Controller(self.params, issue=self._issue_signal, alarms=self.alarms,
+                                     emit=self._event, mapped_outputs_on=self._mapped_on)
+        self.controller.start_permitted = self.start_permitted
+
+    def _controller_state(self) -> ControllerState:
+        return self.controller.state
+
+    def _control_tick(self) -> None:
+        self.controller.tick(self.sim_s, self.view())
+
+    def _run_started_extra(self) -> dict:
+        return {}
 
     # ------------------------------------------------------------------ context / events
     @property
@@ -354,7 +378,7 @@ class SimulationRuntime:
             s = self.samples.get(point) if point else None
             if s is None or s.quality not in GOOD:
                 return None
-            if s.sim_time_s is not None and self.sim_s - s.sim_time_s > STALE_AFTER_SIM_S + 1e-9:
+            if s.sim_time_s is not None and self.sim_s - s.sim_time_s > self.stale_after_s + 1e-9:
                 return None  # known acquisition age exceeds the limit: stale, not a fresh observation
             return s.value
         return ObservationView(get)
@@ -389,7 +413,7 @@ class SimulationRuntime:
             self._prev_valid[pid] = s.value
 
     def _sim_stale(self, s: Sample) -> str | None:
-        if s.sim_time_s is not None and self.sim_s - s.sim_time_s > STALE_AFTER_SIM_S + 1e-9:
+        if s.sim_time_s is not None and self.sim_s - s.sim_time_s > self.stale_after_s + 1e-9:
             return f"stale: last acquired {self.sim_s - s.sim_time_s:.1f} s before the snapshot (simulated time)"
         return None
 
@@ -421,7 +445,7 @@ class SimulationRuntime:
 
     def _acquisition_age_alarm(self) -> None:
         ages = [self.sim_s - s.sim_time_s for s in self.samples.values() if s.sim_time_s is not None]
-        if ages and max(ages) > STALE_AFTER_SIM_S + 1e-9:
+        if ages and max(ages) > self.stale_after_s + 1e-9:
             self.alarms.raise_or_update("ACQUISITION_STALE", "acquisition", severity="WARNING", sim_s=self.sim_s,
                                         message=f"newest data is {max(ages):.1f}s old (simulated time)")
         else:
@@ -453,16 +477,18 @@ class SimulationRuntime:
                     self.backend.clear_override(point)
                     self._event("OVERRIDE_EXPIRED", {"point": point}, "system")
             self.plant.step()
-            self._obs = observe(self.plant, self.rng)
-            self._cycle += 1
-            if not self.acquisition_stalled:
-                status = self._acquire()
-                self._edges()
-                self.alarms.evaluate_devices(status, self.sim_s)
-                self.alarms.evaluate_samples(self.samples, self.sim_s, self.sim_s)
-            self._acquisition_age_alarm()
-            self._plausibility()
-            self.controller.tick(self.sim_s, self.view())
+            scan = self.tick % self.scan_stride == 0
+            if scan:
+                self._obs = self._observe()
+                self._cycle += 1
+                if not self.acquisition_stalled:
+                    status = self._acquire()
+                    self._edges()
+                    self.alarms.evaluate_devices(status, self.sim_s)
+                    self.alarms.evaluate_samples(self.samples, self.sim_s, self.sim_s)
+                self._acquisition_age_alarm()
+                self._plausibility()
+            self._control_tick()
             if (self.history is not None and self.stride_ticks is not None
                     and self.tick >= self._next_history_tick):
                 self._next_history_tick = self.tick + self.stride_ticks
@@ -471,6 +497,8 @@ class SimulationRuntime:
                 self.alarms.take_transitioned()
             else:
                 self.persist_alarm_transitions()
+            if not scan:
+                continue
             r = self.plant.ledger_residual_L()
             self.max_abs_residual_L = max(self.max_abs_residual_L, abs(r))
             if abs(r) > LEDGER_TOL_ABS_L + LEDGER_TOL_PER_TICK_L * self.tick:
@@ -507,10 +535,22 @@ class SimulationRuntime:
                 "invariant_failures": len(self.invariant_failures), "provenance": self.params.provenance}
 
 
+def make_runtime(cfg: InstallationConfig, **kw) -> SimulationRuntime:
+    """The runtime for the configuration's twin topology (demo_small or installation)."""
+    if cfg.topology == "installation":
+        from .installation_runtime import InstallationRuntime
+        return InstallationRuntime(cfg, **kw)
+    kw.pop("recipes", None)
+    kw.pop("readiness", None)
+    return SimulationRuntime(cfg, **kw)
+
+
 def replay(cfg: InstallationConfig, seed: int, journal: list[JournalEntry], until_tick: int,
            **kw) -> SimulationRuntime:
-    """Re-run a recorded journal on a fresh run. No new physical path exists: the runtime is virtual."""
-    rt = SimulationRuntime(cfg, seed=seed, **kw)
+    """Re-run a recorded journal on a fresh run. No new physical path exists: the runtime is virtual.
+    For the installation topology pass the original run's `replay_kwargs()` so the recipe store and
+    stock readiness start from the same state."""
+    rt = make_runtime(cfg, seed=seed, **kw)
     entries = sorted(journal, key=lambda e: (e.tick, e.seq))
     i = 0
     while rt.tick < until_tick or (i < len(entries) and entries[i].tick <= rt.tick):

@@ -13,7 +13,7 @@ from . import __version__
 from .domain.model import new_id
 
 
-BUILTIN_CONFIGS = ("demo-48", "demo-24", "hardware-read-only.example")
+BUILTIN_CONFIGS = ("installation-48", "demo-48", "demo-24", "hardware-read-only.example")
 
 
 def resolve_config_path(path: str) -> Path:
@@ -146,6 +146,9 @@ def cmd_demo_verify(args) -> int:
     def record(name, errs, extra=""):
         results.append((name, "PASS" if not errs else "FAIL", errs, extra))
 
+    if cfg.topology == "installation":
+        _verify_installation(cfg, args, record)
+        return _verify_report(cfg, args, results)
     for name, sc in presets().items():
         try:
             rt, errs = run_scenario(cfg, sc, seed=args.seed)
@@ -173,6 +176,57 @@ def cmd_demo_verify(args) -> int:
     # inventory
     n = len(cfg.all_points())
     record("inventory:point-count", [] if n == cfg.expected_point_count() else [f"{n} != formula"], f"{n} points")
+    return _verify_report(cfg, args, results)
+
+
+def _verify_installation(cfg, args, record) -> None:
+    """Installation topology: process scenarios, determinism and replay, the 48-point I/O round trip."""
+    from .domain.model import SignalSource
+    from .twin.installation_scenarios import presets, run_installation_scenario
+    from .twin.runtime import make_runtime, replay
+    for name, sc in presets().items():
+        rt, errs = run_installation_scenario(cfg, sc, seed=args.seed)
+        errs += [f"ledger residual {f.residual_L}" for f in rt.invariant_failures[:1]]
+        record(f"scenario:{name}", errs, f"{sc.duration_s:g} s simulated")
+
+    def scripted():
+        rt = make_runtime(cfg, seed=args.seed)
+        for s in ("A", "B", "ACID"):
+            rt.schedule(0, "STOCK_ACK", "verify", {"stock": s, "note": "verify"})
+        for pid in ("IRRIGATION", "RETURN", "REFILL", "ACID"):
+            rt.schedule(0, "PROCESS_REQUEST", "verify", {"process": pid, "target": "AUTO"})
+        rt.schedule(200, "OVERRIDE_SET", "verify", {"point": cfg.point_for_signal("main.ph"), "raw": 12000,
+                                                     "reason": "verify", "duration_s": 20})
+        rt.schedule(400, "STOP_ALL", "verify", {"reason": "verify"})
+        rt.run_for(450)
+        return rt
+    a, b = scripted(), scripted()
+    record("determinism:same-seed-same-hash", [] if a.state_hash() == b.state_hash() else ["hash differs"],
+           a.state_hash()[:16])
+    r = replay(cfg, a.seed, a.journal, a.tick, **a.replay_kwargs())
+    record("replay:journal-reproduces-hash", [] if r.state_hash() == a.state_hash() else ["replay hash differs"])
+    rt = make_runtime(cfg, seed=args.seed)
+    ok, msg = rt.set_source("verify", SignalSource.IO_TEST)
+    errs = [] if ok else [msg]
+    for pid in cfg.all_points():
+        p = str(pid)
+        if pid.kind.value == "DO":
+            for v in (True, False):
+                rec = rt.operator_command("verify", p, v, "verify: I/O round trip")
+                if rec.outcome.value != "READBACK_CONFIRMED":
+                    errs.append(f"{p}={v}: {rec.outcome.value} {rec.detail}")
+        else:
+            rt.inject("verify", p, True if pid.kind.value == "DI" else 12000)
+            if rt.samples[p].quality.value != "GOOD":
+                errs.append(f"{p}: {rt.samples[p].quality.value}")
+    record("io:all-48-points-round-trip", errs, f"{len(cfg.all_points())} points on the I/O test source")
+    bad = [m for m in sys.modules if m.split(".")[0] in ("serial", "pymodbus")]
+    record("isolation:no-serial-imports", [f"imported {bad}"] if bad else [])
+    n = len(cfg.all_points())
+    record("inventory:point-count", [] if n == cfg.expected_point_count() else [f"{n} != formula"], f"{n} points")
+
+
+def _verify_report(cfg, args, results) -> int:
     w = max(len(x[0]) for x in results)
     for name, st, errs, extra in results:
         print(f"{st:5} {name:<{w}} {extra}")

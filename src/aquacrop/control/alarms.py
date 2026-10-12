@@ -190,6 +190,8 @@ class AlarmEngine:
                 cond = s.value > rule.threshold if not active_now else s.value > rule.threshold - rule.hysteresis
             elif rule.kind == "LOW":
                 cond = s.value < rule.threshold if not active_now else s.value < rule.threshold + rule.hysteresis
+            elif rule.kind == "DI_INACTIVE":
+                cond = not bool(s.value)
             else:
                 cond = bool(s.value)
             if cond and not active_now:

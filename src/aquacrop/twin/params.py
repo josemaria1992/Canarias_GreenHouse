@@ -48,6 +48,8 @@ class AutoParams(_Strict):
 
 
 class TwinParams(_Strict):
+    """Small legacy demo topology (3 pumps, 1,000 L reservoir): kept as the 24-point regression fixture."""
+    topology: Literal["demo_small"] = "demo_small"
     provenance: Literal["DEMO", "PROPOSED", "VERIFIED"] = "DEMO"
     dt_s: float = Field(default=0.1, gt=0, le=1.0)
     seed: int = 42

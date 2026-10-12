@@ -11,14 +11,18 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from ..domain.model import AccessPolicy, PointId, PointKind
+from ..twin.installation_params import InstallationTwin
 from ..twin.params import TwinParams
 from .catalog import CATALOG, AIMode, AIVariant, ModelId
 
 SCHEMA_VERSION = 1
 UNICAST_MIN, UNICAST_MAX = 1, 247  # 248-255 are reserved by Modbus even if vendor tables allow them
+
+
+_INDEX_CACHE: dict[tuple[str, int], tuple[list, dict]] = {}
 
 
 class _Strict(BaseModel):
@@ -61,6 +65,7 @@ class AIChannel(ChannelLabel):
 
 
 class DeviceConfig(_Strict):
+    _points: tuple | None = PrivateAttr(default=None)
     device_uid: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_\-]{0,47}$")
     bus_id: str
     address: int
@@ -95,11 +100,14 @@ class DeviceConfig(_Strict):
         return self
 
     def point_ids(self) -> list[PointId]:
-        spec = CATALOG[self.model]
-        out: list[PointId] = []
-        for kind, n in ((PointKind.AI, spec.ai), (PointKind.DI, spec.di), (PointKind.DO, spec.do)):
-            out += [PointId(self.device_uid, kind, ch) for ch in range(1, n + 1)]
-        return out
+        priv = self.__pydantic_private__
+        if priv["_points"] is None:
+            spec = CATALOG[self.model]
+            out: list[PointId] = []
+            for kind, n in ((PointKind.AI, spec.ai), (PointKind.DI, spec.di), (PointKind.DO, spec.do)):
+                out += [PointId(self.device_uid, kind, ch) for ch in range(1, n + 1)]
+            priv["_points"] = tuple(out)
+        return list(priv["_points"])
 
     def ai_channel(self, ch: int) -> AIChannel:
         return self.ai.get(ch, AIChannel())
@@ -153,7 +161,7 @@ class Mapping(_Strict):
 
 class AlarmRule(_Strict):
     rule_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,47}$")
-    kind: Literal["HIGH", "LOW", "DI_ACTIVE"]
+    kind: Literal["HIGH", "LOW", "DI_ACTIVE", "DI_INACTIVE"]
     point: str
     threshold: float | None = None
     hysteresis: float = Field(default=0.0, ge=0)
@@ -167,6 +175,16 @@ class AlarmRule(_Strict):
         if self.kind in ("HIGH", "LOW") and self.threshold is None:
             raise ValueError(f"alarm {self.rule_id}: {self.kind} needs a threshold")
         return self
+
+
+class DriveAdapterConfig(_Strict):
+    """A logical actuator interface for the shared VFD (brief §2): its run/stop is not forced onto a
+    relay channel. SIMULATED adapters drive the twin; NOT_CONFIGURED is what a hardware profile has until
+    the real drive interface is verified (no register map is invented, ADR-0013)."""
+    adapter_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,31}$")
+    kind: Literal["SIMULATED", "NOT_CONFIGURED"]
+    signals: list[str] = Field(min_length=1)
+    note: str | None = None
 
 
 RECORDING_INTERVALS_S = (60, 300)
@@ -320,10 +338,24 @@ class InstallationConfig(_Strict):
     virtual_mapping: list[Mapping] = Field(default_factory=list)
     physical_mapping: list[Mapping] = Field(default_factory=list)
     alarm_rules: list[AlarmRule] = Field(default_factory=list)
-    twin: TwinParams | None = None
+    drive_adapters: list[DriveAdapterConfig] = Field(default_factory=list)
+    twin: TwinParams | InstallationTwin | None = None
     historian: HistorianSettings = HistorianSettings()
     offsite_backup: OffsiteBackupSettings = OffsiteBackupSettings()
     security: SecuritySettings = SecuritySettings()
+
+    @field_validator("twin", mode="before")
+    @classmethod
+    def _twin_topology(cls, v):
+        """`topology` selects the twin: the small legacy demo (default, demo-24) or the installation."""
+        if isinstance(v, dict):
+            topo = v.get("topology", "demo_small")
+            if topo == "installation":
+                return InstallationTwin.model_validate(v)
+            if topo != "demo_small":
+                raise ValueError(f"unknown twin topology {topo!r}")
+            return TwinParams.model_validate(v)
+        return v
 
     # ---------------------------------------------------------------------------------------
     @model_validator(mode="after")
@@ -406,6 +438,18 @@ class InstallationConfig(_Strict):
                 if p.kind == PointKind.DO and m.signal in mapped_sig:
                     errs.append(f"mapping: actuator {m.signal} commanded by both {mapped_sig[m.signal]} and {m.point}")
                 mapped_sig.setdefault(m.signal, m.point)
+            ids = [a.adapter_id for a in self.drive_adapters]
+            if len(ids) != len(set(ids)):
+                errs.append("duplicate drive adapter id")
+            for a in self.drive_adapters:
+                if a.kind == "SIMULATED" and real:
+                    errs.append(f"drive adapter {a.adapter_id}: SIMULATED adapters exist only in a SIMULATED profile")
+                for sig in a.signals:
+                    if sig not in act:
+                        errs.append(f"drive adapter {a.adapter_id}: {sig} is not an actuator signal of this twin")
+                    if sig in mapped_sig:
+                        errs.append(f"drive adapter {a.adapter_id}: {sig} is also mapped to point {mapped_sig[sig]}")
+                    mapped_sig.setdefault(sig, f"adapter:{a.adapter_id}")
             if real and self.twin.provenance == "DEMO":
                 # HYBRID_SHADOW may carry a predictive model, but never DEMO parameters as production config
                 errs.append("real profile may not carry DEMO twin parameters")
@@ -415,18 +459,32 @@ class InstallationConfig(_Strict):
                 errs.append(f"alarm {r.rule_id}: unknown point {r.point}")
             elif r.kind in ("HIGH", "LOW") and p.kind != PointKind.AI:
                 errs.append(f"alarm {r.rule_id}: {r.kind} needs an AI point")
-            elif r.kind == "DI_ACTIVE" and p.kind != PointKind.DI:
-                errs.append(f"alarm {r.rule_id}: DI_ACTIVE needs a DI point")
+            elif r.kind in ("DI_ACTIVE", "DI_INACTIVE") and p.kind != PointKind.DI:
+                errs.append(f"alarm {r.rule_id}: {r.kind} needs a DI point")
         if errs:
             raise ValueError("; ".join(errs))
         return self
 
     # ---------------------------------------------------------------------------------------
+    def _index(self, name: str, items: list, key) -> dict:
+        """Lookup table over a (frozen) list; keyed by the list object, so a copy that replaces the list
+        gets its own table. First entry wins, as in a linear search."""
+        k = (name, id(items))
+        c = _INDEX_CACHE.get(k)
+        if c is None or c[0] is not items:
+            if len(_INDEX_CACHE) > 512:
+                _INDEX_CACHE.clear()
+            table: dict = {}
+            for x in items:
+                table.setdefault(key(x), x)
+            c = _INDEX_CACHE[k] = (items, table)   # holding `items` keeps its id from being reused
+        return c[1]
+
     def device(self, uid: str) -> DeviceConfig:
-        for d in self.devices:
-            if d.device_uid == uid:
-                return d
-        raise KeyError(uid)
+        d = self._index("device", self.devices, lambda d: d.device_uid).get(uid)
+        if d is None:
+            raise KeyError(uid)
+        return d
 
     def bus(self, bus_id: str) -> BusConfig:
         for b in self.buses:
@@ -438,22 +496,24 @@ class InstallationConfig(_Strict):
         return [p for d in self.devices for p in d.point_ids()]
 
     def scaling(self, profile_id: str | None) -> ScalingProfile | None:
-        for s in self.scaling_profiles:
-            if s.profile_id == profile_id:
-                return s
-        return None
+        return self._index("scaling", self.scaling_profiles, lambda s: s.profile_id).get(profile_id)
 
     def mapping_for_point(self, point: str) -> Mapping | None:
-        for m in self.virtual_mapping:
-            if m.point == point:
-                return m
-        return None
+        return self._index("map_point", self.virtual_mapping, lambda m: m.point).get(point)
 
     def point_for_signal(self, signal: str) -> str | None:
-        for m in self.virtual_mapping:
-            if m.signal == signal:
-                return m.point
+        m = self._index("map_signal", self.virtual_mapping, lambda m: m.signal).get(signal)
+        return m.point if m else None
+
+    def adapter_for_signal(self, signal: str) -> DriveAdapterConfig | None:
+        for a in self.drive_adapters:
+            if signal in a.signals:
+                return a
         return None
+
+    @property
+    def topology(self) -> str | None:
+        return None if self.twin is None else getattr(self.twin, "topology", "demo_small")
 
     def expected_point_count(self) -> int:
         n_ai = sum(1 for d in self.devices if d.model == ModelId.WAVESHARE_AI_8CH)
