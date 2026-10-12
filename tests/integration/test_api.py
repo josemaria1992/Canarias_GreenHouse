@@ -201,6 +201,16 @@ def test_csv_export_escapes_and_discloses_completeness(env_dense):
     r2 = c.get("/api/export.csv?points=analog_A.AI1&limit=1")
     assert r2.headers["X-Truncated"] == "true" and "TRUNCATED" in r2.text
     assert c.get("/api/export.csv?limit=200001").status_code == 422     # bounded reader: page with after_id
+    import aquacrop.api.app as app_mod
+    old_cap = app_mod.AUDIT_EXPORT_MAX_ROWS
+    app_mod.AUDIT_EXPORT_MAX_ROWS = 2                                     # the audit export is bounded too
+    try:
+        assert c.get("/api/export/audit.csv").text.strip().splitlines()[-1].startswith("# TRUNCATED at 2 rows")
+    finally:
+        app_mod.AUDIT_EXPORT_MAX_ROWS = old_cap
+    year = "start=2025-10-01T00:00:00%2B00:00&end=2026-10-01T00:00:00%2B00:00"
+    assert c.get(f"/api/analytics?{year}").status_code == 422             # analytics: at most 31 days a request
+    assert c.get("/api/analytics").json()["truncated"] is False
     a = c.get("/api/export/audit.csv").text
     import csv as _csv
     import io as _io

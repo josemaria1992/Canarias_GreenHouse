@@ -38,6 +38,10 @@ from .service import SimulationService
 COOKIE = "aquacrop_session"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 WEB_DIR = resources.files("aquacrop") / "web"
+# Bounded readers (ADR-0008, WAL): every user query ends in one short read transaction.
+AUDIT_EXPORT_MAX_ROWS = 200000
+ANALYTICS_MAX_DAYS = 31
+ANALYTICS_MAX_ROWS_PER_POINT = 100000
 
 
 def _is_loopback(host: str | None) -> bool:
@@ -780,7 +784,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def export_audit(p: Principal = Depends(require(Perm.EXPORT_AUDIT)), start: str | None = None,
                      end: str | None = None):
         s, e = _range(start, end, 24 * 60)
-        cap = 200000   # bounded reader; narrow the range for more
+        cap = AUDIT_EXPORT_MAX_ROWS   # bounded reader; narrow the range for more
         rows = hist.query("SELECT 'event' AS type, utc AS t, kind AS what, actor, payload_json AS detail FROM events "
                           "WHERE utc>=? AND utc<=? UNION ALL SELECT 'command', intent_utc, target||'='||desired||' '||"
                           "outcome, actor, coalesce(detail,'') FROM commands WHERE intent_utc>=? AND intent_utc<=? "
@@ -797,13 +801,19 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/analytics")
     def analytics(p: Principal = Depends(require(Perm.READ)), start: str | None = None, end: str | None = None):
-        """Runtime / delivered-volume estimates per origin with coverage disclosure. Origins are never summed."""
+        """Runtime / delivered-volume estimates per origin with coverage disclosure. Origins are never summed.
+        Bounded reader: at most ANALYTICS_MAX_DAYS per request and ANALYTICS_MAX_ROWS_PER_POINT rows a point."""
         s, e = _range(start, end, 60)
-        out = {}
+        if datetime.fromisoformat(e) - datetime.fromisoformat(s) > timedelta(days=ANALYTICS_MAX_DAYS):
+            raise HTTPException(422, f"range longer than {ANALYTICS_MAX_DAYS} days; request it in parts")
+        out, truncated = {}, False
         for m in cfg.virtual_mapping:
             if m.signal.endswith(".running") or m.signal.endswith("flow_transmitter"):
                 rows = hist.query("SELECT acquired_utc, value, quality, origin FROM samples WHERE point_id=? AND "
-                                  "acquired_utc>=? AND acquired_utc<=? ORDER BY acquired_utc", (m.point, s, e))
+                                  "acquired_utc>=? AND acquired_utc<=? ORDER BY acquired_utc LIMIT ?",
+                                  (m.point, s, e, ANALYTICS_MAX_ROWS_PER_POINT + 1))
+                truncated |= len(rows) > ANALYTICS_MAX_ROWS_PER_POINT
+                rows = rows[:ANALYTICS_MAX_ROWS_PER_POINT]
                 by_origin: dict[str, dict] = {}
                 prev = None
                 for t, v, q, o in rows:
@@ -825,6 +835,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         alarm_counts = hist.query("SELECT rule_id, count(*) FROM alarm_occurrences WHERE first_seen_utc>=? AND "
                                   "first_seen_utc<=? GROUP BY rule_id", (s, e))
         return {"start": s, "end": e, "estimates": out, "alarm_counts": {r[0]: r[1] for r in alarm_counts},
+                "truncated": truncated,
                 "note": "Estimates from sampled history; gaps reduce coverage. Simulated and measured origins are "
                         "reported separately and never summed. Twin ledger totals are in /api/twin."}
 

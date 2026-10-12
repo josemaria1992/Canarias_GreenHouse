@@ -110,15 +110,19 @@ lockout reset, then a deliberate new AUTO request. Clearing an alarm never start
 ## Cadences
 
 - Physics: 0.1 s simulated.
-- Simulation history: a complete snapshot every `recording_interval_s` (60 s) of simulated time,
-  raised to `speed × sim_history_min_wall_interval_s` at high speed so the write rate stays bounded
-  (at 60× that is still 60 s). Each change is recorded as a `HISTORY_STRIDE_CHANGED` event, and each
-  stored cycle carries its cadence so trend gaps are computed correctly. Readings older than the
-  controller's 0.5 s staleness limit are stored as `STALE`. Alarm transitions, commands and DI/DO
-  edges are written when they happen. `sim_history_stride_s` can override the stride for desktop
-  evidence runs only.
+- Simulation history: a complete snapshot every `recording_interval_s` (60 s) of **wall time**, the
+  same recorder and the same slot labels as on real hardware (ADR-0008, revised after the owner
+  review). Each snapshot stores the run id and the simulated time as provenance, so 1×, 10× and 60×
+  produce the same number of snapshots per wall hour. A paused (or stalled) run keeps recording:
+  after 3 s without progress its frozen state is stored as `STALE` with the last good value kept,
+  never as a fresh reading and never back-filled. Readings older than the controller's 0.5 s staleness limit
+  are stored as `STALE`. Alarm transitions, commands and DI/DO edges are written when they happen.
+- Simulation-time history (optional, off by default): `historian.sim_time_recording_s` adds a
+  separately labelled series (`cadence_basis = SIMULATION_TIME`, cycle ids `simtime/...`) every that
+  many simulated seconds, never more often than `sim_time_recording_min_wall_s` of wall time. It is
+  counted separately in the storage report and selected in trends with `basis=SIMULATION_TIME`.
 - Real hardware: `poll_interval_s` of wall time per bus for acquisition and alarms; the historian
-  snapshots every 60 s on wall-clock boundaries (ADR-0008).
+  snapshots every 60 s of wall time, labelled with the wall-clock boundary (ADR-0008).
 
 ## Replay
 
