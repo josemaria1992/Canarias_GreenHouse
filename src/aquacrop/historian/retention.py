@@ -43,6 +43,7 @@ SAMPLE_COLS = ["id", "point_id", "acquired_utc", "persisted_utc", "sequence", "q
                "config_version", "device_uid", "bus_id", "session_id", "sim_run_id", "sim_s", "override_json",
                "last_good_value", "last_good_utc"]   # a STALE row's value is null; its last good reading is here
 EVENT_COLS = ["id", "utc", "kind", "actor", "session_id", "run_id", "sim_s", "payload_json"]
+ARCHIVE_PAGE_ROWS = 50000
 
 
 def _parse(ts: str) -> str:
@@ -53,6 +54,9 @@ def _parse(ts: str) -> str:
 
 
 def create_archive(hist, start: str, end: str, destination: str | Path) -> dict:
+    """Export [start, end) in pages of ARCHIVE_PAGE_ROWS rows (short read transactions, bounded memory).
+    It is a maintenance operation run with the server stopped (`archive create`), so the range does not
+    change between pages."""
     start, end = _parse(start), _parse(end)
     if start >= end:
         raise ValueError("start must be before end")
@@ -64,17 +68,25 @@ def create_archive(hist, start: str, end: str, destination: str | Path) -> dict:
     files = {}
     for name, cols, sql in (
             ("samples.csv.gz", SAMPLE_COLS,
-             f"SELECT {', '.join(SAMPLE_COLS)} FROM samples WHERE acquired_utc>=? AND acquired_utc<? ORDER BY id"),
+             f"SELECT {', '.join(SAMPLE_COLS)} FROM samples WHERE acquired_utc>=? AND acquired_utc<? AND id>? "
+             "ORDER BY id LIMIT ?"),
             ("events.csv.gz", EVENT_COLS,
-             f"SELECT {', '.join(EVENT_COLS)} FROM events WHERE utc>=? AND utc<? ORDER BY id")):
-        rows = hist.query(sql, (start, end))
+             f"SELECT {', '.join(EVENT_COLS)} FROM events WHERE utc>=? AND utc<? AND id>? ORDER BY id LIMIT ?")):
         p = out / name
+        n = 0
         with gzip.open(p, "wt", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(cols)
-            for r in rows:
-                w.writerow([r[c] for c in cols])
-        files[name] = {"sha256": _sha256(p), "rows": len(rows), "bytes": p.stat().st_size}
+            last = 0
+            while True:   # bounded readers: short read transactions of ARCHIVE_PAGE_ROWS rows, by id
+                rows = hist.query(sql, (start, end, last, ARCHIVE_PAGE_ROWS))
+                for r in rows:
+                    w.writerow([r[c] for c in cols])
+                n += len(rows)
+                if len(rows) < ARCHIVE_PAGE_ROWS:
+                    break
+                last = rows[-1]["id"]
+        files[name] = {"sha256": _sha256(p), "rows": n, "bytes": p.stat().st_size}
     meta = hist.query("SELECT DISTINCT source_profile, config_version, calibration_ref, origin FROM samples "
                       "WHERE acquired_utc>=? AND acquired_utc<?", (start, end))
     manifest = {"start_utc": start, "end_utc": end, "created_utc": utc_iso(), "software_version": __version__,
@@ -120,25 +132,39 @@ def verify_archive(path: str | Path, expected_manifest_sha256: str | None = None
 
 
 PRUNE_CHUNK_ROWS = 5000
+PRUNE_MAX_TRANSACTIONS_PER_RUN = 100   # about a week of 48-point history per hourly run when catching up
 CLOCK_TOLERANCE_S = 300.0           # wall vs monotonic-carried time; and how far behind stored records
 CONFIRM_AFTER_DOWNTIME_S = 3600.0   # a start this long after the newest stored record needs confirmation
 PROPOSAL_TOLERANCE_S = 600.0        # a confirmation must echo a cutoff within this of the current one
 
 
-def _chunks(hist, sql: str, params: tuple, chunk_rows: int, *, fk_off: bool = False) -> int:
-    total = 0
+class _Stop(Exception):
+    pass
+
+
+def _chunks(hist, sql: str, params: tuple, chunk_rows: int, *, fk_off: bool = False, guard=None,
+            into: dict | None = None, key: str = "") -> int:
+    """Delete in transactions of at most `chunk_rows` rows; `guard()` may stop between transactions.
+    With `into`, the running count is kept in `into[key]`, so a stop keeps what was already deleted."""
+    acc = into if into is not None else {}
+    acc[key] = acc.get(key, 0)
     while True:
+        if guard is not None:
+            guard()
         n = hist.submit(lambda c: c.execute(sql, params + (chunk_rows,)).rowcount, wait=True, timeout=600,
                         solo_without_fk=fk_off)
-        total += n
+        acc[key] += n
         if n < chunk_rows:
-            return total
+            return acc[key]
 
 
 def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_CHUNK_ROWS,
-                  dry_run: bool = False) -> dict:
+                  dry_run: bool = False, max_chunks: int | None = None, wal_limit_bytes: int | None = None) -> dict:
     """Delete everything older than the rolling window (APPROVED policy only). Batches go through the
-    writer queue, so snapshots, events and commands keep flowing between them."""
+    writer queue, so snapshots, events and commands keep flowing between them. Each transaction deletes
+    at most `chunk_rows` rows; the run stops early (the rest waits for the next run) after `max_chunks`
+    transactions or when the WAL is above `wal_limit_bytes` (a long reader is holding it back, and
+    deleting more would only grow it)."""
     h = hist.cfg.historian
     if h.retention_provenance != "APPROVED":
         return {"deleted": {}, "reason": f"retention policy is {h.retention_provenance}; nothing is deleted"}
@@ -154,42 +180,64 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
             "alarm_occurrences": q("SELECT count(*) FROM alarm_occurrences WHERE closed=1 AND updated_utc < ?"),
             "bench_leases": q("SELECT count(*) FROM bench_leases WHERE expires_utc < ?"),
             "auth_sessions": q("SELECT count(*) FROM auth_sessions WHERE absolute_expiry_utc < ?")}}
-    d = {"samples": _chunks(hist, "DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE acquired_utc < ? "
-                                   "ORDER BY acquired_utc LIMIT ?)", (cutoff,), chunk_rows)}
+    budget = {"chunks": 0}
+    wal = Path(str(hist.db_path) + "-wal")
 
-    # Sample ids grow with their cycle (one writer, cycle row then its samples), so every cycle below
-    # the oldest remaining sample's cycle has no samples left. Deleting by that bound with
-    # foreign-key checks off avoids a full scan of samples per deleted cycle.
-    def drop_cycles(c, limit):
-        row = c.execute("SELECT cycle_pk FROM samples ORDER BY id LIMIT 1").fetchone()
-        bound = row[0] if row else (c.execute("SELECT coalesce(max(cycle_pk), 0) + 1 FROM cycles").fetchone()[0])
-        return c.execute("DELETE FROM cycles WHERE cycle_pk IN (SELECT cycle_pk FROM cycles WHERE cycle_pk < ? "
-                         "AND persisted_utc < ? ORDER BY cycle_pk LIMIT ?)", (bound, cutoff, limit)).rowcount
-    total = 0
-    while True:
-        n = hist.submit(lambda c: drop_cycles(c, chunk_rows), wait=True, timeout=600, solo_without_fk=True)
-        total += n
-        if n < chunk_rows:
-            break
-    d["cycles"] = total
-    d["events"] = _chunks(hist, "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE utc < ? "
-                                "ORDER BY utc LIMIT ?)", (cutoff,), chunk_rows)
-    d["commands"] = _chunks(hist, "DELETE FROM commands WHERE request_id IN (SELECT request_id FROM commands "
-                                  "WHERE intent_utc < ? AND outcome NOT IN ('ACCEPTED','EXECUTING') "
-                                  "ORDER BY intent_utc LIMIT ?)", (cutoff,), chunk_rows)
-    d["alarm_occurrences"] = _chunks(hist, "DELETE FROM alarm_occurrences WHERE occurrence_id IN (SELECT "
-                                           "occurrence_id FROM alarm_occurrences WHERE closed=1 AND updated_utc < ? "
-                                           "LIMIT ?)", (cutoff,), chunk_rows)
-    d["bench_leases"] = _chunks(hist, "DELETE FROM bench_leases WHERE lease_id IN (SELECT lease_id FROM "
-                                      "bench_leases WHERE expires_utc < ? LIMIT ?)", (cutoff,), chunk_rows)
-    d["auth_sessions"] = _chunks(hist, "DELETE FROM auth_sessions WHERE session_hash IN (SELECT session_hash "
-                                       "FROM auth_sessions WHERE absolute_expiry_utc < ? LIMIT ?)", (cutoff,),
-                                 chunk_rows)
-    d |= hist.submit(lambda c: _prune_provenance(c, cutoff, hist.session_id), wait=True, timeout=600)
-    res = {"cutoff_utc": cutoff, "retention_days": h.retention_days, "deleted": d}
+    def guard():
+        if wal_limit_bytes is not None and wal.exists() and wal.stat().st_size > wal_limit_bytes:
+            raise _Stop(f"WAL {wal.stat().st_size / 2**20:.0f} MiB above {wal_limit_bytes / 2**20:.0f} MiB: a long "
+                        "reader is holding it back; the rest waits for the next run")
+        if max_chunks is not None and budget["chunks"] >= max_chunks:
+            raise _Stop(f"{max_chunks} delete transactions in this run; the rest waits for the next run")
+        budget["chunks"] += 1
+
+    d: dict[str, int] = {}
+    stopped = None
+    try:
+        _chunks(hist, "DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE acquired_utc < ? "
+                      "ORDER BY acquired_utc LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="samples")
+
+        # Sample ids grow with their cycle (one writer, cycle row then its samples), so every cycle below
+        # the oldest remaining sample's cycle has no samples left. Deleting by that bound with
+        # foreign-key checks off avoids a full scan of samples per deleted cycle.
+        def drop_cycles(c, limit):
+            row = c.execute("SELECT cycle_pk FROM samples ORDER BY id LIMIT 1").fetchone()
+            bound = row[0] if row else (c.execute("SELECT coalesce(max(cycle_pk), 0) + 1 FROM cycles").fetchone()[0])
+            return c.execute("DELETE FROM cycles WHERE cycle_pk IN (SELECT cycle_pk FROM cycles WHERE cycle_pk < ? "
+                             "AND persisted_utc < ? ORDER BY cycle_pk LIMIT ?)", (bound, cutoff, limit)).rowcount
+        d["cycles"] = 0
+        while True:
+            guard()
+            n = hist.submit(lambda c: drop_cycles(c, chunk_rows), wait=True, timeout=600, solo_without_fk=True)
+            d["cycles"] += n
+            if n < chunk_rows:
+                break
+        _chunks(hist, "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE utc < ? "
+                      "ORDER BY utc LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="events")
+        _chunks(hist, "DELETE FROM commands WHERE request_id IN (SELECT request_id FROM commands "
+                      "WHERE intent_utc < ? AND outcome NOT IN ('ACCEPTED','EXECUTING') "
+                      "ORDER BY intent_utc LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="commands")
+        _chunks(hist, "DELETE FROM alarm_occurrences WHERE occurrence_id IN (SELECT "
+                      "occurrence_id FROM alarm_occurrences WHERE closed=1 AND updated_utc < ? "
+                      "LIMIT ?)", (cutoff,), chunk_rows, guard=guard, into=d, key="alarm_occurrences")
+        _chunks(hist, "DELETE FROM bench_leases WHERE lease_id IN (SELECT lease_id FROM "
+                      "bench_leases WHERE expires_utc < ? LIMIT ?)", (cutoff,), chunk_rows,
+                guard=guard, into=d, key="bench_leases")
+        _chunks(hist, "DELETE FROM auth_sessions WHERE session_hash IN (SELECT session_hash "
+                      "FROM auth_sessions WHERE absolute_expiry_utc < ? LIMIT ?)", (cutoff,),
+                chunk_rows, guard=guard, into=d, key="auth_sessions")
+        guard()
+        d |= hist.submit(lambda c: _prune_provenance(c, cutoff, hist.session_id), wait=True, timeout=600)
+    except _Stop as e:
+        stopped = str(e)
+    res = {"cutoff_utc": cutoff, "retention_days": h.retention_days, "deleted": d, "transactions": budget["chunks"]}
+    if stopped:
+        res["incomplete"] = stopped
     if any(d.values()):
         hist.event("RETENTION_PRUNED", res | {"note": "rows older than the rolling window; freed pages are "
                                                       "reused by new history"}, actor="system")
+    elif stopped:
+        hist.event("RETENTION_DEFERRED", res, actor="system")
     return res
 
 
@@ -414,7 +462,9 @@ class RetentionTask:
 
     def _run(self, at: datetime) -> None:
         try:
-            self.last_result = prune_expired(self.hist, now=at) | {"run_utc": at.isoformat()}
+            self.last_result = prune_expired(self.hist, now=at, max_chunks=PRUNE_MAX_TRANSACTIONS_PER_RUN,
+                                             wal_limit_bytes=self.hist.cfg.historian.wal_warning_bytes) | {
+                "run_utc": at.isoformat()}
             self.last_error = None
         except Exception as e:   # visible in status; the next run retries
             self.last_error = f"{at.isoformat()} {e!r}"
@@ -442,6 +492,9 @@ def storage_alarms(hist) -> list[tuple[str, str, str]]:
                     f"free disk {st['free_bytes'] / gib:.2f} GiB below reserve {st['reserve_bytes'] / gib:.2f} GiB: "
                     "new starts and ON commands refused"))
     why = []
+    if st["wal_over_warning"]:
+        why.append(f"WAL {st['wal_bytes'] / 2**20:.0f} MiB above {st['wal_warning_bytes'] / 2**20:.0f} MiB (a long "
+                   "reader such as a backup or export is holding back checkpoints; retention pruning waits)")
     if st["below_warning"]:
         why.append(f"free disk {st['free_bytes'] / gib:.2f} GiB below {st['warning_free_bytes'] / gib:.2f} GiB")
     if st["over_budget"]:

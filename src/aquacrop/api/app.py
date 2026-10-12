@@ -725,8 +725,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/export.csv")
     def export_csv(p: Principal = Depends(require(Perm.READ)), points: str | None = None, start: str | None = None,
-                   end: str | None = None, after_id: int = 0, limit: int = Query(200000, ge=1, le=1000000),
+                   end: str | None = None, after_id: int = 0, limit: int = Query(100000, ge=1, le=200000),
                    display_tz: str | None = None):
+        # Bounded reader: at most 200 000 rows (one short read transaction) per page; continue with after_id.
         s, e = _range(start, end, 60)
         zone = ZoneInfo(display_tz) if display_tz else tz
         ids = [x for x in (points or "").split(",") if x]
@@ -779,15 +780,18 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def export_audit(p: Principal = Depends(require(Perm.EXPORT_AUDIT)), start: str | None = None,
                      end: str | None = None):
         s, e = _range(start, end, 24 * 60)
+        cap = 200000   # bounded reader; narrow the range for more
         rows = hist.query("SELECT 'event' AS type, utc AS t, kind AS what, actor, payload_json AS detail FROM events "
                           "WHERE utc>=? AND utc<=? UNION ALL SELECT 'command', intent_utc, target||'='||desired||' '||"
                           "outcome, actor, coalesce(detail,'') FROM commands WHERE intent_utc>=? AND intent_utc<=? "
-                          "ORDER BY 2", (s, e, s, e))
+                          "ORDER BY 2 LIMIT ?", (s, e, s, e, cap + 1))
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["type", "utc", "what", "actor", "detail"])
-        for r in rows:
+        for r in rows[:cap]:
             w.writerow([_escape_csv(v) for v in r])
+        if len(rows) > cap:
+            w.writerow([f"# TRUNCATED at {cap} rows; narrow the time range"])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": "attachment; filename=aquacrop-audit.csv"})
 

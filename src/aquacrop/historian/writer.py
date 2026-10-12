@@ -70,11 +70,15 @@ def _diff(old: dict, new: dict) -> list[dict]:
 
 
 def capacity_report(con: sqlite3.Connection, db_path: Path, cfg: InstallationConfig, *,
-                    snapshots_paused: bool = False, queue_depth: int = 0, detail: bool = False) -> dict:
+                    snapshots_paused: bool = False, queue_depth: int = 0, detail: bool = False,
+                    snapshot_pause: dict | None = None, wal_checkpoint: dict | None = None) -> dict:
     """Read-only and cheap by default (file sizes, page counts, two index lookups). `detail` adds the
-    measured growth of the last 7 days (an index range scan; meant for the `storage report` command)."""
-    files = [db_path, Path(str(db_path) + "-wal")]
-    size = sum(f.stat().st_size for f in files if f.exists())
+    measured growth of the last 7 days and the rows per series (index/table scans; meant for the
+    `storage report` command). `db_bytes` is the persistent footprint: main file plus WAL."""
+    wal = Path(str(db_path) + "-wal")
+    main_bytes = db_path.stat().st_size if db_path.exists() else 0
+    wal_bytes = wal.stat().st_size if wal.exists() else 0
+    size = main_bytes + wal_bytes
     du = shutil.disk_usage(db_path.parent)
     h = cfg.historian
     page = con.execute("PRAGMA page_size").fetchone()[0]
@@ -87,19 +91,29 @@ def capacity_report(con: sqlite3.Connection, db_path: Path, cfg: InstallationCon
         span_days = (datetime.fromisoformat(newest) - datetime.fromisoformat(oldest)).total_seconds() / 86400
         if span_days >= 1.0:
             projected = int(used * max(1.0, h.retention_days / span_days))
-    out = {"db_bytes": size, "db_used_bytes": used, "db_reusable_bytes": free_pages * page,
+    out = {"db_bytes": size, "db_file_bytes": main_bytes, "wal_bytes": wal_bytes,
+           "wal_warning_bytes": h.wal_warning_bytes, "wal_over_warning": wal_bytes > h.wal_warning_bytes,
+           "wal_checkpoint": wal_checkpoint, "db_used_bytes": used, "db_reusable_bytes": free_pages * page,
            "free_bytes": du.free, "disk_bytes": du.total, "budget_bytes": h.db_budget_bytes,
            "warning_free_bytes": h.free_space_warning_bytes, "reserve_bytes": h.free_space_reserve_bytes,
            "snapshot_floor_bytes": h.snapshot_floor_bytes,
            "over_budget": size > h.db_budget_bytes, "below_warning": du.free < h.free_space_warning_bytes,
            "below_reserve": du.free < h.free_space_reserve_bytes,
            "below_snapshot_floor": du.free < h.snapshot_floor_bytes,
-           "snapshots_paused": snapshots_paused, "queue_depth": queue_depth,
+           "snapshots_paused": snapshots_paused, "snapshot_pause": snapshot_pause, "queue_depth": queue_depth,
            "oldest_sample_utc": oldest, "newest_sample_utc": newest, "history_span_days": span_days,
            "projected_window_bytes": projected,
            "projected_over_budget": projected is not None and projected > h.db_budget_bytes,
-           "recording_interval_s": h.recording_interval_s,
-           "retention_days": h.retention_days, "retention_provenance": h.retention_provenance}
+           "recording_interval_s": h.recording_interval_s, "recording_basis": "WALL",
+           "sim_time_recording_s": h.sim_time_recording_s,
+           "window_full": span_days is not None and span_days >= h.retention_days - 1,
+           "retention_days": h.retention_days, "retention_provenance": h.retention_provenance,
+           "retention_note": ("DEMO policy: nothing is ever deleted; the database grows without bound and only the "
+                              "capacity alarms and the snapshot floor protect the disk"
+                              if h.retention_provenance == "DEMO" else
+                              f"rows older than {h.retention_days} days are deleted while the clock is trusted; "
+                              "registers (users, schema, archives, open alarms) are kept, so the size keeps "
+                              "creeping after the window is full and stays monitored")}
     if detail and newest:
         since = (datetime.fromisoformat(newest) - timedelta(days=7)).isoformat(timespec="microseconds")
         n_samples = con.execute("SELECT count(*) FROM samples WHERE acquired_utc >= ?", (since,)).fetchone()[0]
@@ -111,11 +125,18 @@ def capacity_report(con: sqlite3.Connection, db_path: Path, cfg: InstallationCon
                               "avg_db_bytes_per_sample_row": per_row,
                               "estimated_growth_bytes_per_day": (n_samples * per_row / days) if days and per_row
                               else None}
+        out["series"] = {(b or "NULL"): {"cycles": n, "sample_rows": rows} for b, n, rows in con.execute(
+            "SELECT cadence_basis, count(*), sum(n_points) FROM cycles GROUP BY cadence_basis")}
+        out["registers"] = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in (
+            "process_sessions", "sim_runs", "users", "archives", "migrations", "alarm_occurrences")}
     return out
 
 
 class StorageUnavailable(OSError):
     pass
+
+
+CHECKPOINT_EVERY_S = 60.0
 
 
 class Historian:
@@ -138,6 +159,8 @@ class Historian:
                                        "paused_snapshots": 0, "labels_refused": 0}
         self.snapshots_paused = False
         self._pause = {"count": 0, "first": None, "last": None}   # labels not written in the current pause
+        self.wal_checkpoint: dict | None = None
+        self._next_checkpoint = 0.0
         self._thread = threading.Thread(target=self._run, name="historian-writer", daemon=True)
         self._thread.start()
         self.submit(lambda c: c.execute(
@@ -191,6 +214,26 @@ class Historian:
                     break
                 batch.append(item)
             self._execute(batch)
+            self._checkpoint_if_due()
+
+    def _checkpoint_if_due(self) -> None:
+        """A PASSIVE checkpoint (never waits for readers or blocks writers) every CHECKPOINT_EVERY_S, on
+        top of SQLite's automatic one, recording how far it got: when the checkpointed frames stay
+        behind the WAL frames, a reader is holding an old snapshot and the WAL cannot be reset."""
+        now = time.monotonic()
+        if now < self._next_checkpoint:
+            return
+        self._next_checkpoint = now + CHECKPOINT_EVERY_S
+        try:
+            busy, log, done = self._con.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        except sqlite3.Error as e:
+            self.wal_checkpoint = {"utc": utc_iso(), "error": repr(e)}
+            return
+        prev = self.wal_checkpoint or {}
+        behind = log > 0 and done < log
+        since = (prev.get("behind_since_utc") if prev.get("behind_since_utc") else utc_iso()) if behind else None
+        self.wal_checkpoint = {"utc": utc_iso(), "busy": busy, "wal_frames": log, "checkpointed_frames": done,
+                               "behind_since_utc": since}
 
     def _execute(self, batch: list, *, fk_off: bool = False) -> None:
         try:
@@ -424,7 +467,8 @@ class Historian:
         """Capacity picture for alarms, /api/status and `storage report`."""
         with self._read_lock:
             return capacity_report(self._read, self.db_path, self.cfg, snapshots_paused=self.snapshots_paused,
-                                   queue_depth=self._q.qsize())
+                                   queue_depth=self._q.qsize(), snapshot_pause=dict(self._pause),
+                                   wal_checkpoint=self.wal_checkpoint)
 
     def can_accept_starts(self) -> tuple[bool, str | None]:
         st = self.storage()

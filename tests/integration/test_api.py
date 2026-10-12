@@ -200,6 +200,7 @@ def test_csv_export_escapes_and_discloses_completeness(env_dense):
     assert r.status_code == 200 and r.text.strip().splitlines()[-1].startswith("# COMPLETE")
     r2 = c.get("/api/export.csv?points=analog_A.AI1&limit=1")
     assert r2.headers["X-Truncated"] == "true" and "TRUNCATED" in r2.text
+    assert c.get("/api/export.csv?limit=200001").status_code == 422     # bounded reader: page with after_id
     a = c.get("/api/export/audit.csv").text
     import csv as _csv
     import io as _io

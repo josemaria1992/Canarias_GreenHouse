@@ -356,7 +356,9 @@ def test_projection_of_the_365_day_size_is_reported(h):
 
 
 # ---------------------------------------------------------------------------------------- archives / migration
-def test_archive_verify_and_tamper_detection(tmp_path, cfg24):
+def test_archive_verify_and_tamper_detection(tmp_path, cfg24, monkeypatch):
+    import aquacrop.historian.retention as ret
+    monkeypatch.setattr(ret, "ARCHIVE_PAGE_ROWS", 10)             # bounded pages: several reads per file
     cfg24 = with_sim_time_recording(cfg24)
     h = Historian(tmp_path / "a.sqlite3", cfg24, "s_arc")
     rt = SimulationRuntime(cfg24, audit=h, history=h, session_id="s_arc", start_permitted=h.can_accept_starts)
@@ -436,3 +438,48 @@ def test_cli_retention_apply_deletes_only_with_the_confirmed_cutoff(tmp_path, cf
     row = h.query("SELECT actor, payload_json FROM events WHERE kind='RETENTION_CLOCK_CONFIRMED'")
     assert len(row) == 1 and row[0]["actor"].startswith("cli:")
     h.close()
+
+
+# ---------------------------------------------------------------------------------------- WAL (owner review R1)
+def test_wal_is_reported_separately_and_warned_about(h, cfg24):
+    seed(h, NOW - timedelta(minutes=1), tag="w")
+    st = h.storage()
+    assert st["db_bytes"] == st["db_file_bytes"] + st["wal_bytes"] and st["wal_bytes"] > 0
+    assert st["wal_warning_bytes"] == 256 * 2**20 and not st["wal_over_warning"]
+    _with(h, cfg24, wal_warning_bytes=1)
+    al = dict((r, m) for r, _, m in storage_alarms(h))
+    assert "WAL" in al["STORAGE_CAPACITY"] and "long reader" in al["STORAGE_CAPACITY"]
+
+
+def test_checkpoint_progress_shows_a_reader_holding_the_wal(h, monkeypatch):
+    import aquacrop.historian.writer as w
+    monkeypatch.setattr(w, "CHECKPOINT_EVERY_S", 0.0)
+    h._next_checkpoint = 0.0                                        # the one scheduled at start-up
+    seed(h, NOW - timedelta(minutes=3), tag="a")
+    h.flush()
+    assert h.wal_checkpoint and h.wal_checkpoint["behind_since_utc"] is None
+    reader = sqlite3.connect(h.db_path)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM samples").fetchone()      # an old snapshot, held open
+    for i in range(3):
+        seed(h, NOW - timedelta(minutes=2 - i), tag=f"b{i}")
+    h.flush()
+    ck = h.wal_checkpoint
+    assert ck["checkpointed_frames"] < ck["wal_frames"] and ck["behind_since_utc"]
+    reader.rollback()
+    reader.close()
+    h.flush()
+    h.flush()
+    assert h.wal_checkpoint["behind_since_utc"] is None
+
+
+def test_pruning_is_bounded_and_waits_while_the_wal_is_held(h):
+    for i in range(6):
+        seed(h, CUTOFF - timedelta(days=1, minutes=i), tag=f"o{i}")
+    res = prune_expired(h, now=NOW, wal_limit_bytes=1)              # WAL above the limit: nothing deleted
+    assert not any(res["deleted"].values()) and "WAL" in res["incomplete"] and counts(h)["samples"] == 12
+    assert _kinds(h)[-1] == "RETENTION_DEFERRED"
+    res = prune_expired(h, now=NOW, chunk_rows=2, max_chunks=3)    # three transactions of two rows
+    assert res["deleted"]["samples"] == 6 and res["transactions"] == 3 and "transactions" in res["incomplete"]
+    res = prune_expired(h, now=NOW, chunk_rows=2)                   # the next run finishes the job
+    assert counts(h)["samples"] == 0 and "incomplete" not in res
