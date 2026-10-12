@@ -43,6 +43,10 @@ ADDITION_FLOWS = {
     "EC_VALIDATE": ("flow.TP_A", "flow.TP_B", "flow.FILL_MAIN"),
     "PH": ("flow.TP_A", "flow.TP_B", "flow.TP_ACID", "flow.FILL_MAIN"),
 }
+# The output that makes each addition flow. A commanded addition counts before its flow is observed: a
+# process that starts an addition earlier in the same scan must hold back a dose evaluated later in it.
+ADDITION_OUTPUT = {"flow.TP_A": "pump.TP_A.cmd", "flow.TP_B": "pump.TP_B.cmd", "flow.TP_ACID": "pump.TP_ACID.cmd",
+                   "flow.FILL_MAIN": "valve.FILL_MAIN.cmd"}
 
 # Cause-and-effect: which observed conditions block (re)starts of which processes. The processes also
 # check these conditions themselves while running; this table is what the documentation renders.
@@ -162,6 +166,11 @@ class Supervisor:
             out.append("safety chain open")
         return out
 
+    def run_blockers(self, pid: str, ctx: Ctx) -> list[str]:
+        """Why a process in AUTO may not start its next step, batch, run, dose or fill now: the global
+        conditions and the START_INTERLOCKS that gate the AUTO request, checked again at every start."""
+        return self.global_blockers(ctx) + self.interlocks_for(pid, ctx)
+
     def interlocks_for(self, pid: str, ctx: Ctx) -> list[str]:
         out = []
         for il in START_INTERLOCKS[1:]:
@@ -247,6 +256,10 @@ class Supervisor:
             return False, "mixing readiness NOT_VERIFIED: no agitator or verified mixing method (commissioning item)"
         if self.addition_unobservable[kind]:
             return False, f"additions cannot be observed: {self.addition_unobservable[kind]}"
+        outputs = {ADDITION_OUTPUT[f] for f in ADDITION_FLOWS[kind]}
+        commanded = sorted({o for p in self.processes for o in p.on if o in outputs})
+        if commanded:
+            return False, f"an addition is commanded now ({', '.join(commanded)}): settling starts after it ends"
         last = self.last_addition_s[kind]
         if last is None:
             return True, "no addition observed in this run (SIMULATED settling)"

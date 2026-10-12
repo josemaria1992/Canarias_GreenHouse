@@ -8,7 +8,7 @@ import pytest
 from aquacrop.config import load_config
 from aquacrop.control.supervisor import Supervisor
 from aquacrop.domain.model import ControllerState, Priority
-from aquacrop.twin.installation_scenarios import presets, run_installation_scenario
+from aquacrop.twin.installation_scenarios import presets, recipe, run_installation_scenario, tw, with_twin_overrides
 from aquacrop.twin.runtime import make_runtime
 from tests.conftest import ROOT
 
@@ -223,3 +223,106 @@ def test_pc12_stop_all_brings_every_output_off(icfg):
     assert not any(rt.backend.state.coils.values()) and not any(rt.adapter_state.values())
     assert rt.sup.arbiter.owner == {}
     assert rt.plant.hazards == []
+
+
+# ------------------------------------------------------------------------------------------ interlocks at every start
+def _twin(icfg, initial=None, **extra):
+    return with_twin_overrides(icfg, tw(initial, **extra))
+
+
+def test_pc11_return_never_starts_or_keeps_running_into_an_active_main_high_high(icfg):
+    # the switch activates after AUTO was granted, with the analog main level well below the return inhibit
+    rt = make_runtime(_twin(icfg, {"SUMP": 3000}))
+    ret = rt.sup.by_id["RETURN"]
+    assert rt.process_request("op", "RETURN", CS.AUTO)[0]
+    rt.set_override("op", "relay_B.DI4", True, "test: main high-high active")
+    rt.run_for(30)
+    assert ret.state == CS.AUTO and ret.running_pump is None and not ret.on
+    assert "tank.MAIN.high_high active" in (ret.inhibit or "")
+    assert rt.plant.ledger.returned_to_main_L == 0
+    # ... and a run already in progress stops on the switch even though the analog level allows it
+    rt = make_runtime(_twin(icfg, {"SUMP": 3000}))
+    ret = rt.sup.by_id["RETURN"]
+    rt.process_request("op", "RETURN", CS.AUTO)
+    rt.run_for(20)
+    assert ret.phase == "RUNNING"
+    rt.set_override("op", "relay_B.DI4", True, "test: main high-high active")
+    rt.run_for(30)
+    assert ret.state == CS.AUTO and ret.running_pump is None and not ret.on
+    assert "main high-high switch active" in ret.runs[-1]["reason"]
+    assert "tank.MAIN.high_high active" in (ret.inhibit or "")
+
+
+def test_pc07_acid_never_doses_without_a_known_acid_stock_level(icfg):
+    cfg = _twin(icfg, chemistry={"initial_main_ph": 6.8})
+    rt = make_runtime(cfg)
+    rt.stock_acknowledge("op", "ACID", "")
+    rt.set_override("op", "analog_A.AI5", 0, "test: acid stock level loop open")     # stays PREPARED
+    acid = rt.sup.by_id["ACID"]
+    assert rt.sup.stocks["ACID"].status == "PREPARED"
+    assert rt.process_request("op", "ACID", CS.AUTO)[0]
+    rt.run_for(30)
+    assert acid.phase != "DOSING" and not acid.on
+    assert "acid stock level unavailable" in (acid.inhibit or "")
+    rt.process_request("op", "ACID", CS.STOPPED)
+    rt.run_for(2)
+    rt.process_request("op", "ACID", CS.MANUAL)
+    ok, msg = rt.process_manual("op", "ACID", {"volume_L": 1})
+    assert not ok and "acid stock level unavailable" in msg
+    # a level lost during a dose stops it as a failure
+    rt = make_runtime(cfg)
+    rt.stock_acknowledge("op", "ACID", "")
+    acid = rt.sup.by_id["ACID"]
+    rt.process_request("op", "ACID", CS.AUTO)
+    rt.run_for(3)
+    assert acid.phase == "DOSING"
+    rt.set_override("op", "analog_A.AI5", 0, "test: acid stock level loop open")
+    rt.run_for(15)
+    assert acid.state == CS.FAULT_LOCKOUT and not acid.on
+    assert "STOCK_LEVEL_UNAVAILABLE" in acid.batches[-1]["doses"][-1]["result"]
+
+
+def test_pc06_manual_transfer_is_bounded_by_the_requested_stock_in_the_active_mode(icfg):
+    def manual(mode: str, a: dict, path: str, vol: float):
+        rt = make_runtime(icfg)
+        for s in ("A", "B"):
+            rt.stock_acknowledge("op", s, "")
+        for at, kind, payload in recipe({"refill": {"nutrient_mode": mode} | a}):
+            rt.schedule(at, kind, "test", payload)
+        rt.run_for(1)
+        rt.process_request("op", "REFILL", CS.MANUAL)
+        return rt.process_manual("op", "REFILL", {"path": path, "volume_L": vol})
+
+    fixed = {"fixed": {"a_L": 10, "b_L": 100}, "ec": {"max_a_L": 200, "max_b_L": 200}}
+    ok, msg = manual("FIXED_VOLUMES", fixed, "A", 50)
+    assert not ok and "limited to 10 L (recipe fixed volume for stock A)" in msg
+    assert manual("FIXED_VOLUMES", fixed, "B", 50)[0]
+    ec = {"fixed": {"a_L": 200, "b_L": 200}, "ec": {"max_a_L": 30, "max_b_L": 150}}
+    ok, msg = manual("EC_TARGET", ec, "A", 50)                     # the inactive mode's 200 L does not apply
+    assert not ok and "limited to 30 L (recipe EC-target batch maximum for stock A)" in msg
+    assert manual("EC_TARGET", ec, "B", 50)[0]
+
+
+def test_pc07_acid_does_not_start_in_the_scan_a_refill_starts_an_addition(icfg):
+    # both are held by the same global blocker; when it clears, REFILL (scanned first) starts its batch
+    # and ACID must see the commanded addition before any flow is observed
+    state = {"ok": True}
+    rt = make_runtime(_twin(icfg, {"MAIN": 7900}, chemistry={"initial_main_ph": 6.8}),
+                      start_permitted=lambda: (state["ok"], None if state["ok"] else "historian unwritable"))
+    for s in ("A", "B", "ACID"):
+        rt.stock_acknowledge("op", s, "")
+    assert rt.process_request("op", "REFILL", CS.AUTO)[0] and rt.process_request("op", "ACID", CS.AUTO)[0]
+    state["ok"] = False
+    rt.run_for(30)
+    refill, acid = rt.sup.by_id["REFILL"], rt.sup.by_id["ACID"]
+    assert refill.batch is None and acid.phase != "DOSING"
+    state["ok"] = True
+    for _ in range(100):                                         # simulation ticks up to the next control scan
+        rt.step(1)
+        if refill.batch is not None:
+            break
+    assert refill.batch is not None and "valve.FILL_MAIN.cmd" in refill.on
+    assert acid.phase != "DOSING" and "pump.TP_ACID.cmd" not in acid.on
+    assert "an addition is commanded now" in (acid.inhibit or "")
+    rt.run_for(60)
+    assert acid.phase != "DOSING" and "settling" in (acid.inhibit or "").lower()
