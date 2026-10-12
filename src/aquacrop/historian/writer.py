@@ -149,8 +149,13 @@ class Historian:
         con = connect(self.db_path)
         self.applied_migrations = migrate(con, self.db_path, reserve_bytes=cfg.historian.free_space_reserve_bytes)
         self._con = con
+        # Two read connections: user queries (trends, exports, audit) on one, the short reads the
+        # acquisition loop and status page depend on (capacity, open alarms, newest label) on the other,
+        # so a long export never delays a poll cycle's storage check.
         self._read_lock = threading.Lock()
         self._read = connect(self.db_path)
+        self._status_lock = threading.Lock()
+        self._status = connect(self.db_path)
         self._q: queue.Queue = queue.Queue(maxsize=queue_max)
         self._stop = threading.Event()
         self.fail_writes = False   # test hook: simulate disk/database failure
@@ -282,6 +287,7 @@ class Historian:
             pass
         self._con.close()
         self._read.close()
+        self._status.close()
 
     # ------------------------------------------------------------------ HistorySink
     def register_run(self, run_id: str, seed: int, provenance: str, reason: str) -> None:
@@ -346,8 +352,8 @@ class Historian:
 
     def newest_wall_label(self) -> float | None:
         """Newest wall-time label stored (epoch seconds): where a restarted recorder continues."""
-        with self._read_lock:
-            return newest_wall_label(self._read)
+        with self._status_lock:
+            return newest_wall_label(self._status)
 
     def snapshot_permitted(self, at: datetime | None = None) -> bool:
         """Low/full-disk handling: below `snapshot_floor_bytes` free, periodic snapshots pause (counted,
@@ -387,8 +393,8 @@ class Historian:
                                             rows))
 
     def load_open_alarms(self) -> list[AlarmOccurrence]:
-        with self._read_lock:
-            rows = self._read.execute("SELECT json FROM alarm_occurrences WHERE closed=0").fetchall()
+        with self._status_lock:
+            rows = self._status.execute("SELECT json FROM alarm_occurrences WHERE closed=0").fetchall()
         out = []
         for (j,) in rows:
             d = json.loads(j)
@@ -465,8 +471,8 @@ class Historian:
 
     def storage(self) -> dict:
         """Capacity picture for alarms, /api/status and `storage report`."""
-        with self._read_lock:
-            return capacity_report(self._read, self.db_path, self.cfg, snapshots_paused=self.snapshots_paused,
+        with self._status_lock:
+            return capacity_report(self._status, self.db_path, self.cfg, snapshots_paused=self.snapshots_paused,
                                    queue_depth=self._q.qsize(), snapshot_pause=dict(self._pause),
                                    wal_checkpoint=self.wal_checkpoint)
 

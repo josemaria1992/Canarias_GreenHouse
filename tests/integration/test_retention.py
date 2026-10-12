@@ -483,3 +483,26 @@ def test_pruning_is_bounded_and_waits_while_the_wal_is_held(h):
     assert res["deleted"]["samples"] == 6 and res["transactions"] == 3 and "transactions" in res["incomplete"]
     res = prune_expired(h, now=NOW, chunk_rows=2)                   # the next run finishes the job
     assert counts(h)["samples"] == 0 and "incomplete" not in res
+
+
+def test_capacity_check_does_not_wait_behind_a_long_user_query(h):
+    """The acquisition loop's storage check and the status page use their own read connection, so a
+    year-range export holding the query connection never delays a poll cycle."""
+    import threading
+    import time as _time
+    held, release = threading.Event(), threading.Event()
+
+    def long_query():
+        with h._read_lock:                                          # a user query in progress
+            held.set()
+            release.wait(10)
+    t = threading.Thread(target=long_query)
+    t.start()
+    held.wait(5)
+    tic = _time.monotonic()
+    st = h.storage()
+    h.load_open_alarms()
+    h.newest_wall_label()
+    assert _time.monotonic() - tic < 1.0 and st["db_bytes"] > 0
+    release.set()
+    t.join()
