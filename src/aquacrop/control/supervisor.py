@@ -171,14 +171,19 @@ class Supervisor:
                 out.append(f"{il['signal']} {'active' if il['when'] else 'inactive'}: {il['effect']}")
         return out
 
-    def start_blockers(self, proc: Process, ctx: Ctx, auto: bool) -> list[str]:
+    def mode_blockers(self, proc: Process, ctx: Ctx) -> list[str]:
+        """Why a process may not enter MANUAL (entering MANUAL starts nothing)."""
         out = self.global_blockers(ctx)
         own = self._own_alarms(proc.pid)
         if own:
             out.append(f"unresolved {proc.title} alarms {own}: acknowledge and reset them first")
         if ctx.recipe is None:
             out.append("no active recipe")
-        return out + self.interlocks_for(proc.pid, ctx)
+        return out
+
+    def start_blockers(self, proc: Process, ctx: Ctx, auto: bool) -> list[str]:
+        """Why a process may not enter AUTO or start a bounded MANUAL operation now."""
+        return self.mode_blockers(proc, ctx) + self.interlocks_for(proc.pid, ctx)
 
     # ------------------------------------------------------------------ stock readiness
     def _save_stock(self, st: StockReadiness, kind: str, actor: str | None) -> None:

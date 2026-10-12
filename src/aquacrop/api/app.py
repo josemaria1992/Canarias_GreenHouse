@@ -34,7 +34,6 @@ from ..historian.recording import slot_clock_epoch
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
-from ..twin.scenarios import presets
 from .service import SimulationService
 
 COOKIE = "aquacrop_session"
@@ -102,9 +101,44 @@ class DeviceFaultIn(Body):
 
 
 class ActuatorFaultIn(Body):
-    kind: Literal["pump", "valve"]
+    kind: Literal["pump", "valve", "drive", "contactor", "mains", "safety"]
     ident: str
-    fault: Literal["NO_RUN", "STUCK_ON", "NO_FLOW", "STUCK_CLOSED", "STUCK_OPEN"] | None
+    fault: Literal["NO_RUN", "STUCK_ON", "NO_FLOW", "STUCK_CLOSED", "STUCK_OPEN", "TRIP", "WELDED", "NO_CLOSE",
+                   "NO_SUPPLY", "CHAIN_OPEN"] | None
+
+
+class ProcessStateIn(Body):
+    target: ControllerState
+
+
+class ManualOpIn(Body):
+    op: dict[str, str | float | int]
+
+
+class ReasonIn(Body):
+    reason: str = Field(default="", max_length=200)
+
+
+class RecipeDraftIn(Body):
+    recipe_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_\-]{0,47}$")
+    name: str = Field(min_length=1, max_length=80)
+    body: dict
+    version: int | None = Field(default=None, ge=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class StockAckIn(Body):
+    note: str = Field(default="", max_length=200)
+
+
+class StockInvalidateIn(Body):
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class OutletIn(Body):
+    channel: int = Field(ge=1, le=64)
+    outlet: int = Field(ge=1, le=16)
+    opening: float = Field(ge=0.0, le=1.0)
 
 
 class StateIn(Body):
@@ -281,7 +315,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         raise HTTPException(status, reason)
 
     PUBLIC = {"/api/health", "/api/auth/login"}
-    SIM_ONLY = ("/api/twin", "/api/scenarios", "/api/io", "/api/controller")   # and their sub-paths
+    SIM_ONLY = ("/api/twin", "/api/scenarios", "/api/io", "/api/controller", "/api/processes",
+                "/api/stocks", "/api/recipes")                                  # and their sub-paths
     SIM_ONLY_EXACT = {"/api/commands"}                                          # /api/commands/history is shared
 
     @app.middleware("http")
@@ -443,10 +478,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         alarms = list(r.alarms.open.values())
         return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
                 "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
-                "timezone": cfg.site.timezone, "controller": {"state": r.controller.state.value,
-                                                              "phase": r.controller.phase.value,
-                                                              "fault_reason": r.controller.fault_reason,
-                                                              "sector": r.controller.sector},
+                "timezone": cfg.site.timezone, "topology": cfg.topology, "controller": _controller_summary(r),
                 "twin": {"activity": svc.clock.activity.value, "speed": svc.clock.speed, "run_id": r.run_id,
                          "sim_s": r.sim_s, "tick": r.tick, "source": r.backend.source.value, "scenario": svc.scenario,
                          "seed": r.seed, "acquisition_stalled": r.acquisition_stalled, "overruns": svc.clock.overruns,
@@ -462,6 +494,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                            "reset_required": sum(o.reset_required for o in alarms)},
                 "freshness": _freshness(), "physical_writes": "IMPOSSIBLE (simulation backend)",
                 "live_control": "UNAVAILABLE in this release"}
+
+    def _controller_summary(r) -> dict:
+        if getattr(r, "sup", None) is not None:
+            a = r.recipes.active()
+            return {"state": r._controller_state().value, "recipe": a.ref if a else None,
+                    "processes": {p.pid: {"state": p.state.value, "phase": p.phase, "fault_reason": p.fault_reason,
+                                          "inhibit": p.inhibit} for p in r.sup.processes}}
+        c = r.controller
+        return {"state": c.state.value, "phase": c.phase.value, "fault_reason": c.fault_reason, "sector": c.sector}
 
     def _devices_view() -> dict:
         devs = {}
@@ -536,7 +577,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.get("/api/scenarios")
     async def scenarios(p: Principal = Depends(require(Perm.READ))):
         return [{"name": s.name, "description": s.description, "duration_s": s.duration_s,
-                 "twin_overrides": s.twin_overrides} for s in presets().values()]
+                 "twin_overrides": s.twin_overrides} for s in svc.presets().values()]
 
     # ------------------------------------------------------------------ mutations: simulation only
     def _guard(fn):
@@ -639,7 +680,105 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/controller")
     async def controller(p: Principal = Depends(require(Perm.READ))):
-        return rt().controller.snapshot()
+        r = rt()
+        return r.sup.snapshot() if getattr(r, "sup", None) is not None else r.controller.snapshot()
+
+    # ------------------------------------------------------------------ installation processes (simulation)
+    def irt():
+        r = rt()
+        if getattr(r, "sup", None) is None:
+            raise HTTPException(409, "this configuration has no process controllers (demo topology)")
+        return r
+
+    def _ok(res):
+        ok, msg = res
+        if not ok:
+            raise HTTPException(409, msg)
+        return {"ok": True, "detail": msg}
+
+    @app.get("/api/processes")
+    async def processes(p: Principal = Depends(require(Perm.READ))):
+        r = irt()
+        a = r.recipes.active()
+        return r.sup.snapshot() | {"recipe": r.snapshot()["recipe"], "active_recipe_body": a.body_json() if a else None,
+                                   "aggregate_state": r._controller_state().value}
+
+    @app.post("/api/processes/stop-all")
+    async def processes_stop_all(body: ReasonIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
+        return {"results": irt().stop_all(p.username, body.reason or "stop all")}
+
+    @app.post("/api/processes/{pid}/state")
+    async def process_state(pid: str, body: ProcessStateIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
+        return _ok(_guard(lambda: irt().process_request(p.username, pid, body.target)))
+
+    @app.post("/api/processes/{pid}/manual")
+    async def process_manual(pid: str, body: ManualOpIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
+        return _ok(_guard(lambda: irt().process_manual(p.username, pid, body.op)))
+
+    @app.post("/api/processes/{pid}/reset")
+    async def process_reset(pid: str, p: Principal = Depends(require(Perm.LOCKOUT_RESET))):
+        return _ok(_guard(lambda: irt().process_reset(p.username, pid)))
+
+    @app.post("/api/stocks/{stock}/acknowledge")
+    async def stock_ack(stock: str, body: StockAckIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
+        return _ok(_guard(lambda: irt().stock_acknowledge(p.username, stock, body.note)))
+
+    @app.post("/api/stocks/{stock}/invalidate")
+    async def stock_invalidate(stock: str, body: StockInvalidateIn,
+                               p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
+        _guard(lambda: irt().stock_invalidate(p.username, stock, body.reason))
+        return {"ok": True}
+
+    @app.post("/api/twin/stock/{stock}/prepare")
+    async def twin_stock_prepare(stock: str, p: Principal = Depends(require(Perm.SIM_COMMAND))):
+        return _guard(lambda: irt().stock_prepare(p.username, stock))
+
+    @app.post("/api/twin/outlet")
+    async def twin_outlet(body: OutletIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
+        _guard(lambda: irt().set_outlet(p.username, body.channel, body.outlet, body.opening))
+        return {"ok": True}
+
+    # ------------------------------------------------------------------ recipes
+    def _recipe_guard(fn):
+        from ..control.recipes import RecipeError
+
+        def call():
+            try:
+                return fn()
+            except RecipeError as e:            # a state conflict (immutable, already active), not bad input
+                raise HTTPException(409, str(e))
+        return _guard(call)
+
+    @app.get("/api/recipes")
+    async def recipes(p: Principal = Depends(require(Perm.READ))):
+        from ..control.recipes import form_schema
+        r = irt()
+        a = r.recipes.active()
+        return {"active": a.ref if a else None, "recipes": r.recipes.list(), "activations": r.recipes.activations,
+                "form": form_schema(r.capacities), "sectors": r.sector_ids}
+
+    @app.post("/api/recipes/draft")
+    async def recipe_draft(body: RecipeDraftIn, p: Principal = Depends(require(Perm.RECIPE_EDIT))):
+        from pydantic import ValidationError
+        try:
+            rec = _recipe_guard(lambda: irt().recipe_save_draft(p.username, body.recipe_id, body.name, body.body,
+                                                                version=body.version, note=body.note))
+        except ValidationError as e:
+            raise HTTPException(422, [{"loc": ".".join(map(str, x["loc"])), "msg": x["msg"]} for x in e.errors()])
+        return rec.view()
+
+    @app.post("/api/recipes/{recipe_id}/{version}/validate")
+    async def recipe_validate(recipe_id: str, version: int, p: Principal = Depends(require(Perm.RECIPE_EDIT))):
+        return _recipe_guard(lambda: irt().recipe_validate(p.username, recipe_id, version)).view()
+
+    @app.post("/api/recipes/{recipe_id}/{version}/activate")
+    async def recipe_activate(recipe_id: str, version: int, body: ReasonIn,
+                              p: Principal = Depends(require(Perm.RECIPE_ACTIVATE))):
+        return _recipe_guard(lambda: irt().recipe_activate(p.username, recipe_id, version, body.reason)).view()
+
+    @app.post("/api/recipes/rollback")
+    async def recipe_rollback(body: ReasonIn, p: Principal = Depends(require(Perm.RECIPE_ACTIVATE))):
+        return _recipe_guard(lambda: irt().recipe_rollback(p.username, body.reason or "rollback")).view()
 
     # ------------------------------------------------------------------ alarms / events
     @app.get("/api/alarms")

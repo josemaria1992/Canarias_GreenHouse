@@ -47,11 +47,16 @@ class Perm(str, enum.Enum):
     USER_ADMIN = "user_admin"
     BACKUP = "backup"
     BENCH_ARM = "bench_arm"              # additionally requires the commissioning flag + lease
+    PROCESS_CONTROL = "process_control"  # process AUTO/MANUAL/STOP, bounded manual operations, stock readiness
+    RECIPE_EDIT = "recipe_edit"          # save and validate recipe drafts
+    RECIPE_ACTIVATE = "recipe_activate"  # activate or roll back a recipe version
 
 
 PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.ALARM_ACK: Role.OPERATOR,
                  Perm.LOCKOUT_RESET: Role.OPERATOR, Perm.EXPORT_AUDIT: Role.ADMIN, Perm.CONFIG_ADMIN: Role.ADMIN,
-                 Perm.USER_ADMIN: Role.ADMIN, Perm.BACKUP: Role.ADMIN, Perm.BENCH_ARM: Role.OPERATOR}
+                 Perm.USER_ADMIN: Role.ADMIN, Perm.BACKUP: Role.ADMIN, Perm.BENCH_ARM: Role.OPERATOR,
+                 Perm.PROCESS_CONTROL: Role.OPERATOR, Perm.RECIPE_EDIT: Role.OPERATOR,
+                 Perm.RECIPE_ACTIVATE: Role.ADMIN}
 
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library

@@ -12,8 +12,9 @@ from ..historian.recording import HistoryRecorder
 from ..historian.retention import RetentionTask, evaluate_recorder_alarm, evaluate_storage_alarm
 from ..historian.writer import Historian
 from ..twin.clock import SimClock
-from ..twin.runtime import SimulationRuntime
-from ..twin.scenarios import presets, with_twin_overrides
+from ..twin.runtime import SimulationRuntime, make_runtime
+from ..twin.scenarios import presets as demo_presets
+from ..twin.scenarios import with_twin_overrides
 
 DRIVE_PERIOD_S = 0.05
 MAX_FAILURES_PER_10_MIN = 5
@@ -36,6 +37,17 @@ class SimulationService:
                      "last_error": None, "restarts": 0}
         self.retention = RetentionTask(hist, wall=wall, monotonic=monotonic)
         self.offsite = None                 # OffsiteMonitor, attached by the app (needs the state directory)
+        self.recipes = None
+        self.readiness = None
+        if cfg.topology == "installation":
+            # Operator records outlive simulation runs: one recipe store and readiness register per service.
+            from ..control.recipes import RecipeStore
+            from ..historian.process_store import HistorianReadinessBackend, HistorianRecipeBackend
+            from ..twin.installation_params import TANKS
+            f = cfg.twin.facts
+            self.recipes = RecipeStore(HistorianRecipeBackend(hist), {t: f.tank_capacity(t) for t in TANKS},
+                                       [s.sector_id for s in f.sectors], simulated=cfg.profile.value == "SIMULATED")
+            self.readiness = HistorianReadinessBackend(hist)
         self.new_run("process start", restore_alarms=True)
         # Installation history: a complete snapshot every recording_interval_s of WALL time, whatever the
         # simulation speed or pause state; the run id and simulated time are stored with each snapshot.
@@ -68,13 +80,14 @@ class SimulationService:
             self.hist.alarms(old.alarms.take_dirty())
             old._event("RUN_RESET", {"reason": reason, "next_scenario": scenario}, actor)
         cfg = self.base_cfg
-        sc = presets().get(scenario) if scenario else None
+        sc = self.presets().get(scenario) if scenario else None
         if scenario and sc is None:
             raise KeyError(scenario)
         if sc is not None:
             cfg = with_twin_overrides(cfg, sc.twin_overrides)
-        rt = SimulationRuntime(cfg, audit=self.hist, history=self.hist, session_id=self.session_id,
-                               start_permitted=self.hist.can_accept_starts)
+        extra = {"recipes": self.recipes, "readiness": self.readiness} if self.recipes is not None else {}
+        rt = make_runtime(cfg, audit=self.hist, history=self.hist, session_id=self.session_id,
+                          start_permitted=self.hist.can_accept_starts, **extra)
         self.hist.register_run(rt.run_id, rt.seed, rt.params.provenance, reason + (f" / scenario {scenario}" if scenario else ""))
         if restore_alarms:
             rt.alarms.restore(self.hist.load_open_alarms())
@@ -85,6 +98,12 @@ class SimulationService:
         self.clock = SimClock(rt, speed)
         self.apply_speed(speed)
         return rt
+
+    def presets(self) -> dict:
+        if self.base_cfg.topology == "installation":
+            from ..twin.installation_scenarios import presets
+            return presets()
+        return demo_presets()
 
     def sim_time_recording_s(self, speed: int) -> float | None:
         """Cadence of the optional simulation-time recorder at this speed (None when it is off)."""

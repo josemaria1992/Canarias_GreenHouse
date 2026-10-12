@@ -178,7 +178,7 @@ class Process:
                 return True, "already MANUAL"
             if s != ControllerState.STOPPED:
                 return False, f"MANUAL only from STOPPED (current {s.value}); stop first"
-            why = self.sup.start_blockers(self, ctx, auto=False)
+            why = self.sup.mode_blockers(self, ctx)
             if why:
                 return False, "; ".join(why)
             self.recipe = ctx.recipe
