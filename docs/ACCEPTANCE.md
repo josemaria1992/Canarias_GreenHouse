@@ -4,10 +4,10 @@
 3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-12 (historian update ADR-0008;
 quarantine ADR-0011 and off-device backups ADR-0012), software 0.2.0.dev0. The 2026-10-11 run was at
 `0ce4842` (183 tests); the ADR-0008 run at `f0b18e2` (252 tests).
-**Results:** `python -m pytest`: 348 passed on 3.11, 3.12 and 3.13 locally (pre-hardware release
+**Results:** `python -m pytest`: 352 passed on 3.11, 3.12 and 3.13 locally (pre-hardware release
 stages 1 to 3; 271 before them); `pip check` clean. `demo verify --seed 42`: 21/21 PASS for `demo-48`
 and `demo-24`, 42/42 for `installation-48`. Installed-wheel check
-(`scripts/check_installed_wheel.py`): 13/13 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
+(`scripts/check_installed_wheel.py`): 16/16 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
 
 The acceptance IDs are this project's own (`docs/IMPLEMENTATION_PLAN.md`); the owner's
 `ACCEPTANCE_TEST_PLAN.md` was never supplied, so no cross-mapping exists.
@@ -69,7 +69,7 @@ NOT RUN (could run, has not).
 
 | ID | Status | Evidence |
 |---|---|---|
-| AT-PKG-01 wheel outside the tree serves UI offline | PASS (Linux x86_64, py3.13) | `scripts/check_installed_wheel.py` 13/13 |
+| AT-PKG-01 wheel outside the tree serves UI offline | PASS (Linux x86_64, py3.13) | `scripts/check_installed_wheel.py` 16/16 (2026-10-12, stage 3 wheel) |
 | AT-PKG-01 Windows / macOS / ARM64 | PASS (GitHub CI) | run 38221964706 on `b3c32eb`: full suite, `demo verify` and the serial-isolation check on Windows 2022, macOS 14 and Ubuntu 24.04 (Python 3.11, 3.12, 3.13) and Ubuntu ARM64 (3.11, 3.13); installed-wheel check on all four. The first run on `main` (`b5700c8`) failed on Windows only: a legacy test read a file in the Windows code page (fixed). ARM64 here is a hosted runner, not a CM4 |
 | AT-PKG-02 hash-locked requirements, `pip check` | PASS | `requirements.lock`, `requirements-dev.lock`; installs and `pip check` on 3.11/3.12/3.13; ARM64 py3.11 wheels all available |
 | AT-SEC-02 expiry, revocation, rate limits, CSV escaping, XSS-safe | PASS | `test_idle_expiry`, `test_password_change_revokes_sessions_and_logout`, `test_csv_export_escapes_and_discloses_completeness`, CSP header + `textContent`-only UI |
@@ -206,7 +206,7 @@ Browser evidence comes from `scripts/ui_check/run_ui_check.py`: it serves `insta
 through Playwright, restarts the server and checks what survived, then serves the HARDWARE_READ_ONLY
 profile over the in-memory fake bus (`tests/fakes`) for the read-only pages. Every screen step is
 paired with an API assertion on the controller state. It runs in CI (job `ui`, screenshots and
-`checks.json` kept as the `ui-evidence` artifact); the local run of 2026-10-12 passed UICOUNT checks with
+`checks.json` kept as the `ui-evidence` artifact); the local run of 2026-10-12 passed 54 checks with
 Playwright 1.56.1 and Chromium. **Simulation and a fake bus only; none of this is physical verification.**
 
 | ID | Status | Evidence |
