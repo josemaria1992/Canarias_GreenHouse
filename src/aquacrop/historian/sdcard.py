@@ -55,7 +55,7 @@ class VolumeProbe:
             lines = Path(self.mountinfo).read_text(encoding="utf-8").splitlines()
         except OSError:
             return None
-        want = str(path)
+        want = Path(path).as_posix()           # mountinfo is Linux's; as_posix keeps tests portable
         for line in reversed(lines):          # the last entry for a mount point is the visible one
             left, _, right = line.partition(" - ")
             f = left.split()

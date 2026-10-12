@@ -5,6 +5,8 @@ device_uid + kind + channel; there are no global AI1..AI16 arrays anywhere in th
 """
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 from typing import Literal
 
@@ -273,7 +275,7 @@ class OffsiteBackupSettings(_Strict):
         if self.enabled and not (sd.mount_path and sd.filesystem_uuid and sd.volume_id):
             raise ValueError("offsite_backup.enabled needs the confirmed SD card: sd_card.mount_path, "
                              "filesystem_uuid and volume_id (see `offsite enroll-card`)")
-        if sd.mount_path is not None and not sd.mount_path.startswith("/"):
+        if sd.mount_path is not None and not (sd.mount_path.startswith("/") or os.path.isabs(sd.mount_path)):
             raise ValueError("sd_card.mount_path must be an absolute path")
         for sub in (sd.backup_subdir, sd.drill_subdir):
             if sub.startswith("/") or ".." in sub.split("/"):
