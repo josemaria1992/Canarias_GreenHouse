@@ -94,7 +94,8 @@ historian:
   db_path: var/demo-24.sqlite3
   acquisition_interval_s: 3.0
   # Owner requirements 2026-10-12 (ADR-0008): complete snapshot every 60 s (300 s only on the owner's
-  # request), rolling 365-day window. In simulation the interval is simulated time.
+  # request), rolling 365-day window. Wall time in every profile (simulation too: the run id and
+  # simulated time are stored with each snapshot); see ADR-0008.
   recording_interval_s: 60
   retention_days: 365
   retention_provenance: APPROVED
