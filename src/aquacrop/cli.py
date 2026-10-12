@@ -6,6 +6,7 @@ import getpass
 import json
 import secrets
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import __version__
@@ -283,10 +284,30 @@ def cmd_archive_verify(args) -> int:
 
 
 def cmd_retention_apply(args) -> int:
-    from .historian.retention import apply_retention
+    """Deletes nothing unless --confirm-cutoff echoes the cutoff this command proposes for the current
+    clock: the operator checks the date and the counts first (the same rule as the server's hold)."""
+    import time as _time
+
+    from .historian.retention import ProposalMismatch, confirm_cutoff, prune_expired, retention_proposal
     h, lk = _maintenance_historian(args, "cli_retention")
     try:
-        print(json.dumps(apply_retention(h, dry_run=args.dry_run), indent=2))
+        prop = retention_proposal(h, wall_s=_time.time())
+        if args.dry_run or not args.confirm_cutoff or prop["cutoff_utc"] is None:
+            print(json.dumps(prop, indent=2))
+            if args.dry_run or prop["cutoff_utc"] is None:
+                return 0
+            print(f"\nNothing deleted. Check the date and time, then run again with --confirm-cutoff "
+                  f"{prop['cutoff_utc']}", file=sys.stderr)
+            return 3
+        try:
+            prop = confirm_cutoff(h, args.confirm_cutoff, wall_s=_time.time(), trusted_s=None,
+                                  actor=f"cli:{getpass.getuser()}", hold=None)
+        except ProposalMismatch as e:
+            print(json.dumps(e.proposal, indent=2))
+            print(f"REFUSED: {e}", file=sys.stderr)
+            return 4
+        res = prune_expired(h, now=datetime.fromisoformat(prop["cutoff_utc"]) + timedelta(days=h.cfg.historian.retention_days))
+        print(json.dumps(res, indent=2))
         return 0
     finally:
         h.close()
@@ -394,7 +415,9 @@ def build_parser() -> argparse.ArgumentParser:
     rt = sub.add_parser("retention").add_subparsers(dest="sub", required=True)
     ra = rt.add_parser("apply", help="delete history older than the APPROVED rolling window (server stopped)")
     common(ra)
-    ra.add_argument("--dry-run", action="store_true")
+    ra.add_argument("--dry-run", action="store_true", help="show the proposed cutoff and counts only")
+    ra.add_argument("--confirm-cutoff", default=None,
+                    help="the cutoff_utc shown by a run without this option, after checking the date and time")
     ra.set_defaults(fn=cmd_retention_apply)
     sr = sub.add_parser("storage").add_subparsers(dest="sub", required=True)
     srr = sr.add_parser("report", help="measured database growth, projection and free-space thresholds")

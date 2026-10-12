@@ -197,6 +197,7 @@ class HardwareService:
             self.alarms.evaluate_samples(self.samples, self._mono(), None)
             evaluate_storage_alarm(self.hist, self.alarms)
             evaluate_recorder_alarm(self.recorder, self.alarms)
+            self.retention.tick(self.alarms)     # clock trust is checked even while snapshots are held
             # Transitions are written now; refreshes of still-active alarms ride with the snapshot.
             dirty = self.alarms.take_dirty() if self.alarms.take_transitioned() else []
         if dirty:
@@ -222,7 +223,6 @@ class HardwareService:
         now = datetime.now(timezone.utc)
         with self.lock:
             latest = dict(self.samples)
-            self.retention.tick(self.alarms)
             evaluate_storage_alarm(self.hist, self.alarms)
             dirty = self.alarms.take_dirty()
             self.alarms.take_transitioned()

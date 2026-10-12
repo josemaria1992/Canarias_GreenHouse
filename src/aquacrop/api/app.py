@@ -150,6 +150,10 @@ class UserUpdateIn(Body):
     disabled: bool | None = None
 
 
+class RetentionConfirmIn(Body):
+    cutoff_utc: str = Field(min_length=20, max_length=40)   # the cutoff shown by GET /api/retention
+
+
 def _escape_csv(v):
     """Prevent spreadsheet formula injection in textual fields."""
     if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
@@ -878,6 +882,30 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             svc.revoke(f"sessions revoked by {p.username}", p.username)
         hist.event("SESSIONS_REVOKED", {"username": username}, actor=p.username)
         return {"ok": True}
+
+    # ------------------------------------------------------------------ retention hold / confirmation
+    @app.get("/api/retention")
+    def retention_state(p: Principal = Depends(require(Perm.READ))):
+        """Retention state; while held, also the proposed cutoff and the rows it would delete."""
+        v = svc.retention.view()
+        if v["held"] is not None:
+            v["proposal"] = svc.retention.proposal()
+        return v
+
+    @app.post("/api/retention/confirm-clock")
+    def retention_confirm(body: RetentionConfirmIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        """Administrator's release of a retention hold. It is separate from alarm acknowledgement and
+        must echo the cutoff that was shown; a stale or different cutoff is refused with the new one."""
+        from ..historian.retention import ProposalMismatch
+        try:
+            prop = svc.retention.confirm(p.username, body.cutoff_utc)
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except ProposalMismatch as e:
+            raise HTTPException(409, {"error": str(e), "proposal": e.proposal})
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"released": True, "cutoff_utc": prop["cutoff_utc"], "would_delete": prop["would_delete"]}
 
     backup_job: dict = {"running": False, "last": None}
     backup_lock = threading.Lock()

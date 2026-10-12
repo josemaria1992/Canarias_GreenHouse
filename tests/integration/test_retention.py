@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from aquacrop.control.alarms import AlarmEngine
-from aquacrop.historian.retention import (RetentionTask, apply_retention, create_archive, evaluate_storage_alarm,
-                                          prune_expired, storage_alarms, verify_archive)
+from aquacrop.historian.retention import (ProposalMismatch, RetentionTask, apply_retention, create_archive,
+                                          evaluate_storage_alarm, prune_expired, storage_alarms, verify_archive)
 from aquacrop.historian.schema import MIGRATIONS, connect, migrate, schema_version
 from aquacrop.historian.writer import Historian
 from aquacrop.twin.runtime import SimulationRuntime
@@ -133,6 +133,10 @@ class FakeClock:
     def m(self):
         return self.mono
 
+    def run(self, seconds):
+        self.wall += seconds
+        self.mono += seconds
+
 
 def _wait_task(task):
     end = time.monotonic() + 10
@@ -140,30 +144,101 @@ def _wait_task(task):
         time.sleep(0.02)
 
 
-def test_retention_holds_when_clock_is_far_past_the_newest_record_until_acknowledged(h):
+def _task(h, clk):
+    return RetentionTask(h, wall=clk.w, monotonic=clk.m)
+
+
+def _kinds(h):
+    h.wait_idle()
+    return [r[0] for r in h.query("SELECT kind FROM events WHERE kind LIKE 'RETENTION_%' ORDER BY id")]
+
+
+def test_hold_after_downtime_is_released_only_by_confirming_the_cutoff(h):
     seed(h, CUTOFF - timedelta(days=1), tag="old")
-    seed(h, NOW - timedelta(days=40), tag="last")               # newest record from the previous process
+    seed(h, NOW - timedelta(hours=2), tag="last")               # newest record from the previous process
     clk = FakeClock(NOW.timestamp())
-    task = RetentionTask(h, wall=clk.w, monotonic=clk.m)
+    task = _task(h, clk)
     al = AlarmEngine(h.cfg)
     task.tick(al)
-    assert task.held and "40 days" in task.held and not task.running
+    assert task.held["code"] == "UNVERIFIED_DOWNTIME" and "2.0 h" in task.held["reason"] and not task.running
     occ = al.open[("RETENTION_HELD", "historian")]
-    assert occ.severity == "WARNING" and "Acknowledge" in occ.message
-    clk.mono += 7200
-    clk.wall += 7200
+    assert occ.severity == "WARNING" and "acknowledging this alarm does not resume deletion" in occ.message
+    al.acknowledge(occ.occurrence_id, "operator1")             # acknowledgement records only that
+    clk.run(7200)
     task.tick(al)
-    assert task.held and counts(h)["samples"] == 4              # still held: nothing deleted
-    al.acknowledge(occ.occurrence_id, "operator1")
+    assert task.held and counts(h)["samples"] == 4 and not task.running
+    prop = task.proposal()                                      # shown to the administrator before release
+    assert prop["cutoff_utc"] == iso(CUTOFF + timedelta(hours=2)) and prop["would_delete"]["samples"] == 2
+    assert prop["newest_earlier_process_record_utc"] == iso(NOW - timedelta(hours=2))
+    with pytest.raises(ProposalMismatch) as e:                  # a different cutoff is refused with the new one
+        task.confirm("admin1", iso(CUTOFF + timedelta(days=1)))
+    assert e.value.proposal["cutoff_utc"] == prop["cutoff_utc"] and task.held
+    task.confirm("admin1", prop["cutoff_utc"])
+    assert task.held is None
     task.tick(al)
     _wait_task(task)
-    assert task.held is None and ("RETENTION_HELD", "historian") not in al.open
-    assert task.last_result["deleted"]["samples"] == 2
+    assert task.last_result["deleted"]["samples"] == 2 and counts(h)["samples"] == 2
+    assert ("RETENTION_HELD", "historian") not in al.open      # cleared, and closed since it was acknowledged
+    assert _kinds(h) == ["RETENTION_HELD", "RETENTION_CLOCK_CONFIRMED", "RETENTION_PRUNED"]
+    row = h.query("SELECT payload_json, actor FROM events WHERE kind='RETENTION_CLOCK_CONFIRMED'")[0]
+    ev = json.loads(row["payload_json"])
+    assert row["actor"] == "admin1" and ev["confirmed_by"] == "admin1" and ev["cutoff_utc"] == prop["cutoff_utc"]
+    assert ev["hold"]["code"] == "UNVERIFIED_DOWNTIME" and ev["would_delete"]["samples"] == 2
+    with pytest.raises(LookupError):
+        task.confirm("admin1", prop["cutoff_utc"])              # nothing to release any more
+
+
+@pytest.mark.parametrize("offset_s,code", [(-40 * 60, None), (-2 * 3600, "UNVERIFIED_DOWNTIME"),
+                                           (3 * 60, None), (10 * 60, "CLOCK_BEHIND_STORED")])
+def test_start_check_catches_small_jumps(h, offset_s, code):
+    """A start 40 min after the newest record is a restart; 2 h is unverified downtime. A clock 3 min
+    behind the newest record is tolerated (NTP slew); 10 min behind holds."""
+    seed(h, NOW + timedelta(seconds=offset_s), tag="last")
+    task = _task(h, FakeClock(NOW.timestamp()))
+    task.tick(AlarmEngine(h.cfg))
+    assert (task.held or {}).get("code") == code
+
+
+@pytest.mark.parametrize("step_s,code", [(120, None), (-120, None), (600, "CLOCK_STEP_FORWARD"),
+                                         (-600, "CLOCK_STEP_BACKWARD")])
+def test_clock_steps_while_running(h, step_s, code):
+    seed(h, NOW - timedelta(minutes=5), tag="recent")
+    clk = FakeClock(NOW.timestamp())
+    task = _task(h, clk)
+    al = AlarmEngine(h.cfg)
+    task.tick(al)
+    _wait_task(task)
+    assert task.held is None
+    clk.run(60)
+    clk.wall += step_s
+    task.tick(al)
+    assert (task.held or {}).get("code") == code
+
+
+def test_forward_jump_protects_current_window_records(h):
+    """A clock that jumps two years ahead would put everything outside the window. Retention holds, the
+    proposal shows what a confirmation would delete, and nothing is deleted without it."""
+    for d in (300, 100, 1):
+        seed(h, NOW - timedelta(days=d), tag=f"w{d}")
+    seed(h, NOW - timedelta(minutes=5), tag="recent")
+    clk = FakeClock(NOW.timestamp())
+    task = _task(h, clk)
+    al = AlarmEngine(h.cfg)
+    task.tick(al)
+    _wait_task(task)
+    base = counts(h)
+    assert task.held is None and task.last_result["deleted"]["samples"] == 0
+    clk.run(60)
+    clk.wall += 2 * 365 * 86400
+    for _ in range(3):
+        clk.run(3600)
+        task.tick(al)
+    assert task.held["code"] == "CLOCK_STEP_FORWARD" and "730.0 days" in task.held["reason"]
     h.wait_idle()
-    kinds = [r[0] for r in h.query("SELECT kind FROM events WHERE kind LIKE 'RETENTION_%' ORDER BY id")]
-    assert kinds == ["RETENTION_HELD", "RETENTION_RELEASED", "RETENTION_PRUNED"]
-    task.tick(al)                                               # next run waits for the hourly interval
-    assert not task.running
+    after = counts(h)
+    assert after["events"] == base["events"] + 1                # RETENTION_HELD; nothing deleted
+    assert {k: v for k, v in after.items() if k != "events"} == {k: v for k, v in base.items() if k != "events"}
+    assert task.proposal()["would_delete"]["samples"] == base["samples"]   # what a careless release would do
 
 
 def test_retention_holds_for_a_history_without_snapshots(h):
@@ -178,28 +253,40 @@ def test_retention_holds_for_a_history_without_snapshots(h):
                   "'relay_A.DO1',1,'BENCH',?,?,'v',5,'MODBUS','old',?,'READBACK_CONFIRMED')", (ts, ts, ts))
     h.submit(audit_only, wait=True)
     assert counts(h)["cycles"] == 0
-    clk = FakeClock(NOW.timestamp())
-    task = RetentionTask(h, wall=clk.w, monotonic=clk.m)
+    task = _task(h, FakeClock(NOW.timestamp()))
     task.tick(AlarmEngine(h.cfg))
-    assert task.held and "400 days" in task.held and not task.running
+    assert task.held["code"] == "UNVERIFIED_DOWNTIME" and "400.0 days" in task.held["reason"] and not task.running
     assert counts(h)["commands"] == 1 and h.query("SELECT count(*) FROM events WHERE kind='DI_EDGE'")[0][0] == 1
 
 
-def test_retention_holds_on_forward_clock_step_and_on_clock_behind_records(h):
-    seed(h, NOW - timedelta(minutes=5), tag="recent")
-    clk = FakeClock(NOW.timestamp())
-    task = RetentionTask(h, wall=clk.w, monotonic=clk.m)
-    al = AlarmEngine(h.cfg)
-    task.tick(al)
-    _wait_task(task)
-    assert task.held is None and task.last_result is not None
-    clk.mono += 60
-    clk.wall += 60 + 2 * 3600                                   # wall jumped 2 h ahead of monotonic time
-    task.tick(al)
-    assert task.held and "stepped forward" in task.held
-    behind = RetentionTask(h, wall=lambda: (NOW - timedelta(hours=2)).timestamp(), monotonic=clk.m)
-    behind.tick(AlarmEngine(h.cfg))
-    assert behind.held and "behind" in behind.held
+def test_demo_policy_never_holds_or_deletes(h, cfg24):
+    h.cfg = cfg24.model_copy(update={"historian": cfg24.historian.model_copy(update={"retention_provenance": "DEMO"})})
+    seed(h, CUTOFF - timedelta(days=30), tag="old")
+    task = _task(h, FakeClock(NOW.timestamp()))
+    task.tick(AlarmEngine(h.cfg))
+    assert task.held is None and not task.running and counts(h)["samples"] == 2
+    assert task.view()["policy"] == "DEMO"
+
+
+def test_process_and_run_registers_are_pruned_only_when_nothing_refers_to_them(h):
+    old_end = iso(CUTOFF - timedelta(days=2))
+
+    def sessions(c):
+        c.execute("INSERT INTO process_sessions VALUES('gone',?,?,'c','v','SIMULATED','x',1)",
+                  (iso(CUTOFF - timedelta(days=3)), old_end))
+        c.execute("INSERT INTO sim_runs VALUES('run_gone','gone',1,'c','v',?,'DEMO',NULL)", (old_end,))
+        c.execute("INSERT INTO process_sessions VALUES('crashed',?,NULL,'c','v','SIMULATED','x',0)",
+                  (iso(CUTOFF - timedelta(days=1, hours=1)),))
+        c.execute("INSERT INTO process_sessions VALUES('kept',?,?,'c','v','SIMULATED','x',1)",
+                  (iso(CUTOFF - timedelta(days=1)), iso(NOW - timedelta(days=1))))
+    h.submit(sessions, wait=True)
+    seed(h, CUTOFF + timedelta(hours=1), tag="in")             # a row still inside the window
+    res = prune_expired(h, now=NOW)
+    left = {r[0] for r in h.query("SELECT session_id FROM process_sessions")}
+    # 'crashed' ended before 'kept' started (sessions run one at a time) and before the oldest kept row
+    assert res["deleted"]["process_sessions"] == 2 and res["deleted"]["sim_runs"] == 1
+    assert left == {"kept", "s_ret"}                            # never the running session
+    assert h.query("SELECT count(*) FROM sim_runs")[0][0] == 0
 
 
 # ---------------------------------------------------------------------------------------- capacity
@@ -326,3 +413,26 @@ def test_cli_archive_and_retention_require_stopped_server(tmp_path, cfg24):
             cli.main(["retention", "apply", "--config", "demo-24", "--state-dir", str(tmp_path), "--dry-run"])
     finally:
         lk.release()
+
+
+def test_cli_retention_apply_deletes_only_with_the_confirmed_cutoff(tmp_path, cfg24, capsys):
+    from aquacrop import cli
+    real_now = datetime.now(timezone.utc)
+    h = Historian(tmp_path / Path(cfg24.historian.db_path).name, cfg24, "old")
+    seed(h, real_now - timedelta(days=400), tag="old")
+    seed(h, real_now - timedelta(days=1), tag="new")
+    h.close()
+    args = ["retention", "apply", "--config", "demo-24", "--state-dir", str(tmp_path)]
+    assert cli.main(args) == 3                                  # shows the proposal and deletes nothing
+    prop = json.loads(capsys.readouterr().out)
+    assert prop["would_delete"]["samples"] == 2 and prop["newest_record_utc"]
+    assert cli.main(args + ["--confirm-cutoff", iso(real_now)]) == 4    # not the proposed cutoff
+    capsys.readouterr()
+    assert cli.main(args + ["--confirm-cutoff", prop["cutoff_utc"]]) == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res["deleted"]["samples"] == 2
+    h = Historian(tmp_path / Path(cfg24.historian.db_path).name, cfg24, "check")
+    assert counts(h)["samples"] == 2
+    row = h.query("SELECT actor, payload_json FROM events WHERE kind='RETENTION_CLOCK_CONFIRMED'")
+    assert len(row) == 1 and row[0]["actor"].startswith("cli:")
+    h.close()

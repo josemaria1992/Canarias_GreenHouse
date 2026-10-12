@@ -2,12 +2,20 @@
 
 * Rolling retention keeps a 365-day window. Under an APPROVED policy, rows older than the window are
   deleted in small batches through the single writer, every `retention_check_interval_s` while the
-  server runs (and on demand with `retention apply`). Each run that deletes anything is recorded as a
-  RETENTION_PRUNED event. Nothing inside the window is ever deleted, for a size limit or any other
-  reason; open alarms, users and the schema/migration/archive registers are never pruned.
-* Retention trusts the wall clock only after sanity checks. If the clock steps forward by more than
-  an hour while running, or at start is more than 30 days past the newest stored record (or behind
-  it), retention holds and raises RETENTION_HELD until someone checks the date and acknowledges it.
+  server runs (and with `retention apply --confirm-cutoff` while it is stopped). Each run that deletes
+  anything is recorded as a RETENTION_PRUNED event. Nothing inside the window is ever deleted, for a
+  size limit or any other reason. Open alarms, users and the schema/migration/archive registers are
+  never pruned; process-session and simulation-run records are pruned only once no remaining row can
+  refer to them. The database therefore stops growing only approximately once the window is full:
+  the registers keep growing slowly and capacity monitoring stays on after the first year.
+* Retention deletes only while the wall clock is trusted, and it never assumes internet time. The
+  clock is trusted at start when it is no more than CLOCK_TOLERANCE_S behind and no more than
+  CONFIRM_AFTER_DOWNTIME_S ahead of the newest record an earlier process stored; while running it
+  stays trusted as long as it moves with the monotonic clock (within CLOCK_TOLERANCE_S). Anything
+  else (an offline start after a long power cut, an RTC-less boot, a large NTP correction either way)
+  holds deletion and raises RETENTION_HELD. Holding only keeps more history (about 23 MB a day).
+  Deletion resumes only when an administrator confirms the proposed cutoff (`confirm()`, recorded as
+  RETENTION_CLOCK_CONFIRMED); acknowledging the alarm only records the acknowledgement.
 * Capacity alarms: STORAGE_CAPACITY (WARNING: low free disk, database over budget, or the 365-day
   projection over budget), STORAGE_PRESSURE (CRITICAL: free disk below the reserve, new starts and ON
   refused), HISTORY_SNAPSHOTS_PAUSED (CRITICAL: below the snapshot floor, periodic snapshots pause
@@ -112,8 +120,9 @@ def verify_archive(path: str | Path, expected_manifest_sha256: str | None = None
 
 
 PRUNE_CHUNK_ROWS = 5000
-HOLD_FORWARD_STEP_S = 3600.0
-HOLD_START_GAP_DAYS = 30.0
+CLOCK_TOLERANCE_S = 300.0           # wall vs monotonic-carried time; and how far behind stored records
+CONFIRM_AFTER_DOWNTIME_S = 3600.0   # a start this long after the newest stored record needs confirmation
+PROPOSAL_TOLERANCE_S = 600.0        # a confirmation must echo a cutoff within this of the current one
 
 
 def _chunks(hist, sql: str, params: tuple, chunk_rows: int, *, fk_off: bool = False) -> int:
@@ -176,6 +185,7 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     d["auth_sessions"] = _chunks(hist, "DELETE FROM auth_sessions WHERE session_hash IN (SELECT session_hash "
                                        "FROM auth_sessions WHERE absolute_expiry_utc < ? LIMIT ?)", (cutoff,),
                                  chunk_rows)
+    d |= hist.submit(lambda c: _prune_provenance(c, cutoff, hist.session_id), wait=True, timeout=600)
     res = {"cutoff_utc": cutoff, "retention_days": h.retention_days, "deleted": d}
     if any(d.values()):
         hist.event("RETENTION_PRUNED", res | {"note": "rows older than the rolling window; freed pages are "
@@ -183,87 +193,223 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     return res
 
 
+def _prune_provenance(c, cutoff: str, current_session: str) -> dict:
+    """Process-session and simulation-run records are provenance for samples, events and commands. One
+    is deleted only when it ended before the cutoff and the oldest remaining sample, cycle, event and
+    command are all later than its end, so nothing left in the database can refer to it. Sessions run
+    one at a time (the owner lock), so a session without a recorded end ended before the next start."""
+    oldest = [r[0] for r in (
+        c.execute("SELECT min(acquired_utc) FROM samples").fetchone(),
+        c.execute("SELECT persisted_utc FROM cycles ORDER BY cycle_pk LIMIT 1").fetchone() or (None,),
+        c.execute("SELECT min(utc) FROM events").fetchone(),
+        c.execute("SELECT min(intent_utc) FROM commands").fetchone()) if r[0]]
+    floor = min([cutoff] + oldest, key=lambda t: datetime.fromisoformat(t))
+    rows = c.execute("SELECT session_id, started_utc, ended_utc FROM process_sessions ORDER BY started_utc").fetchall()
+    gone = []
+    for i, (sid, started, ended) in enumerate(rows):
+        end = ended or (rows[i + 1][1] if i + 1 < len(rows) else None)
+        if sid == current_session or end is None:
+            continue
+        if datetime.fromisoformat(end) < datetime.fromisoformat(floor):
+            gone.append(sid)
+    runs = 0
+    for sid in gone:
+        runs += c.execute("DELETE FROM sim_runs WHERE session_id=?", (sid,)).rowcount
+        c.execute("DELETE FROM process_sessions WHERE session_id=?", (sid,))
+    return {"process_sessions": len(gone), "sim_runs": runs}
+
+
+def clock_sync_status() -> str:
+    """Kernel clock-discipline state, for information only (it never releases a hold): SYNCHRONIZED
+    when something (NTP, GPS, PTP) disciplines the clock, UNSYNCHRONIZED, or UNKNOWN."""
+    try:
+        import ctypes
+        import ctypes.util
+        import sys
+        if not sys.platform.startswith("linux"):
+            return "UNKNOWN"
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        buf = ctypes.create_string_buffer(1024)            # struct timex, modes=0: read only
+        state = libc.adjtimex(buf)
+        if state < 0:
+            return "UNKNOWN"
+        return "UNSYNCHRONIZED" if state == 5 else "SYNCHRONIZED"   # 5 = TIME_ERROR
+    except Exception:
+        return "UNKNOWN"
+
+
+def _span(seconds: float) -> str:
+    if seconds >= 2 * 86400:
+        return f"{seconds / 86400:.1f} days"
+    if seconds >= 7200:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 60:.0f} min"
+
+
+class ProposalMismatch(ValueError):
+    def __init__(self, proposal: dict):
+        super().__init__(f"the proposed cutoff is now {proposal['cutoff_utc']}; review it and confirm again")
+        self.proposal = proposal
+
+
+def retention_proposal(hist, *, wall_s: float, trusted_s: float | None = None) -> dict:
+    """What a confirmation would release: the cutoff the clock gives now and the rows older than it."""
+    h = hist.cfg.historian
+    basis = wall_s if trusted_s is None else min(wall_s, trusted_s)
+    at = datetime.fromtimestamp(basis, tz=timezone.utc)
+    dry = prune_expired(hist, now=at, dry_run=True)
+    sid = hist.session_id
+    newest = _newest_record(hist, exclude_session=None)
+    prior = _newest_record(hist, exclude_session=sid)
+    return {"wall_utc": datetime.fromtimestamp(wall_s, tz=timezone.utc).isoformat(),
+            "cutoff_utc": dry.get("cutoff_utc"), "retention_days": h.retention_days,
+            "would_delete": dry.get("would_delete", {}), "newest_record_utc": newest,
+            "newest_earlier_process_record_utc": prior, "clock_sync": clock_sync_status(),
+            "note": "Confirm only after checking the date and time against an independent source. Rows older "
+                    "than the cutoff are deleted in the next run; rows inside the window are never deleted."}
+
+
+def confirm_cutoff(hist, cutoff_utc: str, *, wall_s: float, trusted_s: float | None, actor: str,
+                   hold: dict | None) -> dict:
+    """Check an administrator's confirmation against the current proposal and record it."""
+    prop = retention_proposal(hist, wall_s=wall_s, trusted_s=trusted_s)
+    if prop["cutoff_utc"] is None:
+        raise LookupError(f"retention policy is {hist.cfg.historian.retention_provenance}; nothing is deleted")
+    given = datetime.fromisoformat(cutoff_utc)
+    if given.tzinfo is None:
+        raise ValueError("the cutoff must include a UTC offset")
+    if abs((given - datetime.fromisoformat(prop["cutoff_utc"])).total_seconds()) > PROPOSAL_TOLERANCE_S:
+        raise ProposalMismatch(prop)
+    hist.event("RETENTION_CLOCK_CONFIRMED", {"confirmed_by": actor, "cutoff_utc": prop["cutoff_utc"],
+                                             "wall_utc": prop["wall_utc"], "hold": hold,
+                                             "would_delete": prop["would_delete"],
+                                             "clock_sync": prop["clock_sync"]}, actor=actor)
+    return prop
+
+
+def _newest_record(hist, exclude_session: str | None) -> str | None:
+    """Newest time written by any process (or by earlier ones): snapshots, events, commands and the
+    process register, so a history with audit records but no snapshot is covered too."""
+    sid = exclude_session or "<none>"
+    rows = hist.query(
+        "SELECT (SELECT persisted_utc FROM cycles WHERE session_id != ? ORDER BY cycle_pk DESC LIMIT 1), "
+        "(SELECT utc FROM events WHERE coalesce(session_id, '') != ? ORDER BY utc DESC LIMIT 1), "
+        "(SELECT intent_utc FROM commands WHERE session_id != ? ORDER BY intent_utc DESC LIMIT 1), "
+        "(SELECT max(coalesce(ended_utc, started_utc)) FROM process_sessions WHERE session_id != ?)",
+        (sid, sid, sid, sid))[0]
+    stamps = [r for r in rows if r]
+    return max(stamps, key=lambda t: datetime.fromisoformat(t)) if stamps else None
+
+
 def apply_retention(hist, *, now: datetime | None = None, dry_run: bool = False) -> dict:
-    """CLI entry point (`retention apply`): the same rolling prune the server runs hourly."""
+    """The rolling prune at an explicit time (tests, measurements). Operators use `retention apply`,
+    which first shows the proposal and deletes only with --confirm-cutoff."""
     return prune_expired(hist, now=now, dry_run=dry_run)
 
 
 class RetentionTask:
-    """Runs the rolling prune in the background while the server runs, behind clock sanity checks.
+    """Runs the rolling prune in the background while the server runs, only while the clock is trusted.
 
-    `tick(alarms)` is called from the thread that owns the alarm engine; it never blocks on deletes."""
+    `tick(alarms)` is called from the thread that owns the alarm engine; it never blocks on deletes.
+    `confirm(actor, cutoff_utc)` is the administrator's release of a hold (API or CLI)."""
 
     def __init__(self, hist, *, wall=time.time, monotonic=time.monotonic):
         self.hist, self._wall, self._mono = hist, wall, monotonic
-        self.held: str | None = None
+        self._lock = threading.RLock()
+        self.held: dict | None = None
         self.running = False
         self.last_result: dict | None = None
         self.last_error: str | None = None
         self._next_due: float | None = None
-        self._ref: tuple[float, float] | None = None
+        self._anchor: tuple[float, float] | None = None   # (wall, monotonic) while the clock is trusted
         self._started_check_done = False
 
-    def _hold(self, why: str) -> None:
-        self.held = why
-        self.hist.event("RETENTION_HELD", {"reason": why}, actor="system")
+    def _hold(self, code: str, reason: str, wall: float) -> None:
+        self._anchor = None
+        if self.held is None:
+            self.held = {"code": code, "reason": reason, "since_utc": datetime.fromtimestamp(wall, timezone.utc).isoformat()}
+            self.hist.event("RETENTION_HELD", dict(self.held), actor="system")
 
     def _newest_prior_record(self) -> str | None:
-        """Newest time written by an earlier process: snapshots, events, commands and the process
-        register, so a history with audit records but no snapshot (or paused snapshots) is guarded too."""
-        sid = self.hist.session_id
-        rows = self.hist.query(
-            "SELECT (SELECT persisted_utc FROM cycles WHERE session_id != ? ORDER BY cycle_pk DESC LIMIT 1), "
-            "(SELECT utc FROM events WHERE coalesce(session_id, '') != ? ORDER BY utc DESC LIMIT 1), "
-            "(SELECT intent_utc FROM commands WHERE session_id != ? ORDER BY intent_utc DESC LIMIT 1), "
-            "(SELECT max(coalesce(ended_utc, started_utc)) FROM process_sessions WHERE session_id != ?)",
-            (sid, sid, sid, sid))[0]
-        stamps = [r for r in rows if r]
-        return max(stamps, key=lambda t: datetime.fromisoformat(t)) if stamps else None
+        return _newest_record(self.hist, exclude_session=self.hist.session_id)
+
+    def trusted_now(self) -> float | None:
+        """Wall time carried forward on the monotonic clock from the last trusted reading."""
+        with self._lock:
+            if self._anchor is None:
+                return None
+            return self._anchor[0] + (self._mono() - self._anchor[1])
 
     def _check_clock(self) -> None:
         mono, wall = self._mono(), self._wall()
-        if not self._started_check_done:
+        with self._lock:
+            if self.held is not None:
+                return
+            if not self._started_check_done:
+                self._started_check_done = True
+                newest = self._newest_prior_record()
+                if newest:
+                    gap_s = wall - datetime.fromisoformat(newest).timestamp()
+                    if gap_s < -CLOCK_TOLERANCE_S:
+                        self._hold("CLOCK_BEHIND_STORED", f"the system clock is {_span(-gap_s)} behind the newest "
+                                   f"stored record ({newest})", wall)
+                    elif gap_s > CONFIRM_AFTER_DOWNTIME_S:
+                        self._hold("UNVERIFIED_DOWNTIME", f"the system clock is {_span(gap_s)} after the newest "
+                                   f"stored record ({newest}); the date after this downtime cannot be "
+                                   "cross-checked against stored history", wall)
+                if self.held is None:
+                    self._anchor = (wall, mono)
+                return
+            if self._anchor is None:
+                self._anchor = (wall, mono)
+                return
+            step = wall - (self._anchor[0] + (mono - self._anchor[1]))
+            if abs(step) > CLOCK_TOLERANCE_S:
+                self._hold("CLOCK_STEP_FORWARD" if step > 0 else "CLOCK_STEP_BACKWARD",
+                           f"the wall clock stepped {'forward' if step > 0 else 'backward'} by {_span(abs(step))} "
+                           "against the monotonic clock while running", wall)
+            else:
+                self._anchor = (wall, mono)   # follow small corrections
+
+    def proposal(self) -> dict:
+        return retention_proposal(self.hist, wall_s=self._wall(), trusted_s=self.trusted_now()) | {
+            "held": self.held, "policy": self.hist.cfg.historian.retention_provenance}
+
+    def confirm(self, actor: str, cutoff_utc: str) -> dict:
+        """Release a hold after an administrator checked the date: `cutoff_utc` must echo the proposal
+        shown to them (within PROPOSAL_TOLERANCE_S), otherwise ProposalMismatch carries the new one."""
+        with self._lock:
+            if self.held is None:
+                raise LookupError("retention is not held")
+            prop = confirm_cutoff(self.hist, cutoff_utc, wall_s=self._wall(), trusted_s=None, actor=actor,
+                                  hold=self.held)
+            self.held = None
+            self._anchor = (self._wall(), self._mono())
             self._started_check_done = True
-            newest = self._newest_prior_record()
-            if newest:
-                gap_s = wall - datetime.fromisoformat(newest).timestamp()
-                if gap_s < -300:
-                    self._hold(f"system clock is {-gap_s / 3600:.1f} h behind the newest stored record "
-                               f"({newest}); check the date and time")
-                elif gap_s > HOLD_START_GAP_DAYS * 86400:
-                    self._hold(f"system clock is {gap_s / 86400:.0f} days after the newest stored record "
-                               f"({newest}); confirm the date before history older than the window is deleted")
-        elif self._ref is not None:
-            step = (wall - self._ref[1]) - (mono - self._ref[0])
-            if step > HOLD_FORWARD_STEP_S:
-                self._hold(f"wall clock stepped forward by {step / 3600:.1f} h while running; confirm the date "
-                           "before history older than the window is deleted")
-        self._ref = (mono, wall)
+            self._next_due = None
+            return prop
 
     def tick(self, alarms, sim_s: float | None = None) -> None:
         h = self.hist.cfg.historian
         if h.retention_provenance != "APPROVED":
             return
         self._check_clock()
-        if self.held is not None:
-            occ = alarms.open.get(("RETENTION_HELD", "historian"))
-            if occ is not None and occ.acknowledged:
-                alarms.clear("RETENTION_HELD", "historian")
-                self.hist.event("RETENTION_RELEASED", {"reason": self.held, "acknowledged_by": occ.ack_user},
-                                actor=occ.ack_user)
-                self.held = None
-                self._next_due = None
-            else:
-                alarms.raise_or_update("RETENTION_HELD", "historian", severity="WARNING", sim_s=sim_s,
-                                       message=f"rolling retention held: {self.held}. Acknowledge this alarm "
-                                               "once the date and time are correct.")
-                return
+        held = self.held
+        if held is not None:
+            alarms.raise_or_update("RETENTION_HELD", "historian", severity="WARNING", sim_s=sim_s,
+                                   message=f"rolling retention held: {held['reason']}. Nothing is deleted while "
+                                           "held. An administrator must check the date and confirm the proposed "
+                                           "cutoff (Settings, or retention apply --confirm-cutoff with the server "
+                                           "stopped); acknowledging this alarm does not resume deletion.")
+            return
+        alarms.clear("RETENTION_HELD", "historian")
         now = self._mono()
         if self.running or (self._next_due is not None and now < self._next_due):
             return
         self._next_due = now + h.retention_check_interval_s
         self.running = True
-        threading.Thread(target=self._run, args=(datetime.fromtimestamp(self._wall(), tz=timezone.utc),),
+        basis = min(self._wall(), self.trusted_now() or self._wall())
+        threading.Thread(target=self._run, args=(datetime.fromtimestamp(basis, tz=timezone.utc),),
                          name="historian-retention", daemon=True).start()
 
     def _run(self, at: datetime) -> None:
@@ -277,7 +423,8 @@ class RetentionTask:
 
     def view(self) -> dict:
         return {"held": self.held, "running": self.running, "last_result": self.last_result,
-                "last_error": self.last_error}
+                "last_error": self.last_error, "policy": self.hist.cfg.historian.retention_provenance,
+                "clock_trusted": self._anchor is not None, "clock_sync": clock_sync_status()}
 
 
 def storage_alarms(hist) -> list[tuple[str, str, str]]:

@@ -268,3 +268,43 @@ def test_trend_gap_flags_from_recorded_cadence(env_dense):
     h.submit(lambda con: con.execute("DELETE FROM samples WHERE id=?", (mid,)), wait=True)
     tr = c.get("/api/trends?points=analog_A.AI1").json()["series"]["analog_A.AI1"]
     assert tr[1][8] is True
+
+
+def test_retention_hold_is_released_by_an_admin_confirmation_not_by_an_alarm_ack(tmp_path, cfg48):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    from aquacrop.historian.writer import Historian
+    db = tmp_path / Path(cfg48.historian.db_path).name
+    Historian(db, cfg48, "earlier").close()
+    then = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat(timespec="microseconds")
+    con = sqlite3.connect(db)                       # the previous process ended three hours ago
+    con.execute("UPDATE process_sessions SET started_utc=?, ended_utc=?", (then, then))
+    con.execute("UPDATE events SET utc=?", (then,))
+    con.commit()
+    con.close()
+    with TestClient(app := _app(tmp_path, cfg48), base_url=ORIGIN) as c:
+        op = login(c, "oper1", PW["oper1"])
+        end = time.monotonic() + 5
+        while c.get("/api/retention").json()["held"] is None and time.monotonic() < end:
+            time.sleep(0.05)
+        st = c.get("/api/retention").json()
+        assert st["held"]["code"] == "UNVERIFIED_DOWNTIME" and st["proposal"]["cutoff_utc"]
+        cutoff = st["proposal"]["cutoff_utc"]
+        assert c.post("/api/alarms/ack", json={"rule_id": "RETENTION_HELD", "target": "historian"},
+                      headers=op).status_code == 200
+        time.sleep(0.2)
+        assert c.get("/api/retention").json()["held"] is not None          # ack records only the ack
+        assert c.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff}, headers=op).status_code == 403
+        adm = login(c, "admin1", PW["admin1"])
+        assert c.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff},
+                      headers={"Origin": ORIGIN}).status_code == 403        # CSRF token required
+        r = c.post("/api/retention/confirm-clock", json={"cutoff_utc": "2020-01-01T00:00:00+00:00"}, headers=adm)
+        assert r.status_code == 409 and r.json()["detail"]["proposal"]["cutoff_utc"]
+        r = c.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff}, headers=adm)
+        assert r.status_code == 200 and r.json()["released"] is True
+        assert c.get("/api/retention").json()["held"] is None
+        app.state.hist.wait_idle()
+        ev = app.state.hist.query("SELECT actor FROM events WHERE kind='RETENTION_CLOCK_CONFIRMED'")
+        assert [e[0] for e in ev] == ["admin1"]
