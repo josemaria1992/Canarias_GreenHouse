@@ -102,3 +102,11 @@ readings, restart, simulation, no migration · AT-RET-01 … AT-RET-05 rolling w
 deletion inside the window, clock guard, one-year steady state · AT-CAP-01/02 low/full disk and
 visible capacity · AT-BAK-01 … AT-BAK-06 compressed backups · AT-STO-01 measured growth (desktop),
 AT-STO-02 on the CM4 (blocked until hardware).
+
+### 2026-10-12 owner review of ADR-0008 (R1 to R5)
+AT-HIS-10 … AT-HIS-13 durable labels, clock steps, simulation pause, optional simulation-time
+series (R2; AT-HIS-03 and AT-HIS-08 revised for wall time) · AT-RET-04 revised, AT-RET-06 …
+AT-RET-08 clock trust, administrator release, protection of the current window, registers (R4) ·
+AT-WAL-01 … AT-WAL-05 WAL reporting, bounded writers and readers, acquisition responsiveness,
+concurrency stress (R1) · AT-BAK-07 … AT-BAK-10 publication after verification, failures and space,
+restore drill, migration safety copy (R3) · AT-STO-01 revised with environment and workload (R5).

@@ -79,33 +79,52 @@ NOT RUN (could run, has not).
 | AT-OPS-05 systemd unit, CM4 guide, rollback doc | PASS (documents) / NOT RUN (on a CM4) | `deploy/`, `systemd-analyze verify` parses; `docs/installation/cm4.md`, `docs/operations/service.md` |
 | Storage sizing measured | PASS (desktop) | superseded by AT-STO-01 (60 s, 365 days, ADR-0008) |
 
-## Historian recording, retention and backups (owner requirements of 2026-10-12, ADR-0008)
+## Historian recording, retention and backups (owner requirements of 2026-10-12, ADR-0008 revised after the owner review)
+
+Test names are in `tests/integration/` (`test_recording.py`, `test_retention.py`, `test_backup.py`,
+`test_api.py`, `test_historian.py`). Desktop measurements: `operations/measurements/` (⟪MEAS_MD⟫).
 
 | ID | Status | Evidence |
 |---|---|---|
-| AT-HIS-02 60 s by default and in every shipped config; only 60 or 300 accepted | PASS | `integration/test_recording.py::test_recording_interval_is_60_s_and_only_60_or_300_allowed`, `test_api.py::test_default_snapshot_interval_is_60_s_of_simulated_time` |
-| AT-HIS-03 one snapshot per wall-clock boundary (60 s and 300 s), never twice; skipped boundaries logged | PASS | `test_recorder_writes_each_wall_boundary_once_and_reports_skips[60]`, `[300]` |
+| AT-HIS-02 60 s by default and in every shipped config; only 60 or 300 accepted | PASS | `test_recording_interval_is_60_s_and_only_60_or_300_allowed`, `test_default_history_is_60_s_of_wall_time_at_any_speed` |
+| AT-HIS-03 labels are wall-clock boundaries on a monotonic schedule, each once (60 s and 300 s); 300 s labels are five-minute boundaries | PASS | `test_recorder_labels_wall_boundaries_once_on_a_monotonic_schedule[60]`, `[300]`, `test_300_s_labels_are_five_minute_boundaries` |
 | AT-HIS-04 acquisition, alarms, edges and dashboard keep their rate; polls write no history rows | PASS | `test_hw_acquisition_keeps_its_rate_and_snapshots_are_separate_and_complete`, `hardware/test_modbus.py::test_physical_edges_overrun_and_gaps_are_events` |
 | AT-HIS-05 edges, alarm transitions, ack/reset, commands and config changes written when they happen | PASS | `test_hw_edges_and_alarm_transitions_are_written_immediately`, `test_sim_alarm_transitions_and_ack_do_not_wait_for_a_snapshot`, `test_config_loaded_and_changed_events`, `test_commands_audited_with_outcomes` |
 | AT-HIS-06 stale and never-acquired readings recorded as `STALE` / `UNAVAILABLE`, last good value kept | PASS | `test_stale_limit_follows_the_bus_poll_rate`, `test_hw_snapshot_marks_stale_and_never_acquired_points`, `test_sim_snapshot_marks_stalled_acquisition_stale`, `test_stale_sample_replace_keeps_traceability` |
-| AT-HIS-07 restart keeps history, no back-fill, resumes on the next boundary | PASS | `test_hw_restart_preserves_history_and_resumes_on_next_boundary`, `test_alarm_persist_and_restore_without_duplicates` |
-| AT-HIS-08 simulation records on simulated time (60 s and 300 s) | PASS | `test_sim_snapshot_interval_in_simulated_time[60-...]`, `[300-...]` |
+| AT-HIS-07 restart keeps history, no back-fill, continues after the newest stored label | PASS | `test_hw_restart_preserves_history_and_resumes_on_next_boundary`, `test_restart_continues_after_the_newest_stored_label`, `test_alarm_persist_and_restore_without_duplicates` |
+| AT-HIS-08 simulation records on wall time with run id and simulated time; 1×, 10× and 60× give the same count (R2) | PASS | `test_sim_records_on_wall_time_whatever_the_speed[1]`, `[10]`, `[60]`, `test_default_history_is_60_s_of_wall_time_at_any_speed` |
 | AT-HIS-09 no schema migration; an existing database opens unchanged | PASS | `test_this_update_adds_no_schema_migration` |
-| AT-RET-01 rolling window boundary at exactly 365 days | PASS | `integration/test_retention.py::test_rolling_window_boundary_is_exactly_365_days` |
-| AT-RET-02 pruning in batches through the writer; dry run and `DEMO` delete nothing | PASS | `test_prune_runs_in_small_batches`, `test_dry_run_and_demo_policy_delete_nothing` |
+| AT-HIS-10 a label is stored once per database, checked in the writing transaction, across restarts (also on a boundary) and clock corrections (R2) | PASS | `test_a_label_is_stored_once_per_database_across_sessions`, `test_sim_restart_on_a_boundary_and_clock_corrections_never_duplicate_a_label` |
+| AT-HIS-11 forward step: one snapshot, gap logged; backward step: held until the clock passes the newest label; stalled process: missed labels logged; nothing fabricated (R2) | PASS | `test_forward_clock_step_writes_one_snapshot_and_logs_the_label_gap`, `test_backward_clock_step_holds_until_the_clock_passes_the_newest_label`, `test_stalled_process_logs_missed_labels_without_back_fill`, `test_labels_not_written_for_low_disk_are_not_reported_again_as_missed` |
+| AT-HIS-12 a paused simulation keeps wall-time snapshots, frozen readings `STALE`, no back-fill (R2) | PASS | `test_sim_pause_keeps_wall_snapshots_and_records_frozen_readings_as_stale` |
+| AT-HIS-13 the optional simulation-time series is off by default, separately labelled and counted, and selectable in trends (R2) | PASS | `test_optional_sim_time_recorder_is_off_by_default_and_separately_labelled`, `test_sim_time_recorder_is_separate_bounded_and_labelled_at_speed`, `test_trend_gap_flags_from_recorded_cadence` |
+| AT-RET-01 rolling window boundary at exactly 365 days | PASS | `test_rolling_window_boundary_is_exactly_365_days` |
+| AT-RET-02 pruning in batches through the writer; dry run and `DEMO` delete nothing | PASS | `test_prune_runs_in_small_batches`, `test_dry_run_and_demo_policy_delete_nothing`, `test_demo_policy_never_holds_or_deletes` |
 | AT-RET-03 over budget never deletes inside the window | PASS | `test_over_budget_is_a_warning_and_nothing_inside_the_window_is_deleted` |
-| AT-RET-04 clock guard holds retention until acknowledged, also for a history without snapshots | PASS | `test_retention_holds_when_clock_is_far_past_the_newest_record_until_acknowledged`, `test_retention_holds_for_a_history_without_snapshots`, `test_retention_holds_on_forward_clock_step_and_on_clock_behind_records` |
-| AT-RET-05 size levels off once the window is full (freed pages reused) | PASS (desktop) | `scripts/measure_storage.py`, 400 simulated days: 8.03 GiB at day 365, 8.05 GiB at day 400, sample count constant at 25,228,800 |
+| AT-RET-04 clock trust at start and while running catches small jumps either way, also for a history without snapshots (R4) | PASS | `test_start_check_catches_small_jumps[...]` (40 min restart trusted, 2 h downtime held, 3 min behind tolerated, 10 min behind held), `test_clock_steps_while_running[...]` (±2 min trusted, ±10 min held), `test_retention_holds_for_a_history_without_snapshots` |
+| AT-RET-05 size levels off once the window is full (freed pages reused) | PASS (desktop) | ⟪AT_RET05⟫ |
+| AT-RET-06 a hold is released only by an administrator confirming the shown cutoff, audited; acknowledging the alarm does not release it; the command line follows the same rule (R4) | PASS | `test_hold_after_downtime_is_released_only_by_confirming_the_cutoff`, `test_retention_hold_is_released_by_an_admin_confirmation_not_by_an_alarm_ack`, `test_cli_retention_apply_deletes_only_with_the_confirmed_cutoff`; headless Chromium: Settings shows the hold and proposal, the release button stays disabled until the date check is ticked, release recorded as `RETENTION_CLOCK_CONFIRMED` by the administrator |
+| AT-RET-07 forward and backward clock corrections never delete current-window records (R4) | PASS | `test_forward_jump_protects_current_window_records`, `test_clock_steps_while_running[-600-CLOCK_STEP_BACKWARD]` |
+| AT-RET-08 registers: process sessions and runs pruned only when nothing refers to them; the running session never (R4) | PASS | `test_process_and_run_registers_are_pruned_only_when_nothing_refers_to_them` |
+| AT-WAL-01 WAL reported separately from the database file, warned above 256 MiB; checkpoint progress shows a reader holding it (R1) | PASS | `test_wal_is_reported_separately_and_warned_about`, `test_checkpoint_progress_shows_a_reader_holding_the_wal` |
+| AT-WAL-02 retention runs are bounded and wait while the WAL is held, keeping partial counts (R1) | PASS | `test_pruning_is_bounded_and_waits_while_the_wal_is_held` |
+| AT-WAL-03 long readers are bounded: the backup aborts on WAL growth; export, audit export and analytics are capped (R1) | PASS | `test_wal_growth_cancels_the_long_reader`, `test_csv_export_escapes_and_discloses_completeness` |
+| AT-WAL-04 the acquisition loop's storage check never waits behind a user query (R1) | PASS | `test_capacity_check_does_not_wait_behind_a_long_user_query` |
+| AT-WAL-05 concurrent acquisition, events, commands, backup, year-range readers and retention: WAL, free space and responsiveness (R1) | PASS (desktop) | ⟪AT_WAL05⟫ |
 | AT-CAP-01 low disk, reserve, snapshot floor and write failure have defined effects | PASS | `test_capacity_levels_low_disk_reserve_and_snapshot_floor`, `test_write_failure_is_critical_and_inhibits_starts` |
-| AT-CAP-02 capacity visible: projection, thresholds, growth | PASS | `test_projection_of_the_365_day_size_is_reported`, `storage report`; headless Chromium: Overview storage line and Settings card (recording, retention, history held, DB size, projection, thresholds) |
-| AT-BAK-01 compressed backup verifies and restores to a new instance; text byte-exact (quotes, CR, LF, non-ASCII) | PASS | `integration/test_backup.py::test_compressed_backup_verifies_and_restores_to_a_new_instance` |
+| AT-CAP-02 capacity visible: projection, thresholds, growth, WAL, snapshot gaps, DEMO growth, off-device state | PASS | `test_projection_of_the_365_day_size_is_reported`, `test_backup_state_shows_off_device_unconfigured_and_restore_drill_due`, `storage report`; headless Chromium: Overview storage line, Settings storage, retention and backup cards |
+| AT-BAK-01 compressed backup verifies and restores to a new instance; text byte-exact (quotes, CR, LF, non-ASCII) | PASS | `test_compressed_backup_verifies_and_restores_to_a_new_instance` |
 | AT-BAK-02 tampered or truncated backups fail verification | PASS | `test_tampered_or_truncated_backups_fail_verification` |
-| AT-BAK-03 consistent while the historian keeps writing | PASS | `test_backup_is_consistent_while_the_historian_keeps_writing` |
-| AT-BAK-04 rotation only after verification; refused when it would eat the reserve | PASS | `test_rotation_keeps_newest_and_leaves_other_copies`, `test_backup_refused_when_it_would_eat_the_reserve`, `test_cli_backup_keep_and_refusal`; UI *Create backup now* runs in the background (headless Chromium) |
+| AT-BAK-03 consistent while the historian keeps writing; manifest and dump share one snapshot (R3) | PASS | `test_backup_is_consistent_while_the_historian_keeps_writing`, `test_concurrent_backups_restore_to_their_own_snapshot` |
+| AT-BAK-04 rotation only after publication; refused when it would eat the reserve | PASS | `test_rotation_keeps_newest_and_leaves_other_copies`, `test_backup_refused_when_it_would_eat_the_reserve`, `test_cli_backup_keep_and_refusal` |
 | AT-BAK-05 earlier single-file backups still verify and restore | PASS | `test_single_file_backups_remain_verifiable_and_restorable` |
-| AT-BAK-06 backup, verify and restore of a one-year database | PASS (desktop) | `scripts/measure_storage.py`: 8.05 GiB database → 0.48 GiB backup in 4.7 min, verified in 38 s, restored with `integrity_check` in 8.3 min |
-| AT-STO-01 growth at 60 s for 48 points, 365-day size, budget | PASS (desktop) | 23.6 MB/day; 8.03 GiB at 365 days, of which samples 7.87 GiB, events 0.10 GiB; budget 10 GiB database + 4 GiB backups on the 32 GB eMMC (ADR-0008) |
-| AT-STO-02 growth, backup time and free space on the CM4 eMMC | BLOCKED | needs the CM4; part of CP-00 (`storage report`, `measure_storage.py --days 7`) |
+| AT-BAK-06 backup, verification and restore drill of a one-year database | PASS (desktop) | ⟪AT_BAK06⟫ |
+| AT-BAK-07 a backup that fails verification publishes nothing and keeps earlier backups (R3) | PASS | `test_failed_verification_publishes_nothing_and_keeps_earlier_backups` |
+| AT-BAK-08 running out of space while writing, an interrupted backup and stale partials leave nothing behind (R3) | PASS | `test_running_out_of_space_while_writing_aborts_cleanly`, `test_interrupted_backup_leaves_nothing_behind`, `test_stale_partials_and_unpublished_files_are_never_listed_and_get_cleaned` |
+| AT-BAK-09 restore drill: integrity, foreign keys, schema, counts, values and application start-up; needs scratch space and keeps the reserve; writes a report (R3) | PASS | `test_restore_drill_catches_tampering_that_keeps_counts_and_checksum`, `test_restore_drill_needs_scratch_space_and_keeps_the_reserve`, `test_cli_restore_drill_writes_a_report` |
+| AT-BAK-10 the safety copy before a migration needs room for the whole database (R3) | PASS | `test_safety_copy_before_a_migration_needs_room_for_the_whole_database` |
+| AT-STO-01 growth at 60 s, 365-day size and budget, with environment and workload recorded (R5) | PASS (desktop) | ⟪AT_STO01⟫ |
+| AT-STO-02 growth, backup time, WAL and free space on the CM4 eMMC | BLOCKED | needs the CM4; part of CP-00 (`storage report`, `measure_storage.py --days 7`, `stress_concurrency.py`) |
 
 ## Milestone 5: hardware arrival
 
@@ -124,7 +143,7 @@ NOT RUN (could run, has not).
 | AI channel modes on real modules | UNKNOWN until CP-01/CP-02; values stay UNSCALED |
 | Shadow / what-if | Not served (ADR-0002) |
 | Alarm severities for physical equipment | TBD; only DEMO rules shipped |
-| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12, ADR-0008); off-device backup destination TBD |
+| Retention and off-device backups | Rolling 365 days, snapshots every 60 s (owner, 2026-10-12; ADR-0008 revised, awaiting acceptance); off-device backup destination and restore-drill scratch TBD |
 | Role assignments and remote physical rights | Proposal only; owner approval required |
 | CM4 performance, UART mapping, RTC | Not measured / not verified |
 | Safety functions (E-stop, motor protection, dry-run, overfill) | Outside software; never replaced by it |

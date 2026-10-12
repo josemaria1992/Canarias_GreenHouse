@@ -52,7 +52,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def config(inventory: int) -> InstallationConfig:
     """Two (48 points) or one (24 points) of each module: the inventory stays configurable; these are
-    measurement values, never production configuration."""
+    measurement values, never production configuration. Identifiers have the length of real ones
+    (every sample row stores the configuration id and version), so the size is not understated."""
     ai = {i: {"mode": "3", "scaling": "level"} for i in range(1, 9)}
     dev = lambda uid, addr, model, sku, **kw: {"device_uid": uid, "bus_id": "rs485_a", "address": addr,  # noqa: E731
                                                "model": model, "sku": sku, **kw}
@@ -64,7 +65,7 @@ def config(inventory: int) -> InstallationConfig:
                     dev("analog_B", 4, "WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH", "25821",
                         hardware_variant="STANDARD", ai=ai)]
     return InstallationConfig.model_validate({
-        "schema_version": 1, "config_id": "measurement", "config_version": "measure.1",
+        "schema_version": 1, "config_id": "canarias-greenhouse", "config_version": "2026-10-12.1",
         "profile": "HARDWARE_READ_ONLY", "label": "measurement only",
         "buses": [{"bus_id": "rs485_a", "kind": "rtu", "port": "/dev/null", "port_evidence": "measurement",
                    "poll_interval_s": 3.0}],
