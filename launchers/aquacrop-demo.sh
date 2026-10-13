@@ -31,7 +31,21 @@ else
 fi
 LOCK="$HERE/requirements.lock"; [ -f "$LOCK" ] || LOCK="$HERE/../requirements.lock"
 [ -f "$LOCK" ] || fail "requirements.lock is missing next to this script. Unpack the whole release ZIP."
-VENV="$LOCAL/venv-$TAG"
+# The environment is keyed by the wheel's SHA-256 (12 hex digits in the folder name, all 64 in a marker
+# written only after a complete install), so a new build never reuses an older environment.
+WSHA=""
+if [ -z "$EDITABLE" ]; then
+  WSHA=$("$PY" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WHEEL") \
+    || fail "Cannot read the AquaCrop wheel $WHEEL. Unpack the whole release again."
+  VENV="$LOCAL/venv-$TAG-$(printf %s "$WSHA" | cut -c1-12)"
+else
+  VENV="$LOCAL/venv-$TAG"
+fi
+MARKER="$VENV/aquacrop-wheel.sha256"
+if [ -n "$WSHA" ] && [ -x "$VENV/bin/python" ] && [ "$(cat "$MARKER" 2>/dev/null)" != "$WSHA" ]; then
+  echo "The environment $VENV is incomplete; preparing it again."   # no marker: the install never finished
+  rm -rf "$VENV"
+fi
 if [ ! -x "$VENV/bin/python" ]; then
   echo "Preparing AquaCrop in $VENV (first run only) ..."
   mkdir -p "$LOCAL"
@@ -45,5 +59,8 @@ if [ ! -x "$VENV/bin/python" ]; then
      || ! "$VENV/bin/python" -m pip install --disable-pip-version-check -q --no-deps $EDITABLE "$WHEEL"; then
     rm -rf "$VENV"; fail "Installation failed; the incomplete environment was removed."
   fi
+  [ -z "$WSHA" ] || printf '%s\n' "$WSHA" > "$MARKER"
 fi
+export AQUACROP_WHEEL_SHA256="$WSHA"
+if [ -f "$HERE/RELEASE.json" ]; then export AQUACROP_RELEASE_INFO="$HERE/RELEASE.json"; else export AQUACROP_RELEASE_INFO=""; fi
 exec "$VENV/bin/python" -m aquacrop launch "$@"

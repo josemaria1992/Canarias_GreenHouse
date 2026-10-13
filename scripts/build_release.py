@@ -4,6 +4,12 @@ optional offline wheelhouses, RELEASE.json and a SHA-256 manifest of every file.
     python scripts/build_release.py --out dist-release                                   # no wheelhouses
     python scripts/build_release.py --out dist-release --wheelhouse win_amd64:3.12 --wheelhouse aarch64:3.11
 
+The owner tour ships as docs/operator/walkthrough.md, owner-checklist.csv (every result NOT RUN) and
+owner-feedback-template.md. With --owner-tour (the output folder of scripts/ui_check/run_tour_rehearsal.py run
+against this release) the illustrated offline guide owner-tour/ is added too. The CI release job builds twice:
+once to rehearse the tour on the extracted release, then again with the same wheel, --built-utc and
+--owner-tour, so the screenshots in the guide are of the program the ZIP carries.
+
 Wheelhouses are downloaded with pip for the named platform and Python (needs the package index), with
 the hashes in requirements.lock enforced. Run it from the repository root of a clean checkout: the
 commit and whether the tree was clean are recorded in RELEASE.json. Nothing here signs anything or claims
@@ -152,6 +158,8 @@ def main() -> int:
     ap.add_argument("--wheelhouse", action="append", default=[], metavar="PLATFORM:PYTHON",
                     help="win_amd64:3.12, aarch64:3.11 (CM4, Bookworm), x86_64:3.12, macosx_11_0_arm64:3.12")
     ap.add_argument("--wheel", type=Path, help="use this built wheel instead of building one")
+    ap.add_argument("--owner-tour", type=Path, help="evidence folder of run_tour_rehearsal.py: adds owner-tour/")
+    ap.add_argument("--built-utc", help="build time to record (the first pass's, when rebuilding with the guide)")
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -182,6 +190,12 @@ def main() -> int:
     (stage / "AquaCrop-Demo.cmd").write_bytes(cmd.replace("\n", "\r\n").encode("ascii"))
     shutil.copy2(ROOT / "launchers" / "aquacrop-demo.sh", stage / "aquacrop-demo.sh")
     shutil.copy2(ROOT / "launchers" / "README-FIRST.md", stage / "README-FIRST.md")
+    tour = ROOT / "docs" / "operator" / "owner-tour"
+    shutil.copy2(tour / "owner-checklist.csv", stage / "owner-checklist.csv")
+    shutil.copy2(tour / "feedback-template.md", stage / "owner-feedback-template.md")
+    if args.owner_tour:
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "ui_check" / "make_tour_guide.py"), "--evidence",
+                        str(args.owner_tour), "--out", str(stage / "owner-tour")], check=True)
     houses = [wheelhouse(stage, spec) for spec in args.wheelhouse]
     commit, dirty = git("rev-parse", "HEAD"), bool(git("status", "--porcelain"))
     report = acceptance_manifest((ROOT / "docs" / "ACCEPTANCE.md").read_text(encoding="utf-8"))
@@ -189,12 +203,18 @@ def main() -> int:
     (stage / "acceptance-manifest.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n",
                                                     encoding="utf-8")
     info = {"name": "aquacrop-greenhouse", "version": version, "commit": commit, "tree_clean": not dirty,
-            "built_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "built_utc": args.built_utc or datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "builder": f"python {sys.version.split()[0]} on {sys.platform}",
             "python_supported": ["3.11", "3.12", "3.13"],
             "wheel": {"file": f"wheels/{built[0].name}", "sha256": sha256(stage / "wheels" / built[0].name)},
             "requirements_lock_sha256": sha256(stage / "requirements.lock"),
             "wheelhouses": [h.name for h in houses],
+            "targets": {"windows": "win_amd64, CPython 3.12 (64-bit) with the py launcher",
+                        "cm4": "aarch64, CPython 3.11 (Raspberry Pi OS Bookworm 64-bit; confirm OS and Python at "
+                               "commissioning)"},
+            "normal_demo": "installation-80",
+            "owner_tour": {"guide": "owner-tour/index.html" if args.owner_tour else None,
+                           "checklist": "owner-checklist.csv", "owner_results": "NOT RUN"},
             "evidence": "software and simulation only; no hardware, CM4 or cloud account was tested "
                         "(docs/RELEASE_READINESS.md)",
             "physical_verification": False}

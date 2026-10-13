@@ -123,7 +123,7 @@ def test_prerequisite_failures_are_reported_and_start_nothing(tmp_path, monkeypa
         busy.bind(("127.0.0.1", port))
         busy.listen(1)
         assert main(["launch", "--state-dir", str(tmp_path / "t"), "--port", str(port), "--no-browser"]) == 2
-    assert not (tmp_path / "t" / "installation-48.sqlite3").exists()
+    assert not list((tmp_path / "t").glob("*.sqlite3"))
 
 
 def test_loopback_origins_follow_a_non_default_port_and_other_origins_are_kept():
