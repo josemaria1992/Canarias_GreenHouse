@@ -591,7 +591,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         for kind, names in cat.items():
             for name in sorted(names):
                 pt = cfg.point_for_signal(name) if is_sim else None
-                ad = cfg.adapter_for_signal(name)
+                ad = cfg.adapter_for_signal(name) if is_sim else None    # NOT_CONFIGURED on hardware: unbound
                 e = {"kind": kind, "point": pt, "binding": "POINT" if pt else "DRIVE_ADAPTER" if ad else "UNBOUND"}
                 if pt:
                     pid = PointId.parse(pt)
