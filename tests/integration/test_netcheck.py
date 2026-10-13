@@ -21,14 +21,19 @@ pytestmark = pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl
 def _ca_and_cert(d):
     def o(*a):
         subprocess.run(["openssl", *a], check=True, capture_output=True, cwd=d)
-    # extensions as a real private CA issues them (Python 3.13 verifies X.509 strictly)
-    o("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "30",
-      "-subj", "/CN=Test greenhouse CA", "-addext", "basicConstraints=critical,CA:TRUE",
-      "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-addext", "subjectKeyIdentifier=hash")
+    # Extensions as a real private CA issues them (Python 3.13 verifies X.509 strictly), each from its own
+    # configuration file: the system's default openssl.cnf adds extensions of its own to `req -x509`, which
+    # LibreSSL (the macOS openssl) then carries twice, and a certificate with a duplicated extension is no CA.
+    (d / "ca.cnf").write_text("[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=v3_ca\n[dn]\n"
+                              "CN=Test greenhouse CA\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\n"
+                              "keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n", encoding="ascii")
+    (d / "srv.cnf").write_text("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=localhost\n", encoding="ascii")
     (d / "ext.cnf").write_text("subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\n"
                                "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
                                "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n", encoding="ascii")
-    o("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "srv.key", "-out", "srv.csr", "-subj", "/CN=localhost")
+    o("req", "-config", "ca.cnf", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem",
+      "-days", "30")
+    o("req", "-config", "srv.cnf", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", "srv.key", "-out", "srv.csr")
     o("x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "srv.pem",
       "-days", "20", "-extfile", "ext.cnf")
     return d / "ca.pem", d / "srv.pem", d / "srv.key"
@@ -69,7 +74,8 @@ def _by(res):
 def test_route_passes_with_the_private_root_and_reports_each_step(https):
     url, ca = https
     res = _by(run(url, ca_file=str(ca), check_http=False))
-    assert [r["result"] for r in res.values()] == ["PASS", "PASS", "PASS", "PASS", "WARN", "PASS"]
+    version = subprocess.run(["openssl", "version"], capture_output=True, text=True).stdout.strip()
+    assert [r["result"] for r in res.values()] == ["PASS", "PASS", "PASS", "PASS", "WARN", "PASS"], (version, res)
     assert "127.0.0.1" in res["name resolves"]["detail"] or "::1" in res["name resolves"]["detail"]
     assert "valid for localhost" in res["TLS certificate"]["detail"]
     assert "renew it soon" in res["certificate validity"]["detail"]         # a 20-day certificate

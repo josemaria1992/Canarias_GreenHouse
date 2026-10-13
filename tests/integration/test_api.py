@@ -239,13 +239,14 @@ def test_csv_export_escapes_and_discloses_completeness(env_dense):
 def test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete(env):
     """OP-03: a year of history for one point is charted whole, aggregated per day (mean, min, max and the
     sample counts, partial days and a ten-day hole marked), while a short range stays raw; the paged CSV
-    export returns every sample of the year exactly once and ends COMPLETE."""
+    export returns every sample of the year exactly once and ends COMPLETE. The year is the 363 whole days
+    that end yesterday, which the 365-day rolling retention cannot reach at any time of today."""
     from datetime import datetime, timedelta, timezone
     from urllib.parse import quote
     app, c = env
     login(c, "view1", PW["view1"])
     end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    start = end - timedelta(days=365)
+    start = end - timedelta(days=363)
     hole = (start + timedelta(days=100), start + timedelta(days=110))
     iso = lambda t: t.isoformat(timespec="microseconds")  # noqa: E731
     rows, t = [], start
@@ -262,11 +263,14 @@ def test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete(env):
                         "source_profile,config_version,device_uid,bus_id,session_id,value) VALUES(?,'test.YEAR',?,?,1,"
                         "?,'REAL','p','v','d','b','old',?)", [(pk, a, a, q, v) for a, q, v in rows])
     app.state.hist.submit(op, wait=True)
+    # the server runs retention on its first tick and then hourly: run it now, so the result never depends on when
+    from aquacrop.historian.retention import prune_expired
+    assert not prune_expired(app.state.hist, now=datetime.now(timezone.utc))["deleted"].get("samples")
     q = f"points=test.YEAR&start={quote(iso(start))}&end={quote(iso(end))}"
     tr = c.get("/api/trends?" + q).json()
     agg, ser, col = tr["aggregated"]["test.YEAR"], tr["series"]["test.YEAR"], tr["columns"].index
-    assert agg["bucket"] == "1 day" and agg["samples"] == len(rows) == (365 - 10) * 24 and not tr["truncated"]
-    assert len(ser) == 355 and sum(r[col("samples")] for r in ser) == len(rows)
+    assert agg["bucket"] == "1 day" and agg["samples"] == len(rows) == (363 - 10) * 24 and not tr["truncated"]
+    assert len(ser) == 353 and sum(r[col("samples")] for r in ser) == len(rows)
     first = ser[0]
     assert first[0] == iso(start).replace(".000000", "") and first[col("quality")] == "PARTIAL"
     assert (first[col("samples")], first[col("valid_samples")], first[col("min")], first[col("max")]) == (24, 23, 0.0, 23.0)
