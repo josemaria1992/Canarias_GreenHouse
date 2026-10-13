@@ -95,6 +95,8 @@ def main() -> int:
     base = f"http://127.0.0.1:{port}"
     env = os.environ | {"AQ_BASE": base, "AQ_USER": "admin", "AQ_PASS": password, "AQ_OUT": str(out)}
     log, hw_log = out / "server.log", out / "server-hardware.log"
+    for stale in (log, hw_log, out / "checks.json", *out.glob("checks-*.json")):
+        stale.unlink(missing_ok=True)       # a rerun into the same folder never reads an earlier run's results
     hw_state = Path(tempfile.mkdtemp(prefix="aquacrop-ui-hw-"))
     results = []
     try:
