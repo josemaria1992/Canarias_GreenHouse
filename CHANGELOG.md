@@ -98,6 +98,9 @@ Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists a
 - R2: an unusable EC probe during an active EC-target A/B step stops both nutrient paths in the same
   scan (previously only after the step completed), records the measured delivery and the reason, and
   no further step runs in that batch even if the probe returns. The batch keeps its first stop reason.
+  Second review: the EC check runs before the paths advance, so a step whose valve is still opening
+  never sends its pump ON (the audit showed ON then OFF in the same scan); regressions read the
+  command audit.
 
 ## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 
