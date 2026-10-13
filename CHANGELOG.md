@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.2 (2026-10-13): owner demo release and acceptance tour
+
+The owner's brief of 2026-10-13 18:56 UTC: a tested Windows/CM4 release ZIP and a guided acceptance tour.
+Software and simulation only. No control algorithm, production mapping, recipe value, retention (365 d),
+cadence (60 s), storage budget (17 GiB) or hardware profile changed; physical AUTO still does not exist,
+the drive interface stays NOT_CONFIGURED, off-device backups stay disabled and the 32 added channels stay
+unassigned.
+
+### Added
+- Owner acceptance tour UAT-01 to UAT-16 in `docs/operator/walkthrough.md`: goal, page, role, start
+  state, load (DEMO presets), numbered steps, expected result, failure criteria, duration, speed,
+  reset and a result line, NOT RUN. Five simulation-only tour presets labelled "Owner tour (UAT-nn)".
+- Illustrated offline guide `owner-tour/index.html` in the ZIP (`scripts/ui_check/make_tour_guide.py`)
+  from Claude's browser rehearsal through the release launcher (`scripts/ui_check/run_tour_rehearsal.py`,
+  `tour_rehearsal.cjs`); `owner-checklist.csv`, `owner-feedback-template.md`, review notes and the
+  delivery issue list (`docs/operator/owner-tour/`).
+- `scripts/verify_release.py` (the extracted ZIP against its manifest and the packaged configuration)
+  and `scripts/release_smoke.py` (a session through the release launcher: cold start, restart, upgrade).
+- CI: the release is built in two passes with the same wheel (rehearsal, then guide and wheelhouses)
+  and verified; the Windows job runs a cold start, a restart and an upgrade over the 0.3.1 demo ZIP
+  through `AquaCrop-Demo.cmd`; the CM4 staging verifies `installation-80`.
+- Settings, *Versions*: release, source commit, build time, "wheel verified", config and inventory.
+
+### Changed
+- Launchers name each environment after the SHA-256 of the wheel, so an older environment never runs a
+  newer build; the release check stops on MISMATCH. Only a 64-bit Python is accepted on Windows.
+- `README-FIRST.md` rewritten: official Python 3.12 (64-bit) installation, data and log locations,
+  stop and restart, upgrading from 0.3.1, a separate trial folder, troubleshooting.
+- `installation-80` is the normal demo in every document; `installation-48`, `demo-48` and `demo-24`
+  are labelled legacy test fixtures.
+
+### Fixed (delivery and usability, `docs/operator/owner-tour/issues.md`)
+- DEL-01 to DEL-15: among them form choices reset by the refresh, collapsing recipe sections, lost
+  clicks during a redraw, the tank interior not clickable, unassigned channels looking like faults, a
+  stale acid "Next" line beside its waiting reason, developer-style result text, and the main pump
+  label showing the contactor as "run".
+
 ## 0.3.1 (2026-10-13): two IO 8CH modules, 80 points (ADR-0016)
 
 The owner's inventory update of 2026-10-13: two Waveshare Modbus RTU IO 8CH (SKU 26244) beside the
