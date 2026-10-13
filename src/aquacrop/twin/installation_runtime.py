@@ -9,8 +9,12 @@ journaled with (tick, seq) and applied between ticks; replay reproduces the stat
 * raw operator output commands are refused on the TWIN source: outputs belong to the processes and
   are moved only by their AUTO sequences or bounded MANUAL operations. The I/O test source (all
   processes idle) keeps point-level commands for the I/O test page;
-* the shared drive's run command goes through its drive adapter (SIMULATED here), audited like a
-  DO command, because no VFD register map or relay wiring is confirmed.
+* the shared drive's run command goes through its drive adapter, audited like a DO command: a
+  SIMULATED adapter moves the twin's drive directly; a MODBUS_RTU adapter writes the control register
+  of the simulated drive's Modbus interface (`twin/vfd.py`) and reads its status word every control
+  period, which also keeps the drive's comm-loss timer from tripping it (ADR-0015). The hardwired
+  running and fault inputs stay the proof the processes use; the status word is a second opinion, and
+  a disagreement that lasts is alarmed.
 """
 from __future__ import annotations
 
@@ -23,13 +27,18 @@ from ..control.process_base import Ctx, Obs, Process
 from ..control.recipes import MemoryRecipeBackend, RecipeStore, physical_readiness
 from ..control.supervisor import MemoryReadinessBackend, ReadinessBackend, Supervisor
 from ..domain.model import CommandOrigin, ControllerState, OutputCommand, Outcome, Priority, SignalSource, new_id
+from ..drivers.rtu_errors import RtuError, RtuExceptionResponse
+from ..drivers.vfd import VfdCommandError, VfdDevice
 from .installation import InstallationPlant
 from .installation_params import STOCKS, TANKS
 from .observe import observe_installation
 from .runtime import STALE_AFTER_SIM_S, SimulationRuntime
+from .vfd import VFD_FAULTS, SimVfd, SimVfdBus
 
 PLAUSIBILITY_SUSTAIN_S = 10.0     # longer than a pump's coast-down in the DEMO dynamics
 PLAUSIBILITY_FLOW_L_MIN = 2.0
+DRIVE_COMM_FAILURES = 3           # consecutive status reads without an answer before DRIVE_COMM
+DRIVE_MISMATCH_S = 10.0           # status word and hardwired input may disagree this long (polling, ramps)
 
 
 class InstallationRuntime(SimulationRuntime):
@@ -66,6 +75,15 @@ class InstallationRuntime(SimulationRuntime):
         self.sup = Supervisor(f, alarms=self.alarms, emit=self._event, route=self._route,
                               start_permitted=lambda: self.start_permitted(), source_ok=self._source_ok,
                               simulated=self.simulated, readiness=rb)
+        self.vfds: dict[str, tuple[SimVfd, VfdDevice]] = {}
+        self.drive_status: dict[str, dict] = {}
+        self._mismatch_since: dict[tuple[str, str], float] = {}
+        for a in self.cfg.drive_adapters:
+            if a.kind == "MODBUS_RTU" and self.simulated:
+                sv = SimVfd(a.modbus, self.plant, lambda: self.sim_s)
+                self.vfds[a.adapter_id] = (sv, VfdDevice(SimVfdBus(sv), a.modbus))
+                self.drive_status[a.adapter_id] = {"ok": None, "failures": 0, "error": None, "status": None,
+                                                   "read_sim_s": None}
 
     def _run_started_extra(self) -> dict:
         a = self.recipes.active()
@@ -132,8 +150,53 @@ class InstallationRuntime(SimulationRuntime):
         return ObservationView(self._obs_get)
 
     def _control_tick(self) -> None:
+        for sv, _ in self.vfds.values():
+            sv.tick()                       # the drive's own comm-loss timer
         if self.tick % self.control_stride == 0:
+            self._poll_drives()
             self.sup.tick(self.make_ctx())
+
+    # ------------------------------------------------------------------ the drive's Modbus interface
+    def _poll_drives(self) -> None:
+        for aid, (_, dev) in self.vfds.items():
+            st = self.drive_status[aid]
+            was = st["ok"]
+            try:
+                s = dev.read_status()
+            except RtuError as e:
+                st.update(ok=False, failures=st["failures"] + 1, error=f"{e.kind}: {e}")
+                if was is not False:
+                    self._event("DRIVE_STATUS_UNREADABLE", {"adapter": aid, "error": st["error"]}, "system")
+                if st["failures"] >= DRIVE_COMM_FAILURES:
+                    self.alarms.raise_or_update("DRIVE_COMM", aid, severity="WARNING", sim_s=self.sim_s,
+                                                message=f"drive {aid}: status word unreadable "
+                                                        f"{st['failures']} times ({st['error']})")
+                continue
+            if was is False:
+                self._event("DRIVE_STATUS_RESTORED", {"adapter": aid, "after_failures": st["failures"]}, "system")
+            st.update(ok=True, failures=0, error=None, status=s.view(), read_sim_s=self.sim_s)
+            self.alarms.clear("DRIVE_COMM", aid)
+            self._cross_check(aid, s)
+
+    def _cross_check(self, aid: str, s) -> None:
+        drive = self.cfg.drive_of_adapter(aid)
+        for what, word in (("running", s.running), ("fault", s.fault)):
+            key, hard = (aid, what), self._obs_get(f"drive.{drive}.{what}")
+            if hard is not None and bool(hard) != word:
+                since = self._mismatch_since.setdefault(key, self.sim_s)
+                if self.sim_s - since + 1e-9 >= DRIVE_MISMATCH_S:
+                    self.alarms.raise_or_update(
+                        "DRIVE_STATUS_MISMATCH", f"{aid}.{what}", severity="WARNING", sim_s=self.sim_s,
+                        message=f"drive {aid}: status word says {what}={word}, hardwired input "
+                                f"drive.{drive}.{what}={bool(hard)} for {self.sim_s - since:.0f} s")
+            else:
+                self._mismatch_since.pop(key, None)
+                self.alarms.clear("DRIVE_STATUS_MISMATCH", f"{aid}.{what}")
+
+    def drive_view(self, aid: str) -> dict | None:
+        if aid not in self.vfds:
+            return None
+        return self.drive_status[aid] | {"interface": self.vfds[aid][0].view()}
 
     def _plausibility(self) -> None:
         """Model-deviation suspicion: flow that the observed equipment cannot explain."""
@@ -194,7 +257,8 @@ class InstallationRuntime(SimulationRuntime):
         rid = new_id("adp")
         base = {"request_id": rid, "adapter": ad.adapter_id, "kind": ad.kind, "signal": signal, "desired": on,
                 "process": proc.pid, "reason": reason, "run_id": self.run_id, "tick": self.tick}
-        if ad.kind != "SIMULATED" or self.backend.source != SignalSource.TWIN:
+        if (ad.kind not in ("SIMULATED", "MODBUS_RTU") or self.backend.source != SignalSource.TWIN
+                or (ad.kind == "MODBUS_RTU" and ad.adapter_id not in self.vfds)):
             self._event("DRIVE_ADAPTER_COMMAND_REJECTED", base | {"detail": f"adapter {ad.kind} on source "
                                                                   f"{self.backend.source.value}"}, "controller")
             return False
@@ -211,11 +275,40 @@ class InstallationRuntime(SimulationRuntime):
                 self._event("DRIVE_ADAPTER_COMMAND_REJECTED", base | {"detail": f"durable audit unavailable: {e}"},
                             "controller")
                 return False
+        if ad.kind == "MODBUS_RTU":
+            return self._modbus_command(ad.adapter_id, signal, on, base)
         self.plant.command(signal, on)
         self.adapter_state[signal] = on
         out = base | {"outcome": "SIMULATED_APPLIED", "readback": self.plant.drive.run_cmd}
         self._event("DRIVE_ADAPTER_COMMAND", out, "controller")
         return True
+
+    def _modbus_command(self, aid: str, signal: str, on: bool, base: dict) -> bool:
+        dev = self.vfds[aid][1]
+        base = base | {"values": dev.values(on)}
+        try:
+            n = dev.command(on)
+        except VfdCommandError as e:
+            refused = e.sent == 0 and isinstance(e.cause, RtuExceptionResponse)
+            self._event("DRIVE_ADAPTER_COMMAND", base | {"outcome": "FAILED" if refused else "OUTCOME_UNKNOWN",
+                                                         "frames_echoed": e.sent, "detail": str(e)}, "controller")
+            return False
+        self.adapter_state[signal] = on
+        self._event("DRIVE_ADAPTER_COMMAND", base | {
+            "outcome": "ECHO_CONFIRMED", "frames_echoed": n,
+            "note": "the echo proves the drive received the value; the status word and the hardwired input "
+                    "prove the motor runs or stops"}, "controller")
+        return True
+
+    def set_actuator_fault(self, actor: str, kind: str, ident: str, fault: str | None) -> None:
+        if kind != "drive_comm":
+            return super().set_actuator_fault(actor, kind, ident, fault)
+        if ident not in self.vfds or fault not in VFD_FAULTS:
+            raise ValueError(f"drive_comm faults apply to Modbus drive adapters {sorted(self.vfds)}: "
+                             f"{[f for f in VFD_FAULTS if f]}")
+        self.vfds[ident][0].fault = fault
+        self._record("ACTUATOR_FAULT", actor, {"kind": kind, "ident": ident, "fault": fault})
+        self._event("ACTUATOR_FAULT", {"kind": kind, "ident": ident, "fault": fault}, actor)
 
     # ------------------------------------------------------------------ external inputs (journaled)
     def process_request(self, actor: str, pid: str, target: ControllerState) -> tuple[bool, str]:
@@ -359,7 +452,8 @@ class InstallationRuntime(SimulationRuntime):
         h = hashlib.sha256(self.plant.state_hash().encode())
         a = self.recipes.active()
         h.update(repr((self.sup.fingerprint(), sorted(self.backend.state.coils.items()),
-                       sorted(self.adapter_state.items()), a.ref if a else None)).encode())
+                       sorted(self.adapter_state.items()), a.ref if a else None,
+                       sorted((k, v[0].fingerprint()) for k, v in self.vfds.items()))).encode())
         return h.hexdigest()
 
     def snapshot(self) -> dict:
@@ -372,7 +466,8 @@ class InstallationRuntime(SimulationRuntime):
                            "provenance": a.provenance if a else None,
                            "physical_readiness": physical_readiness(a, profile_simulated=self.simulated)},
                 "drive_adapters": [{"adapter_id": d.adapter_id, "kind": d.kind, "signals": d.signals,
-                                    "state": {s: self.adapter_state.get(s) for s in d.signals}}
+                                    "state": {s: self.adapter_state.get(s) for s in d.signals},
+                                    "modbus": self.drive_view(d.adapter_id)}
                                    for d in self.cfg.drive_adapters],
                 "overrides": {k: v.describe(None) for k, v in self.backend.state.overrides.items()},
                 "device_faults": dict(self.backend.state.device_faults),

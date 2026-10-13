@@ -4,6 +4,11 @@ Uses only the read operations of `waveshare.WaveshareDevice` (FC01/02/03/04). It
 coil, register, address, baud-rate or mode write exists on the path, whatever the arguments. It takes
 the installation's port ownership lock, so it cannot run while `serve` owns the bus.
 
+A drive with a Modbus register map (`drive:<id>`, ADR-0015) is read the same way: its status word,
+decoded with the configured masks, its diagnostic registers and its control register, through
+`vfd.VfdDevice.read_status` and one FC03 read; this is how CP-06 checks a PROPOSED map before any
+bench write. Nothing on this path calls a write.
+
 Output is one JSON object per device per cycle. Values are raw; nothing is scaled, and metadata
 registers are reported as read, without interpretation (they are unverified vendor facts).
 pymodbus and pyserial are imported only when the command runs.
@@ -22,7 +27,7 @@ def add_parser(sub) -> None:
     r = d.add_parser("read", help="read DI/coils/relay modes or AI values/modes; never writes")
     r.add_argument("--config", required=True)
     r.add_argument("--state-dir", default="var")
-    r.add_argument("--device", action="append", help="device_uid (repeatable); default: all")
+    r.add_argument("--device", action="append", help="device_uid or drive:<adapter_id> (repeatable); default: all")
     r.add_argument("--cycles", type=int, default=1)
     r.add_argument("--interval", type=float, default=1.0)
     r.add_argument("--metadata", action="store_true", help="also read optional 0x2000/0x4000/0x8000 registers")
@@ -54,6 +59,24 @@ def read_device(dev_cfg, wd, *, metadata: bool) -> dict:
     return out
 
 
+def read_drive(adapter, dv) -> dict:
+    m = adapter.modbus
+    out: dict = {"device_uid": adapter.target, "bus_id": m.bus_id, "address": m.address, "model": m.drive_model,
+                 "register_map": m.provenance, "manual_reference": m.manual_reference, "utc": _utc()}
+    try:
+        out["status"] = dv.read_status().view()
+        ok = True
+    except Exception as e:
+        out["status"], ok = None, False
+        out.setdefault("errors", {})["status"] = f"{getattr(e, 'kind', type(e).__name__)}: {e}"
+    try:      # informational: many drives let the control word be read back, some do not
+        out["control_register"] = dv.bus.read_registers(3, m.address, m.control_register, 1)[0]
+    except Exception as e:
+        out["control_register"] = f"unavailable ({getattr(e, 'kind', type(e).__name__)})"
+    out["ok"] = ok
+    return out
+
+
 def cmd_diagnostics_read(args) -> int:
     from ..cli import _cfg
     from ..ownership import OwnershipError, acquire_installation
@@ -62,8 +85,9 @@ def cmd_diagnostics_read(args) -> int:
         print("diagnostics read needs a configuration with rtu buses only (simulation has nothing to read)",
               file=sys.stderr)
         return 2
-    wanted = set(args.device or [d.device_uid for d in cfg.devices])
-    unknown = wanted - {d.device_uid for d in cfg.devices}
+    drives = {a.target: a for a in cfg.drive_adapters if a.kind == "MODBUS_RTU"}
+    wanted = set(args.device or [d.device_uid for d in cfg.devices] + list(drives))
+    unknown = wanted - {d.device_uid for d in cfg.devices} - set(drives)
     if unknown:
         print(f"unknown device(s): {', '.join(sorted(unknown))}", file=sys.stderr)
         return 2
@@ -76,6 +100,7 @@ def cmd_diagnostics_read(args) -> int:
         print(str(e), file=sys.stderr)
         return 4
     from .rtu import RtuBus, RtuRefused
+    from .vfd import VfdDevice
     from .waveshare import WaveshareDevice
     buses = {}
     failures = 0
@@ -87,9 +112,11 @@ def cmd_diagnostics_read(args) -> int:
             return 2
         devs = [(d, WaveshareDevice(buses[d.bus_id], d.model, d.address)) for d in cfg.devices
                 if d.device_uid in wanted]
+        vfds = [(a, VfdDevice(buses[a.modbus.bus_id], a.modbus)) for t, a in drives.items() if t in wanted]
         for i in range(args.cycles):
-            for d, wd in devs:
-                rec = read_device(d, wd, metadata=args.metadata and i == 0)
+            recs = [read_device(d, wd, metadata=args.metadata and i == 0) for d, wd in devs]
+            recs += [read_drive(a, dv) for a, dv in vfds]
+            for rec in recs:
                 rec["cycle"] = i + 1
                 failures += not rec["ok"]
                 print(json.dumps(rec), flush=True)

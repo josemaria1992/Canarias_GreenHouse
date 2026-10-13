@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.0 (2026-10-13): drive run over Modbus and site time zones (ADR-0015)
+
+The owner's answers of 2026-10-13, part of the 0.3.0 release. Software and simulation only: no drive,
+manual or register map has been seen, and the installation's drive interface stays `NOT_CONFIGURED`.
+
+### Added
+- `MODBUS_RTU` drive adapters with a register map from the drive's manual (`VfdModbusMap`: unit,
+  control register, run sequence of 1 to 3 values, stop value, status word and masks, optional
+  frequency/current/fault code, the drive's comm-loss timeout and action, provenance, evidence).
+  `DEMO` is refused on a real profile, `VERIFIED` needs CP-06 evidence, `PROPOSED` is for the bench.
+- FC06 to the configured control register only: `RtuBus` refuses every other unit and register
+  before sending, one frame per value, never retried or repeated. New outcome `ECHO_CONFIRMED`
+  (not actuator proof).
+- Simulated drive answering a DEMO map in `installation-48`, with its own comm-loss stop and the
+  faults `NO_RESPONSE`, `EXCEPTION` and `IGNORES_WRITES` (twin page). Scenarios
+  `drive_modbus_comm_loss` (PC-12), `drive_modbus_refused` and `drive_modbus_ignores_writes` (PC-02);
+  alarms `DRIVE_COMM` and `DRIVE_STATUS_MISMATCH` (status word against the hardwired inputs).
+- Real profiles: the drive's status word is polled with the modules (reads only), shown on the
+  Overview and I/O pages, `DRIVE_STATUS_EDGE` and `OBSERVATION_GAP` events, `diagnostics read
+  --device drive:<id>`. A bench lease may allowlist `drive:<id>`: Run/Stop buttons, a fresh status
+  read before arming and before each run, refused while the drive reports a fault or not-ready.
+- `configs/bench-malmo.example.yaml` (Europe/Stockholm), the CP-06 procedure and template,
+  `docs/model/vfd_modbus.md` (wiring, drive settings, reading the manual, open points), ADR-0015.
+
+### Changed
+- Site time zones: `Atlantic/Canary` for the installation, the twin and the demos; a real profile
+  must name its zone and an unknown zone is refused.
+- All 16 DI and 16 DO stay allocated, no third relay module (ADR-0013 addendum, signal budget,
+  release readiness items 1, 2, 9, 10 and 20).
+- The Modbus error types live in `drivers/rtu_errors.py` so the simulation never imports pymodbus.
+
 ## 0.3.0 (2026-10-13): pre-hardware release
 
 Stage 4 of the pre-hardware release, and the release itself: it contains the three 0.3.0 sections

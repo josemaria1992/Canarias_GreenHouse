@@ -30,7 +30,9 @@ python scripts/measure_trend_cache.py --db OUT/measure.sqlite3 --out OUT/trend-c
   `measure_storage.py` committed in this release), 2026-10-13T02:50:19+00:00 to
   2026-10-13T03:45:26+00:00. It ran on the stage 4 working tree before its first commit, so the
   report says `e7a60d9`, dirty, and version `0.2.0.dev0` (the version number was raised during the
-  run); the database is schema 3.
+  run); the database is schema 3. The script later gained one line (its measurement configuration names
+  the site time zone, which a real profile must do since 2026-10-13); nothing it measures changed, but
+  its SHA-256 now differs from the one above.
 - Stress run: on the same database right after the storage run, at commit `3221430` (clean),
   2026-10-13T03:45:45+00:00 for 642 s; script SHA-256
   `deaf0de55563d653d24df93c70a74bfd45ef67d02b3178fa82e8a4cef864ecee`.

@@ -13,7 +13,7 @@ from . import __version__
 from .domain.model import new_id
 
 
-BUILTIN_CONFIGS = ("installation-48", "demo-48", "demo-24", "hardware-read-only.example")
+BUILTIN_CONFIGS = ("installation-48", "demo-48", "demo-24", "hardware-read-only.example", "bench-malmo.example")
 
 
 def resolve_config_path(path: str) -> Path:

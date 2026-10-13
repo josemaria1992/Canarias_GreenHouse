@@ -102,10 +102,10 @@ class DeviceFaultIn(Body):
 
 
 class ActuatorFaultIn(Body):
-    kind: Literal["pump", "valve", "drive", "contactor", "mains", "safety"]
+    kind: Literal["pump", "valve", "drive", "drive_comm", "contactor", "mains", "safety"]
     ident: str
     fault: Literal["NO_RUN", "STUCK_ON", "NO_FLOW", "STUCK_CLOSED", "STUCK_OPEN", "TRIP", "WELDED", "NO_CLOSE",
-                   "NO_SUPPLY", "CHAIN_OPEN"] | None
+                   "NO_SUPPLY", "CHAIN_OPEN", "NO_RESPONSE", "EXCEPTION", "IGNORES_WRITES"] | None
 
 
 class ProcessStateIn(Body):
@@ -528,14 +528,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
                 "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
                 "timezone": cfg.site.timezone, "controller": None, "twin": None,
-                "devices": _devices_view(), "relay_modes": svc.relay_mode_view(), "bench_lease": lease,
+                "devices": _devices_view(), "drives": svc.drive_view(), "relay_modes": svc.relay_mode_view(),
+                "bench_lease": lease,
                 "storage": hist.storage() | {"ok": ok_store, "reason": why},
                 "historian": {k: v for k, v in hist.health.items()}, "acquisition_task": svc.task_health(),
                 "alarms": {"active": sum(o.active for o in alarms),
                            "unacknowledged": sum(not o.acknowledged for o in alarms),
                            "reset_required": sum(o.reset_required for o in alarms)},
                 "freshness": _freshness(),
-                "physical_writes": "BENCH LEASE ARMED (allowlisted coils only)" if lease else
+                "physical_writes": "BENCH LEASE ARMED (allowlisted coils and drives only)" if lease else
                                    "NONE (read-only: no bench lease armed)",
                 "live_control": "UNAVAILABLE in this release"}
 
@@ -600,7 +601,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                           "sample": None if s is None else _sample(s) | {"age_s": (now - s.acquired_utc).total_seconds()}}
                 elif ad:
                     e |= {"adapter": {"adapter_id": ad.adapter_id, "kind": ad.kind,
-                                      "requested": r.adapter_state.get(name) if r is not None else None}}
+                                      "requested": r.adapter_state.get(name) if r is not None else None,
+                                      "modbus": r.drive_view(ad.adapter_id) if r is not None else None,
+                                      "provenance": ad.modbus.provenance if ad.modbus else None}}
                 signals[name] = e
         procs = None
         if r is not None:
@@ -1314,7 +1317,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"available": True, "lease": svc.lease_view(), "relay_modes": svc.relay_mode_view(),
                 "confirmation_phrase": CONFIRMATION_PHRASE, "duration_range_s": [MIN_LEASE_S, MAX_LEASE_S],
                 "relay_outputs": [str(x) for x in cfg.all_points() if x.kind == PointKind.DO],
-                "can_arm": p.can(Perm.BENCH_ARM)}
+                "drive_targets": [a.target for a in cfg.drive_adapters if a.kind == "MODBUS_RTU"],
+                "drives": svc.drive_view(), "can_arm": p.can(Perm.BENCH_ARM)}
 
     @app.post("/api/bench/lease")
     async def bench_arm(body: BenchArmIn, p: Principal = Depends(require(Perm.BENCH_ARM))):
@@ -1341,6 +1345,6 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                                                                 request_id=body.request_id))
         return {"request_id": rec.command.request_id, "outcome": rec.outcome.value, "detail": rec.detail,
                 "readback": rec.readback, "history": [(t.isoformat(), o.value, d) for t, o, d in rec.history],
-                "note": "coil readback is not actuator proof"}
+                "note": "coil readback and drive echo are not actuator proof"}
 
     return app

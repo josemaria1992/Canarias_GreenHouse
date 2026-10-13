@@ -146,11 +146,18 @@ def test_at_mb_03_broadcast_and_out_of_range_units_never_sent(fake_bus):
     rb.close()
 
 
-def test_at_mb_03_adapter_has_no_generic_write_surface():
+def test_at_mb_03_adapter_has_no_generic_write_surface(fake_bus):
     names = {n for n in dir(RtuBus) if not n.startswith("_")} | {n for n in dir(WaveshareDevice) if not n.startswith("_")}
-    assert not {n for n in names if "register" in n and "write" in n}
     assert "write_coils" not in names and "write_registers" not in names
-    assert {n for n in names if "write" in n} == {"write_single_coil", "write_coil"}
+    assert {n for n in names if "write" in n} == {"write_single_coil", "write_coil", "write_single_register"}
+    # the one register write (FC06) reaches only a drive control register the bus was built with (ADR-0015)
+    cfg, bus, *_ = fake_bus
+    plain, drive = RtuBus(cfg.buses[0]), RtuBus(cfg.buses[0], register_writes=frozenset({(9, 100)}))
+    for rb, unit, reg in ((plain, 9, 100), (drive, 9, 101), (drive, 1, 100), (drive, 2, 0x1000)):
+        with pytest.raises(RtuRefused, match="not a configured drive control register"):
+            rb.write_single_register(unit, reg, 1)
+    assert bus.frames_in == []
+    plain.close(), drive.close()
 
 
 def test_pymodbus_version_pinned():

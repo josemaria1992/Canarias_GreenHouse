@@ -109,6 +109,10 @@ async function main() {
     check("UI-01 process page " + v, parts.focus > 0 && parts.dim > 0 && parts.chart && parts.alarms && (parts.auto || (v.startsWith("sector") && parts.link)),
       `${parts.focus} highlighted parts, trend drawn ${parts.chart}, page alarms ${parts.alarms}, ${parts.auto ? "AUTO/MANUAL/STOP" : "link to the irrigation controls"}`);
   }
+  await show(p, "main-pumps");
+  const mpTxt = await until(p, async () => { const t = await visibleText(p); return /Status word\s+0x[0-9A-F]{4}/.test(t) && t; });
+  check("UI-01 drive interface (simulated)", !!mpTxt && /Drive interface\s+MODBUS_RTU\s+DEMO/.test(mpTxt) && /Control register/.test(mpTxt),
+    "Main pumps shows the simulated drive's Modbus interface: MODBUS_RTU with the DEMO map, its status word and control register");
   await show(p, "nutrients");
   await p.locator(".tabs button", { hasText: "Acid" }).click();
   await until(p, async () => /pH target \(adjustable\)/.test(await visibleText(p)));
@@ -335,6 +339,13 @@ async function hardware() {
     check("HW page " + v, t.includes("NOT AVAILABLE") && t.includes("not measured") && ctl.length === 0 && t.includes("REAL"),
       `read-only: reason shown, unmapped values "not measured", no control buttons ${JSON.stringify(ctl)}`);
   }
+  await show(p, "overview");
+  const drvTxt = await until(p, async () => { const t = await visibleText(p); return /Drive interface/.test(t) && /PROPOSED/.test(t) && /0x[0-9A-F]{4}/.test(t) && t; });
+  check("HW drive interface", !!drvTxt, "the overview lists drive:MAIN over Modbus with its PROPOSED map and the status word it reads");
+  await show(p, "io");
+  const ioDrv = await p.locator("#v-io tr", { hasText: "drive:MAIN" }).first();
+  const runBtns = await ioDrv.locator("button").count();
+  check("HW drive read-only without a lease", (await ioDrv.count()) > 0 && runBtns === 0, `drive row on the I/O page, ${runBtns} Run/Stop buttons without a lease`);
   check("HW page errors", errs.length === 0, errs.join("; ") || "none");
   await b.close();
 }

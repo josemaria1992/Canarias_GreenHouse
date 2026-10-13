@@ -5,7 +5,8 @@ bench commands, STOP priority first; each command is re-checked against the leas
 the configuration version at the moment it runs (CommandService re-validates before dispatch).
 
 Starting, polling, reconnecting and stopping send read frames only. Nothing here writes on start,
-on reconnect, on lease expiry or on shutdown.
+on reconnect, on lease expiry or on shutdown. A drive with a Modbus register map (ADR-0015) is polled
+on its bus like a module (status word only); its running and fault changes are written as events.
 
 Polling, edge detection, alarm evaluation and the dashboard keep the bus poll rate. The historian is
 separate: a recorder thread writes one complete snapshot of every point on each wall-clock boundary of
@@ -142,6 +143,7 @@ class HardwareService:
                         for b in cfg.buses}
         self._sync_authorizer()
         self._prev_valid: dict[str, tuple[bool, datetime]] = {}
+        self._prev_drive: dict[str, tuple[bool, bool, datetime]] = {}
         self._clock_ref: tuple[float, float] | None = None   # (monotonic, wall epoch) for jump detection
         self._stale_after = {b.bus_id: stale_limit_s(b.poll_interval_s) for b in cfg.buses}
         self.recorder = HistoryRecorder(recording_interval_s or cfg.historian.recording_interval_s,
@@ -190,8 +192,14 @@ class HardwareService:
                 # inputs already failed this cycle: don't spend another timeout on coils
                 got += self.backend.unavailable(d.device_uid, ri.error or "device read failed", (PointKind.DO,)).samples
             status[d.device_uid] = (ok, err)
+        edges = []
+        for target, dv in self.backend.drives.items():
+            if dv.m.bus_id == bus_id:
+                st, err = self.backend.read_drive(target)
+                status[target] = (st is not None, err)
+                edges += self._drive_edges(target, st, self.cfg.bus(bus_id).poll_interval_s)
         with self.lock:
-            edges = self._edges(got, self.cfg.bus(bus_id).poll_interval_s)
+            edges = self._edges(got, self.cfg.bus(bus_id).poll_interval_s) + edges
             for s in got:
                 self.samples[s.point_id] = s
             self.alarms.evaluate_devices(status, None)
@@ -259,6 +267,26 @@ class HardwareService:
             self._prev_valid[s.point_id] = (bool(s.value), s.acquired_utc)
         return out
 
+    def _drive_edges(self, target: str, st, interval_s: float) -> list[tuple[str, dict]]:
+        """Running and fault changes of a drive's status word, with the polling window they fall in."""
+        now, prev = utcnow(), self._prev_drive.get(target)
+        if st is None:
+            if prev is not None:
+                self._prev_drive.pop(target)
+                return [("OBSERVATION_GAP", {"point": target, "reason": "drive status unreadable",
+                                             "last_valid_utc": prev[2].isoformat()})]
+            return []
+        self._prev_drive[target] = (st.running, st.fault, now)
+        if prev is None:
+            return []
+        return [("DRIVE_STATUS_EDGE", {"target": target, "what": what, "from": was, "to": is_,
+                                       "status_word": f"0x{st.word:04X}", "origin": "REAL",
+                                       "not_before_utc": prev[2].isoformat(), "not_after_utc": now.isoformat(),
+                                       "resolution_s": interval_s,
+                                       "note": "polled status word; the change happened within the window"})
+                for what, was, is_ in (("running", prev[0], st.running), ("fault", prev[1], st.fault))
+                if was != is_]
+
     def _check_clock(self) -> None:
         """Record wall-clock steps (NTP corrections, RTC-less boot) against the monotonic clock."""
         mono, wall = self._mono(), time.time()
@@ -273,6 +301,15 @@ class HardwareService:
     # ------------------------------------------------------------------ bench
     def _preflight(self, devices: set[str]) -> str | None:
         for uid in sorted(devices):
+            if uid in self.backend.drives:
+                try:
+                    st = self.backend.drives[uid].read_status()
+                except Exception as e:
+                    return f"{uid}: status read failed ({getattr(e, 'kind', type(e).__name__)})"
+                self.backend.drive_status[uid] = st
+                if st.fault:
+                    return f"{uid}: the drive reports a fault (status 0x{st.word:04X}); reset it at the drive"
+                continue
             wd = self.backend.devices[uid]
             try:
                 modes = wd.read_relay_modes()
@@ -312,7 +349,8 @@ class HardwareService:
             self.commands._audit_rejected(rec)
             return rec
         try:
-            bus_id = self.cfg.device(target.split(".", 1)[0]).bus_id
+            ad = self.cfg.drive_target(target)
+            bus_id = ad.modbus.bus_id if ad is not None else self.cfg.device(target.split(".", 1)[0]).bus_id
         except KeyError:
             rec = CommandRecord(cmd, Outcome.ACCEPTED)
             rec.advance(Outcome.REJECTED, "unknown target")
@@ -345,6 +383,21 @@ class HardwareService:
                 "last_error": next((h["last_error"] for h in hs if h["last_error"]), None),
                 "heartbeat_age_s": max((h["heartbeat_age_s"] or 0) for h in hs) if hs else None,
                 "recorder": rec, "retention": self.retention.view()}
+
+    def drive_view(self) -> dict:
+        out = {}
+        for a in self.cfg.drive_adapters:
+            m = a.modbus
+            st = self.backend.drive_status.get(a.target)
+            h = self.backend.health(a.target) if a.target in self.backend.drives else None
+            out[a.target] = {"adapter_id": a.adapter_id, "kind": a.kind, "signals": a.signals,
+                             "bus_id": m.bus_id if m else None, "address": m.address if m else None,
+                             "drive_model": m.drive_model if m else None,
+                             "provenance": m.provenance if m else None,
+                             "comm_loss_timeout_s": m.comm_loss_timeout_s if m else None,
+                             "online": h.online if h else None, "last_error": h.last_error if h else None,
+                             "status": st.view() if st is not None else None}
+        return out
 
     def relay_mode_view(self) -> dict:
         return {uid: (m.describe() if m is not None else None) for uid, m in self.backend.relay_modes.items()}

@@ -46,6 +46,9 @@ is requested; while one is active it waits with the reason shown.
 | Running feedback lost while pumping | Lockout `DRIVE_STOPPED`. |
 | Flow below `min_flow_L_min` for `no_flow_sustain_s` after `flow_grace_s` | Lockout `NO_FLOW`. |
 | Drive fault input | Lockout `DRIVE_FAULT`. |
+| Drive run over Modbus not completed (exception, no echo, wrong echo; ADR-0015) | Lockout `COMMAND_REJECTED`; nothing is resent. An echo is never taken as running: the running input decides. A stop that is not completed is caught by the running input (`STOP_NOT_VERIFIED`). |
+| Drive's Modbus link silent while it runs | The drive stops itself after its comm-loss timeout (drive setting) and its fault input locks the process out (`DRIVE_FAULT`); `DRIVE_COMM` alarm after three unreadable status reads. |
+| Drive's status word disagrees with the hardwired running or fault input for 10 s | `DRIVE_STATUS_MISMATCH` alarm (warning); the hardwired input keeps deciding. |
 | Both K1 and K2 report closed, or the other pump than the owned one | Lockout `BOTH_PUMPS_SELECTED` / `UNEXPECTED_PUMP_SELECTED`. |
 | Drive running while no pumping phase is active | Lockout `UNCOMMANDED_DRIVE_RUN`. |
 | Main low-low switch or level below the dry-run guard while pumping | Lockout `MAIN_LOW_LOW`. |

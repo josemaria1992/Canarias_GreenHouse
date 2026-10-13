@@ -6,7 +6,10 @@
   count from the bus configuration. Writes are never retried: a write that gets no valid answer is
   reported as OUTCOME_UNKNOWN by the caller, because the module may have applied it.
 * There is no generic "read/write register" method. The adapter exposes the fixed set of Waveshare
-  operations the platform needs, each with a fixed address range (see `waveshare.py`).
+  operations the platform needs, each with a fixed address range (see `waveshare.py`), and one
+  single-register write (FC06) for the control register of a drive whose register map is configured
+  (ADR-0015). A bus refuses FC06 to any unit and register it was not constructed with
+  (`register_writes`), before anything is sent; a bus built without them cannot write a register.
 * Responses are validated beyond what pymodbus checks: function code, unit address, exact data
   length and zero padding bits. pymodbus 3.11.3 accepts a short or empty register reply and a reply
   carrying a different read function code, so those checks live here.
@@ -24,6 +27,7 @@ from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ModbusException
 
 from ..config.schema import BusConfig
+from .rtu_errors import RtuError, RtuExceptionResponse, RtuInvalidResponse, RtuNoResponse, RtuRefused  # noqa: F401
 
 PINNED_PYMODBUS = "3.11.3"
 
@@ -32,31 +36,7 @@ FC_READ_DISCRETE_INPUTS = 0x02
 FC_READ_HOLDING_REGISTERS = 0x03
 FC_READ_INPUT_REGISTERS = 0x04
 FC_WRITE_SINGLE_COIL = 0x05
-
-
-class RtuError(Exception):
-    """Base class. `kind` is a stable token stored with health and command outcomes."""
-    kind = "RTU_ERROR"
-
-
-class RtuNoResponse(RtuError):
-    kind = "NO_RESPONSE"      # timeout, wrong unit (dropped by the framer), bad CRC, truncated frame
-
-
-class RtuExceptionResponse(RtuError):
-    kind = "EXCEPTION_RESPONSE"
-
-    def __init__(self, fc: int, code: int):
-        super().__init__(f"Modbus exception code {code} for function 0x{fc:02X}")
-        self.fc, self.code = fc, code
-
-
-class RtuInvalidResponse(RtuError):
-    kind = "INVALID_RESPONSE"  # parsed, but wrong function code / unit / length / padding
-
-
-class RtuRefused(RtuError):
-    kind = "REFUSED"           # never sent: bad address, unsupported version, closed adapter
+FC_WRITE_SINGLE_REGISTER = 0x06
 
 
 @dataclass
@@ -77,8 +57,10 @@ def check_version() -> None:
 class RtuBus:
     """One serial port, one client, one lock. All traffic on a bus is serialized here."""
 
-    def __init__(self, bus: BusConfig, *, client_factory=None):
+    def __init__(self, bus: BusConfig, *, client_factory=None,
+                 register_writes: frozenset[tuple[int, int]] = frozenset()):
         check_version()
+        self.register_writes = frozenset(register_writes)     # (unit, register) pairs FC06 may address
         if bus.kind != "rtu" or not bus.port:
             raise RtuRefused(f"bus {bus.bus_id} is not an rtu bus with a port")
         self.bus = bus
@@ -197,6 +179,25 @@ class RtuBus:
         echo_bits = list(getattr(rsp, "bits", []) or [])
         if echo_addr != address or not echo_bits or bool(echo_bits[0]) != value:
             e = RtuInvalidResponse(f"echo mismatch (address {echo_addr}, bits {echo_bits[:1]})")
+            self._note(e)
+            raise e
+
+    def write_single_register(self, unit: int, address: int, value: int) -> None:
+        """FC06, sent exactly once. Raises on anything but a matching echo (address and value)."""
+        for x in (address, value):
+            if isinstance(x, bool) or not isinstance(x, int) or not 0 <= x <= 0xFFFF:
+                raise RtuRefused("register write needs an address and a value of 0..65535")
+        if (unit, address) not in self.register_writes:
+            raise RtuRefused(f"register {address} of unit {unit} is not a configured drive control register")
+        try:
+            rsp = self._call(FC_WRITE_SINGLE_REGISTER, unit,
+                             lambda: self._client.write_register(address, value, device_id=unit), write=True)
+        except RtuError as e:
+            self._note(e)
+            raise
+        echo = list(getattr(rsp, "registers", []) or [])
+        if getattr(rsp, "address", None) != address or echo[:1] != [value]:
+            e = RtuInvalidResponse(f"echo mismatch (address {getattr(rsp, 'address', None)}, value {echo[:1]})")
             self._note(e)
             raise e
 

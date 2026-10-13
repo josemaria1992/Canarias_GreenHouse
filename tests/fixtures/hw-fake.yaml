@@ -5,6 +5,8 @@ config_id: hw-fake
 config_version: "test-1"
 profile: HARDWARE_READ_ONLY
 label: "REAL — READ ONLY (test double bus)"
+site:
+  timezone: Europe/Stockholm      # the Malmö test bench
 buses:
   - bus_id: rs485_a
     kind: rtu

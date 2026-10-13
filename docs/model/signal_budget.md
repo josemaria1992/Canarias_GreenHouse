@@ -2,7 +2,8 @@
 
 Configuration: `configs/installation-48.yaml` (SIMULATED). Hardware: two Waveshare Modbus RTU
 Relay (D) modules (8 DO + 8 DI each) and two AI 8CH modules (8 AI each): **16 DO, 16 DI, 16 AI**.
-Every allocation below is a **proposal** for the owner to confirm or change; the physical wiring is
+The owner decided on 2026-10-13 to use all 16 DI and 16 DO with no third module; the per-channel
+assignment below is still a **proposal** for the owner to confirm or change, the physical wiring is
 TBD and nothing has been wired or commissioned (ADR-0013).
 
 ## What the processes need
@@ -10,7 +11,7 @@ TBD and nothing has been wired or commissioned (ADR-0013).
 | Need | Count | Kind |
 |---|---|---|
 | Main pump selection K1/K2 (one shared drive) | 2 | DO |
-| Shared drive run | 1 | DO **or drive interface** |
+| Shared drive run | 1 | **drive's Modbus interface** (owner, 2026-10-13) |
 | Sector valves S1/S2 | 2 | DO |
 | Return pumps RP1/RP2 | 2 | DO |
 | Transfer/dosing pumps A, B, acid | 3 | DO |
@@ -19,9 +20,11 @@ TBD and nothing has been wired or commissioned (ADR-0013).
 | **Outputs** | **17** | 16 DO available |
 
 The drive run command is the 17th output. It is bound to a **drive adapter** (`drive_adapters`), a
-separate audited command path that is `SIMULATED` in the twin and `NOT_CONFIGURED` on hardware until
-the VFD interface is chosen: a Modbus register map from the drive's manual, a digital input on the
-drive driven by an extra relay, or a third relay module. No register map is assumed.
+separate audited command path. **Owner decision, 2026-10-13: use all 16 DI and 16 DO as allocated, no
+third relay module, and send the drive's run command over its own Modbus interface** (ADR-0015,
+`vfd_modbus.md`). In the twin the adapter is `MODBUS_RTU` against a simulated drive with a DEMO map;
+on hardware it stays `NOT_CONFIGURED` until the real drive's map, copied from its manual, passes CP-06
+on the Malmö bench. No real register map is assumed.
 
 ## Allocation
 
@@ -89,10 +92,13 @@ instruments' data sheets at commissioning.
 | Stock low switches | Stock reserve from the level transmitter only; a failed transmitter stops the path | single channel |
 | Main tank temperature | No pH/EC temperature compensation; commissioning item | — |
 | Return pressure, main-pump pressure feedback | Return proven by run feedback + flow only | — |
-| Drive speed or current | Running feedback only (DI); no load-based diagnostics | — |
+| Drive speed or current | Running feedback (DI) is the proof; once the Modbus map is verified, frequency and current can be read from the drive as information only | drive status registers |
 | Mixing (no agitator, no recirculation pump) | Mixing readiness is a SIMULATED settling window; `NOT_VERIFIED` on any physical profile | none |
 
 ## Options for the owner
+
+**Chosen 2026-10-13: option 1, with the drive's run command over Modbus.** The options are kept for
+the record.
 
 1. Keep 48 points and confirm the VFD interface (Modbus or terminal) so the drive adapter can be
    configured; accept the weaker evidence above.

@@ -7,7 +7,7 @@
 | Authorization (owner, date, scope of this setup) | |
 | Operator (qualified) | |
 | Witness | |
-| Date / time (Europe/Stockholm) | |
+| Date / time (site time zone: Europe/Stockholm on the Malmö bench, Atlantic/Canary at the installation) | |
 | Software version / git commit | |
 | Config id @ version | |
 | Location / bench description | |

@@ -171,12 +171,13 @@ class Outcome(str, enum.Enum):
     ACCEPTED = "ACCEPTED"
     EXECUTING = "EXECUTING"
     READBACK_CONFIRMED = "READBACK_CONFIRMED"
+    ECHO_CONFIRMED = "ECHO_CONFIRMED"      # drive control value: FC06 echo, then the status word (ADR-0015)
     FAILED = "FAILED"
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
     CANCELLED = "CANCELLED"
 
 
-TERMINAL_OUTCOMES = {Outcome.REJECTED, Outcome.READBACK_CONFIRMED, Outcome.FAILED,
+TERMINAL_OUTCOMES = {Outcome.REJECTED, Outcome.READBACK_CONFIRMED, Outcome.ECHO_CONFIRMED, Outcome.FAILED,
                      Outcome.OUTCOME_UNKNOWN, Outcome.CANCELLED}
 
 
@@ -187,10 +188,10 @@ class Priority(enum.IntEnum):
 
 @dataclass(frozen=True)
 class OutputCommand:
-    """An explicit desired state for one DO point. There is no toggle."""
+    """An explicit desired state for one DO point, or run/stop for a Modbus drive adapter. No toggle."""
     request_id: str
     actor: str
-    target: str               # point id
+    target: str               # point id, or `drive:<adapter_id>`
     desired: bool
     expected_config_version: str
     expected_controller_state: ControllerState | None

@@ -54,3 +54,10 @@ two Relay (D) modules and two AI 8CH modules: 16 DO, 16 DI and 16 AI.
   configuration, not the controllers.
 * The channel hold-up (about 16,575 L retained) follows from stated dimensions and is unverified.
 * Nothing here is a physical verification; mocked tests stay mocked.
+
+## Addendum 2026-10-13 (owner)
+
+The owner chose option 1 of `docs/model/signal_budget.md`: all 16 DI and 16 DO are used as allocated
+and no third relay module is added; the weaker valve evidence is accepted. The drive's run command
+goes over the drive's own Modbus interface (ADR-0015): `MODBUS_RTU` against the simulated drive in
+the twin, `NOT_CONFIGURED` on hardware until CP-06. The per-channel table remains a proposal.

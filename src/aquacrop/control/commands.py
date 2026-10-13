@@ -78,14 +78,18 @@ class CommandService:
     def _shape(self, cmd: OutputCommand) -> str | None:
         if not isinstance(cmd.desired, bool):
             return "desired state must be an explicit boolean"
-        try:
-            pid = PointId.parse(cmd.target)
-        except ValueError as e:
-            return str(e)
-        if pid.kind != PointKind.DO:
-            return "target is not a DO point"
-        if pid not in {p for p in self.cfg.all_points()}:
-            return "unknown target"
+        if cmd.target.startswith("drive:"):
+            if self.cfg.drive_target(cmd.target) is None:
+                return "unknown target (no Modbus drive adapter by that name)"
+        else:
+            try:
+                pid = PointId.parse(cmd.target)
+            except ValueError as e:
+                return str(e)
+            if pid.kind != PointKind.DO:
+                return "target is not a DO point"
+            if pid not in {p for p in self.cfg.all_points()}:
+                return "unknown target"
         if cmd.expected_config_version != self.cfg.config_version:
             return "configuration version changed (command superseded)"
         if cmd.expected_controller_state is not None and cmd.expected_controller_state != self.controller_state():

@@ -71,7 +71,7 @@ def config(inventory: int) -> InstallationConfig:
                         hardware_variant="STANDARD", ai=ai)]
     return InstallationConfig.model_validate({
         "schema_version": 1, "config_id": "canarias-greenhouse", "config_version": "2026-10-12.1",
-        "profile": "HARDWARE_READ_ONLY", "label": "measurement only",
+        "profile": "HARDWARE_READ_ONLY", "label": "measurement only", "site": {"timezone": "Atlantic/Canary"},
         "buses": [{"bus_id": "rs485_a", "kind": "rtu", "port": "/dev/null", "port_evidence": "measurement",
                    "poll_interval_s": 3.0}],
         "devices": devices,

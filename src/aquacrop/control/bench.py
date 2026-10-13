@@ -5,9 +5,10 @@ A lease is armed only when ALL of these hold:
   * the principal holds the separate commissioning flag (role, login or password alone never suffice);
   * the operator typed the exact confirmation that production loads are disconnected, and described
     the isolated setup;
-  * an exact, non-empty allowlist of relay DO points is given;
+  * an exact, non-empty allowlist of relay DO points and Modbus drives (`drive:<id>`, ADR-0015) is given;
   * the duration is between 1 and 30 minutes;
-  * a fresh preflight shows every involved relay module online with all 8 channel modes NORMAL;
+  * a fresh preflight shows every involved relay module online with all 8 channel modes NORMAL, and
+    every involved drive answering with no fault;
   * the lease is persisted (bench_leases) before it becomes active.
 
 The lease is bound to the browser session, this process and the configuration version. It lives in
@@ -97,10 +98,15 @@ class BenchGate:
         if self.active() is not None:
             raise BenchRefused("a bench lease is already armed; revoke it first")
         if not allowlist or len(set(allowlist)) != len(allowlist):
-            raise BenchRefused("allowlist must name each relay output exactly once")
+            raise BenchRefused("allowlist must name each relay output or drive exactly once")
         known = {str(x) for x in self.cfg.all_points()}
         devices: set[str] = set()
         for t in allowlist:
+            if isinstance(t, str) and t.startswith("drive:"):
+                if self.cfg.drive_target(t) is None:
+                    raise BenchRefused(f"{t} is not a drive with a Modbus register map")
+                devices.add(t)
+                continue
             try:
                 pid = PointId.parse(t)
             except ValueError as e:
