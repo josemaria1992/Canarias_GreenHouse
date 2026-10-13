@@ -716,9 +716,12 @@
   // ------------------------------------------------ trends
   VIEWS.trends = async function () {
     if (!S.allPoints) { const d = await api("GET", "/api/points"); S.allPoints = d.devices.flatMap(g => g.points); }
-    const end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000);
+    // ranges over a day are drawn from buckets of an hour or more: fetched again once a minute, not every refresh
+    const key = S.trendSel.join(",") + "|" + S.trendMin, f = S.trendFetch;
+    let end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000), tr;
+    if (S.trendMin > 1440 && f && f.key === key && end - f.end < 60000) ({ start, end, tr } = f);
     const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
-    const tr = await api("GET", "/api/trends?" + q);
+    if (!tr) { tr = await api("GET", "/api/trends?" + q); S.trendFetch = { key, start, end, tr }; }
     const series = trendSeries(tr, S.trendSel, pid => ({ kind: (S.allPoints.find(p => p.id === pid) || {}).kind }));
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");

@@ -31,7 +31,7 @@ from ..config.schema import InstallationConfig
 from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
 from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
-from ..historian.trends import trend_buckets, trend_level
+from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
@@ -907,6 +907,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return [dict(r) | reg.flags("commands", r["seq"]) for r in rows]
 
     # ------------------------------------------------------------------ trends / export / analytics
+    trend_cache = TrendCache()       # final buckets of year-long charts (historian/trends.py)
+
     @app.get("/api/trends")
     def trends(p: Principal = Depends(require(Perm.READ)), points: str = Query(..., max_length=2000),
                start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000),
@@ -926,7 +928,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                            (pid, s, e))[0][0]
             if n > max_points:
                 level = trend_level(span, max_points)
-                series[pid] = trend_buckets(hist, pid, s, e, level, basis)
+                series[pid] = trend_buckets(hist, pid, s, e, level, basis, cache=trend_cache)
                 aggregated[pid] = {"bucket": level[0], "bucket_s": level[1], "samples": n,
                                    "buckets": len(series[pid])}
                 continue
