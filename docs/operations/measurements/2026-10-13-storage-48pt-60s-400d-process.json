@@ -1,0 +1,408 @@
+{
+  "environment": {
+    "utc_started": "2026-10-13T02:50:19+00:00",
+    "command": [
+      "/home/claude/.venv/bin/python",
+      "scripts/measure_storage.py",
+      "--days",
+      "400",
+      "--inventory",
+      "48",
+      "--process-workload",
+      "/tmp/claude-0/m/process-workload.json",
+      "--out",
+      "/tmp/claude-0/m/st400"
+    ],
+    "seed": 1,
+    "script": {
+      "path": "scripts/measure_storage.py",
+      "sha256": "b19e0a572492d5446bc40c09efc8811919097f3dc4e0714d87cb1113931090bc"
+    },
+    "git": {
+      "commit": "e7a60d9a729f53a03ec8e7826ddd9c5f3d285b43",
+      "branch": "prehw-release",
+      "dirty": true
+    },
+    "python": "3.13.16",
+    "python_implementation": "CPython",
+    "sqlite_library": "3.45.1",
+    "os": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cpu_count": 4,
+    "memory_bytes": 16874930176,
+    "filesystem": {
+      "device": "/dev/vda",
+      "mount": "/",
+      "type": "ext4"
+    },
+    "packages": {
+      "pydantic": "2.14.0",
+      "fastapi": "0.143.0",
+      "starlette": "1.7.0",
+      "uvicorn": "0.54.0",
+      "pymodbus": "3.11.3",
+      "PyYAML": "6.0.3",
+      "aquacrop": "0.2.0.dev0"
+    }
+  },
+  "workload": {
+    "points": 48,
+    "inventory": 48,
+    "interval_s": 60,
+    "days": 400.0,
+    "timeline_utc": [
+      "2025-09-08T02:50:00+00:00",
+      "2026-10-13T02:50:00+00:00"
+    ],
+    "edges_per_digital_point_per_day": 20.0,
+    "commands_per_day": 200.0,
+    "alarms_per_day": 24.0,
+    "process_workload": {
+      "file_sha256": "ea818535be36d62023a6d8159b007fc12f96318fa750a25f2a195b73f3b0c31d",
+      "simulated_hours": 48.0,
+      "events_per_day": 7922.5,
+      "commands_per_day": 1298.5,
+      "activity": {
+        "irrigation_steps": 557,
+        "return_runs": 103,
+        "refill_batches": 2,
+        "acid_doses": 25
+      }
+    },
+    "device_fault": {
+      "every_days": 7,
+      "minutes": 30,
+      "device": "analog_B",
+      "chatter_edges_per_fault": 200
+    },
+    "retention": {
+      "days": 365,
+      "run": "hourly",
+      "max_transactions": 100,
+      "wal_limit_bytes": 268435456
+    },
+    "generated": {
+      "commands": 80000,
+      "alarms_raised": 9600,
+      "device_faults": 57,
+      "chatter_edges": 11400,
+      "process_events": 3168944,
+      "process_commands": 519407,
+      "retention_runs_stopped_early": 0
+    }
+  },
+  "checkpoints": [
+    {
+      "day": 1,
+      "db_bytes": 28241920,
+      "used_bytes": 28241920,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 4906952,
+      "samples": 69120,
+      "events": 8450,
+      "commands": 1498,
+      "alarm_occurrences": 24,
+      "process_bytes_written": 523993088,
+      "elapsed_s": 4.6
+    },
+    {
+      "day": 7,
+      "db_bytes": 197525504,
+      "used_bytes": 197525504,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5022312,
+      "samples": 483840,
+      "events": 59250,
+      "commands": 10488,
+      "alarm_occurrences": 165,
+      "process_bytes_written": 4055896064,
+      "elapsed_s": 35.6
+    },
+    {
+      "day": 30,
+      "db_bytes": 848326656,
+      "used_bytes": 848326656,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5092352,
+      "samples": 2073600,
+      "events": 253936,
+      "commands": 44955,
+      "alarm_occurrences": 699,
+      "process_bytes_written": 17744932864,
+      "elapsed_s": 148.5
+    },
+    {
+      "day": 60,
+      "db_bytes": 1702305792,
+      "used_bytes": 1702305792,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5022312,
+      "samples": 4147200,
+      "events": 507849,
+      "commands": 89910,
+      "alarm_occurrences": 1397,
+      "process_bytes_written": 35646533632,
+      "elapsed_s": 290.9
+    },
+    {
+      "day": 90,
+      "db_bytes": 2556178432,
+      "used_bytes": 2556178432,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 4989352,
+      "samples": 6220800,
+      "events": 761837,
+      "commands": 134865,
+      "alarm_occurrences": 2100,
+      "process_bytes_written": 53602496512,
+      "elapsed_s": 437.6
+    },
+    {
+      "day": 120,
+      "db_bytes": 3410391040,
+      "used_bytes": 3410391040,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5026432,
+      "samples": 8294400,
+      "events": 1015861,
+      "commands": 179823,
+      "alarm_occurrences": 2803,
+      "process_bytes_written": 71522021376,
+      "elapsed_s": 588.4
+    },
+    {
+      "day": 150,
+      "db_bytes": 4268998656,
+      "used_bytes": 4268998656,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 4993472,
+      "samples": 10368000,
+      "events": 1269618,
+      "commands": 224778,
+      "alarm_occurrences": 3497,
+      "process_bytes_written": 89498705920,
+      "elapsed_s": 736.2
+    },
+    {
+      "day": 180,
+      "db_bytes": 5127790592,
+      "used_bytes": 5127790592,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5092352,
+      "samples": 12441600,
+      "events": 1523511,
+      "commands": 269735,
+      "alarm_occurrences": 4191,
+      "process_bytes_written": 107495043072,
+      "elapsed_s": 890.6
+    },
+    {
+      "day": 210,
+      "db_bytes": 5987028992,
+      "used_bytes": 5987028992,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5034672,
+      "samples": 14515200,
+      "events": 1777482,
+      "commands": 314688,
+      "alarm_occurrences": 4892,
+      "process_bytes_written": 125412806656,
+      "elapsed_s": 1056.2
+    },
+    {
+      "day": 240,
+      "db_bytes": 6846103552,
+      "used_bytes": 6846103552,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5199472,
+      "samples": 16588800,
+      "events": 2031553,
+      "commands": 359644,
+      "alarm_occurrences": 5593,
+      "process_bytes_written": 143361056768,
+      "elapsed_s": 1211.4
+    },
+    {
+      "day": 270,
+      "db_bytes": 7705493504,
+      "used_bytes": 7705493504,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5026432,
+      "samples": 18662400,
+      "events": 2285410,
+      "commands": 404599,
+      "alarm_occurrences": 6289,
+      "process_bytes_written": 161407909888,
+      "elapsed_s": 1372.3
+    },
+    {
+      "day": 300,
+      "db_bytes": 8564940800,
+      "used_bytes": 8564940800,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5001712,
+      "samples": 20736000,
+      "events": 2539252,
+      "commands": 449553,
+      "alarm_occurrences": 6990,
+      "process_bytes_written": 179554533376,
+      "elapsed_s": 1534.7
+    },
+    {
+      "day": 330,
+      "db_bytes": 9424347136,
+      "used_bytes": 9424347136,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5051152,
+      "samples": 22809600,
+      "events": 2793220,
+      "commands": 494510,
+      "alarm_occurrences": 7690,
+      "process_bytes_written": 197545857024,
+      "elapsed_s": 1710.0
+    },
+    {
+      "day": 360,
+      "db_bytes": 10283884544,
+      "used_bytes": 10283884544,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5047032,
+      "samples": 24883200,
+      "events": 3046984,
+      "commands": 539464,
+      "alarm_occurrences": 8390,
+      "process_bytes_written": 215632293888,
+      "elapsed_s": 1883.6
+    },
+    {
+      "day": 365,
+      "db_bytes": 10427211776,
+      "used_bytes": 10427211776,
+      "reusable_bytes": 0,
+      "wal_bytes_before_checkpoint": 5174752,
+      "samples": 25228800,
+      "events": 3089346,
+      "commands": 546957,
+      "alarm_occurrences": 8508,
+      "process_bytes_written": 218626646016,
+      "elapsed_s": 1912.4
+    },
+    {
+      "day": 390,
+      "db_bytes": 10439200768,
+      "used_bytes": 10438111232,
+      "reusable_bytes": 1089536,
+      "wal_bytes_before_checkpoint": 5689752,
+      "samples": 25228800,
+      "events": 3089951,
+      "commands": 546962,
+      "alarm_occurrences": 8511,
+      "process_bytes_written": 233704075264,
+      "elapsed_s": 2060.7
+    },
+    {
+      "day": 400,
+      "db_bytes": 10441035776,
+      "used_bytes": 10439868416,
+      "reusable_bytes": 1167360,
+      "wal_bytes_before_checkpoint": 5710352,
+      "samples": 25228800,
+      "events": 3090185,
+      "commands": 546960,
+      "alarm_occurrences": 8509,
+      "process_bytes_written": 239732527104,
+      "elapsed_s": 2121.0
+    }
+  ],
+  "final_storage": {
+    "db_bytes": 10441035776,
+    "db_file_bytes": 10441035776,
+    "wal_bytes": 0,
+    "db_used_bytes": 10439868416,
+    "db_reusable_bytes": 1167360,
+    "oldest_sample_utc": "2025-10-13T02:49:57.032655+00:00",
+    "newest_sample_utc": "2026-10-13T02:48:59.863877+00:00",
+    "history_span_days": 364.99933832432873,
+    "window_full": true,
+    "series": {
+      "WALL": {
+        "cycles": 525601,
+        "sample_rows": 25228848
+      }
+    },
+    "registers": {
+      "process_sessions": 1,
+      "sim_runs": 0,
+      "users": 0,
+      "archives": 0,
+      "migrations": 3,
+      "alarm_occurrences": 8509
+    },
+    "last_7_days": {
+      "days_covered": 7.0,
+      "samples": 483843,
+      "events": 59458,
+      "avg_db_bytes_per_sample_row": 413.80756976154237,
+      "estimated_growth_bytes_per_day": 28602556.568019133
+    },
+    "files_before_close": {
+      "db_file_bytes": 10441035776,
+      "wal_bytes": 0
+    },
+    "files_after_close": {
+      "db_file_bytes": 10441035776,
+      "wal_bytes": 0
+    }
+  },
+  "wal": {
+    "max_observed_bytes": 5710352,
+    "max_observed_day": 396.58,
+    "sampled": "after each hourly batch, before the retention run",
+    "journal_size_limit_bytes": 67108864
+  },
+  "bytes_written": {
+    "process_write_bytes": 239732563968,
+    "process_wchar": 239457725843,
+    "persistent_db_file_bytes": 10441035776,
+    "persistent_wal_bytes": 0,
+    "note": "bytes the measurement process sent to storage over the whole run (WAL, checkpoints, page rewrites, retention deletes); a desktop figure, not eMMC endurance evidence"
+  },
+  "backup": {
+    "bytes": 595640004,
+    "seconds": 456.2,
+    "ratio": 17.5,
+    "verified_before_publish": true,
+    "estimate_bytes": 2609967104,
+    "quick_verify_ok": true,
+    "quick_verify_seconds": 66.4
+  },
+  "restore_drill": {
+    "ok": true,
+    "integrity": "ok (restored: integrity, foreign keys, schema, counts, fingerprints, application smoke test)",
+    "seconds": 663.2,
+    "restore_seconds": 589.855,
+    "restored_bytes": 10108207104,
+    "needed_bytes": 12527842099,
+    "facts": {
+      "integrity": "ok",
+      "foreign_key_violations": 0,
+      "schema_version": 3,
+      "user_version": 0,
+      "schema_objects": 22
+    },
+    "smoke": {
+      "ok": true,
+      "schema_version": 3,
+      "migrations_applied": [],
+      "trend_rows": 100,
+      "events_read": 100,
+      "open_alarms": 0,
+      "timestamp_quarantines": 0,
+      "historian_started": true,
+      "capacity_report_db_bytes": 10108215376,
+      "open_alarms_loaded": 0
+    }
+  },
+  "finished_utc": "2026-10-13T03:45:26+00:00"
+}

@@ -1,0 +1,3987 @@
+{
+ "what": "process event and command workload of the SIMULATED installation (all processes AUTO); synthetic values, not a production setting and not a measurement of a real plant",
+ "utc": "2026-10-12T23:39:19+00:00",
+ "aquacrop": "0.2.0.dev0",
+ "config": "installation-48",
+ "seed": 1,
+ "simulated_hours": 48.0,
+ "dt_s": 0.5,
+ "wall_seconds": 279.0,
+ "states": {
+  "IRRIGATION": "AUTO",
+  "RETURN": "AUTO",
+  "REFILL": "AUTO",
+  "ACID": "AUTO"
+ },
+ "activity": {
+  "irrigation_steps": 557,
+  "return_runs": 103,
+  "refill_batches": 2,
+  "acid_doses": 25
+ },
+ "events_per_day": 7922.5,
+ "commands_per_day": 1298.5,
+ "command_outcomes": 2597,
+ "commands_by_origin": {
+  "CONTROLLER": 2597
+ },
+ "kinds": {
+  "PROCESS_TRANSITION": {
+   "count": 6630,
+   "per_day": 3315.0,
+   "mean_payload_bytes": 295,
+   "samples": [
+    {
+     "actor": "scenario",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 1.0,
+      "from_state": "STOPPED",
+      "to_state": "AUTO",
+      "from_phase": "IDLE",
+      "to_phase": "PRECHECK",
+      "reason": "AUTO started by scenario with recipe demo-sim@v1",
+      "actor": "scenario",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2
+     }
+    },
+    {
+     "actor": "scenario",
+     "payload": {
+      "process": "RETURN",
+      "sim_s": 1.0,
+      "from_state": "STOPPED",
+      "to_state": "AUTO",
+      "from_phase": "IDLE",
+      "to_phase": "MONITOR",
+      "reason": "AUTO started by scenario with recipe demo-sim@v1",
+      "actor": "scenario",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2
+     }
+    },
+    {
+     "actor": "scenario",
+     "payload": {
+      "process": "REFILL",
+      "sim_s": 1.0,
+      "from_state": "STOPPED",
+      "to_state": "AUTO",
+      "from_phase": "IDLE",
+      "to_phase": "MONITOR",
+      "reason": "AUTO started by scenario with recipe demo-sim@v1",
+      "actor": "scenario",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2
+     }
+    },
+    {
+     "actor": "scenario",
+     "payload": {
+      "process": "ACID",
+      "sim_s": 1.0,
+      "from_state": "STOPPED",
+      "to_state": "AUTO",
+      "from_phase": "IDLE",
+      "to_phase": "MONITOR",
+      "reason": "AUTO started by scenario with recipe demo-sim@v1",
+      "actor": "scenario",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 1.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "PRECHECK",
+      "to_phase": "SELECT",
+      "reason": "cycle 1 step 1: S1 with MP1 for 300 s (recipe demo-sim@v1)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 2.0,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "SELECT",
+      "to_phase": "OPEN",
+      "reason": "MP1 selected (auxiliary contact closed)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 4.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "OPEN",
+      "to_phase": "LEAD",
+      "reason": "S1 open confirmed",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 9
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 5.0,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "LEAD",
+      "to_phase": "START",
+      "reason": "3.0 s since the open command (lead 1 s)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 10
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 5.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "START",
+      "to_phase": "VERIFY_FLOW",
+      "reason": "drive running feedback confirmed",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 11
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 6.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "VERIFY_FLOW",
+      "to_phase": "IRRIGATE",
+      "reason": "flow verified 75.0 L/min on S1",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 13
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 306.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "IRRIGATE",
+      "to_phase": "STOP_DRIVE",
+      "reason": "S1 irrigated 300 s, ~749 L measured",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 613
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 309.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "STOP_DRIVE",
+      "to_phase": "STOP_SETTLE",
+      "reason": "drive stop verified",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 619
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 310.0,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "STOP_SETTLE",
+      "to_phase": "CLOSE",
+      "reason": "close S1",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 620
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 310.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "CLOSE",
+      "to_phase": "DESELECT",
+      "reason": "S1 closure verified (open limit released and no flow)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 621
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 311.0,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "DESELECT",
+      "to_phase": "PRECHECK",
+      "reason": "MP1 deselected; changeover to S2",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 622
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 311.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "PRECHECK",
+      "to_phase": "SELECT",
+      "reason": "cycle 1 step 2: S2 with MP2 for 300 s (recipe demo-sim@v1)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 623
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 312.0,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "SELECT",
+      "to_phase": "OPEN",
+      "reason": "MP2 selected (auxiliary contact closed)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 624
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 314.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "OPEN",
+      "to_phase": "LEAD",
+      "reason": "S2 open confirmed",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 629
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 315.0,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "LEAD",
+      "to_phase": "START",
+      "reason": "3.0 s since the open command (lead 1 s)",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 630
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "process": "IRRIGATION",
+      "sim_s": 315.5,
+      "from_state": "AUTO",
+      "to_state": "AUTO",
+      "from_phase": "START",
+      "to_phase": "VERIFY_FLOW",
+      "reason": "drive running feedback confirmed",
+      "actor": "controller",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 631
+     }
+    }
+   ]
+  },
+  "DI_EDGE": {
+   "count": 3630,
+   "per_day": 1815.0,
+   "mean_payload_bytes": 161,
+   "samples": [
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI3",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI5",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 9
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI1",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 11
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI1",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 619
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI5",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 621
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI3",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 622
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI4",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 624
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI6",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 629
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI1",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 631
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI1",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1239
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI6",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1241
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI4",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1242
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI3",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1244
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI5",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1249
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI1",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1251
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI7",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1479
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI1",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1859
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI5",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1861
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI3",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1862
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DI4",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1864
+     }
+    }
+   ]
+  },
+  "DO_EDGE": {
+   "count": 2597,
+   "per_day": 1298.5,
+   "mean_payload_bytes": 161,
+   "samples": [
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO1",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO3",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 5
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO3",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 621
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO1",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 622
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO2",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 624
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO4",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 625
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO4",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1241
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO2",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1242
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO1",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1244
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO3",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1245
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO5",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1478
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO3",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1861
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO1",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1862
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO2",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1864
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO4",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1865
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO4",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2481
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO2",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2482
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO1",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2484
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO3",
+      "from": false,
+      "to": true,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2485
+     }
+    },
+    {
+     "actor": null,
+     "payload": {
+      "point": "relay_A.DO3",
+      "from": true,
+      "to": false,
+      "resolution_s": 0.5,
+      "origin": "SIMULATED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3101
+     }
+    }
+   ]
+  },
+  "DRIVE_ADAPTER_COMMAND_INTENT": {
+   "count": 1115,
+   "per_day": 557.5,
+   "mean_payload_bytes": 300,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_6b0050f7c6a84fd6b1abba87877d1cff",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 10
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_3066e99031f342ffa765f9b826e3c7e5",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 613
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_b25866b3801642dbbd566bfd48982042",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 630
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_c9c8ec929ab14a05b5551c338818db04",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1233
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_da92061e00614a10a58ac0ea5c701c41",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1250
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_9822f1ac52934b3fa94b413463c7d630",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1853
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_c05d5515b346451bb27f8bb737bfce21",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1870
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_ee625789438b4ea7bdc785b75a02ea64",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2473
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_d2d052fb5220442887fedb8176cc1faf",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2490
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_30af245945e74de58b1051a63b89310d",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3093
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_fa91b428c542497ca2545b503f1b49ca",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3110
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_5b57c7a5aec4498da6ca6f3a3b35fbf9",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3713
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_760af81134dc46cb8fa3430492f28b90",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3730
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_7ac9695ec2e348c1a89a2cf43ff2a6a8",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4333
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_ed0c990528374b73b5aa0f5d508f09a2",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4350
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_86d2a1d71a5642fba71f366d0573044e",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4953
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_ef27489ea27440e891e83ed6254cc303",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4970
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_0d3803922d93489a921c80a3daf49c2f",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 5573
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_263cd95a29d94755ae56c0f22aba5721",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 5590
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_6466a6eb9b1141ebb4339ea48b552224",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 6193
+     }
+    }
+   ]
+  },
+  "DRIVE_ADAPTER_COMMAND": {
+   "count": 1115,
+   "per_day": 557.5,
+   "mean_payload_bytes": 351,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_6b0050f7c6a84fd6b1abba87877d1cff",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 10,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_3066e99031f342ffa765f9b826e3c7e5",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 613,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_b25866b3801642dbbd566bfd48982042",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 630,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_c9c8ec929ab14a05b5551c338818db04",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1233,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_da92061e00614a10a58ac0ea5c701c41",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1250,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_9822f1ac52934b3fa94b413463c7d630",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1853,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_c05d5515b346451bb27f8bb737bfce21",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1870,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_ee625789438b4ea7bdc785b75a02ea64",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2473,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_d2d052fb5220442887fedb8176cc1faf",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2490,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_30af245945e74de58b1051a63b89310d",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3093,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_fa91b428c542497ca2545b503f1b49ca",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3110,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_5b57c7a5aec4498da6ca6f3a3b35fbf9",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3713,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_760af81134dc46cb8fa3430492f28b90",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3730,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_7ac9695ec2e348c1a89a2cf43ff2a6a8",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4333,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_ed0c990528374b73b5aa0f5d508f09a2",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4350,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_86d2a1d71a5642fba71f366d0573044e",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4953,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_ef27489ea27440e891e83ed6254cc303",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP1/S1 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4970,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_0d3803922d93489a921c80a3daf49c2f",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S1 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 5573,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_263cd95a29d94755ae56c0f22aba5721",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": true,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: start drive for MP2/S2 [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 5590,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": true
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "request_id": "adp_6466a6eb9b1141ebb4339ea48b552224",
+      "adapter": "MAIN",
+      "kind": "SIMULATED",
+      "signal": "drive.MAIN.run",
+      "desired": false,
+      "process": "IRRIGATION",
+      "reason": "IRRIGATION: stop drive (S2 complete) [recipe demo-sim@v1]",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 6193,
+      "outcome": "SIMULATED_APPLIED",
+      "readback": false
+     }
+    }
+   ]
+  },
+  "IRRIGATION_STEP_COMPLETED": {
+   "count": 557,
+   "per_day": 278.5,
+   "mean_payload_bytes": 239,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 1,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 311.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3671875,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 622
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 1,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 621.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1242
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 2,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 931.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 1862
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 2,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 1241.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 2482
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 3,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 1551.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3102
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 3,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 1861.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3722
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 4,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 2171.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4342
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 4,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 2481.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 4962
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 5,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 2791.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 5582
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 5,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 3101.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 6202
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 6,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 3411.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 6822
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 6,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 3721.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 7442
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 7,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 4031.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 8062
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 7,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 4341.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 8682
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 8,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 4651.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 9302
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 8,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 4961.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 9922
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 9,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 5271.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 10542
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 9,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 5581.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 11162
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 10,
+      "sector": "S1",
+      "pump": "MP1",
+      "end_sim_s": 5891.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 11782
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "cycle": 10,
+      "sector": "S2",
+      "pump": "MP2",
+      "end_sim_s": 6201.0,
+      "irrigated_s": 300.0,
+      "delivered_L_measured": 749.3658333333333,
+      "recipe": "demo-sim@v1",
+      "mode": "AUTO",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 12402
+     }
+    }
+   ]
+  },
+  "RETURN_RUN_ENDED": {
+   "count": 103,
+   "per_day": 51.5,
+   "mean_payload_bytes": 232,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 738.5,
+      "end_s": 1696.0,
+      "delivered_L_measured": 3962.39703124984,
+      "reason": "sump 799 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 3392
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 2406.5,
+      "end_s": 3365.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 799 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 6731
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 4074.0,
+      "end_s": 5033.0,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 10066
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 5745.5,
+      "end_s": 6704.0,
+      "delivered_L_measured": 3966.5635937498396,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 13408
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 7413.5,
+      "end_s": 8372.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 16745
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 9082.0,
+      "end_s": 10040.0,
+      "delivered_L_measured": 3964.48031249984,
+      "reason": "sump 799 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 20080
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 10751.5,
+      "end_s": 11710.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 23421
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 12419.5,
+      "end_s": 13379.0,
+      "delivered_L_measured": 3970.730156249839,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 26758
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 14091.0,
+      "end_s": 15049.5,
+      "delivered_L_measured": 3966.5635937498396,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 30099
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 15759.5,
+      "end_s": 16718.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 33437
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 17427.0,
+      "end_s": 18385.0,
+      "delivered_L_measured": 3964.48031249984,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 36770
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 19097.0,
+      "end_s": 20055.5,
+      "delivered_L_measured": 3966.5635937498396,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 40111
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 20764.5,
+      "end_s": 21723.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 43447
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 22434.0,
+      "end_s": 23392.0,
+      "delivered_L_measured": 3964.48031249984,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 46784
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 24102.5,
+      "end_s": 25061.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 799 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 50123
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 25770.5,
+      "end_s": 26730.0,
+      "delivered_L_measured": 3970.730156249839,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 53460
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 27442.5,
+      "end_s": 28401.0,
+      "delivered_L_measured": 3966.5635937498396,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 56802
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 29110.5,
+      "end_s": 30069.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 60139
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP1",
+      "start_s": 30779.0,
+      "end_s": 31737.0,
+      "delivered_L_measured": 3964.48031249984,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 63474
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "pump": "RP2",
+      "start_s": 32448.5,
+      "end_s": 33407.5,
+      "delivered_L_measured": 3968.6468749998394,
+      "reason": "sump 800 L <= stop level 800 L",
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 66815
+     }
+    }
+   ]
+  },
+  "ACID_DOSE_ENDED": {
+   "count": 25,
+   "per_day": 12.5,
+   "mean_payload_bytes": 271,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_7d16afcaa15743ca83bcb3cf7ffa909d",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 10297.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 20635
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_0d3136c6ef1546ff9bccd84f9d17df75",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 17433.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 34908
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_69fcf3cb43974cea977c8e2f6beeae87",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 25505.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 51052
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_a8f9592025ea47c0b4d4f83b6c097fbd",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 33948.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 67937
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_6f52ea0090674cb2a367b531b4f233ce",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.584375,
+      "at_s": 46858.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 93758
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_6f52ea0090674cb2a367b531b4f233ce",
+      "recipe": "demo-sim@v1",
+      "n": 2,
+      "requested_L": 2.0,
+      "ph_before": 6.486375,
+      "at_s": 47478.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 94998
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_6f52ea0090674cb2a367b531b4f233ce",
+      "recipe": "demo-sim@v1",
+      "n": 3,
+      "requested_L": 2.0,
+      "ph_before": 6.377,
+      "at_s": 48098.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 96238
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_6f52ea0090674cb2a367b531b4f233ce",
+      "recipe": "demo-sim@v1",
+      "n": 4,
+      "requested_L": 2.0,
+      "ph_before": 6.28425,
+      "at_s": 48718.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 97478
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_0392ad64b7174cac93c2642af74502a7",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 49584.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 99209
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_2780ae117e4642f3936b8ee3230f0a05",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 52012.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 104065
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_51a2611d62e54399be1f4b5936d31439",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 55201.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 110444
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_5be36874cefa45e5b2758b5d2148b305",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 59318.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 118677
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_45ba32aaedc248b498a0f4fc52cef536",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 64492.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 129025
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_c7656d0012064c9092473bf2ab21e5e1",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 70866.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 141773
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_8352caeadb4b4685b0e2634595257604",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 78815.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 157671
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_848d565e7d0f4da38514ffa06e503a07",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 87518.0,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 175077
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_8d1ef6cefbe0418ca30ed3ebc198afb5",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 97699.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 195440
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_ecdc236dbab74cc3aba3b2a45bbdab9b",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 110438.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 220918
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_e51516080e024385b066244c6d3f32f4",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 124286.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 248614
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "acid_30c7b83b82f8492c9965c6f21c622783",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "requested_L": 2.0,
+      "ph_before": 6.20025,
+      "at_s": 142474.5,
+      "delivered_L": 2.1017583333333336,
+      "result": "TARGET_REACHED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 284990
+     }
+    }
+   ]
+  },
+  "ACID_BATCH_STARTED": {
+   "count": 19,
+   "per_day": 9.5,
+   "mean_payload_bytes": 214,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_7d16afcaa15743ca83bcb3cf7ffa909d",
+      "recipe": "demo-sim@v1",
+      "start_s": 10297.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 20594
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_0d3136c6ef1546ff9bccd84f9d17df75",
+      "recipe": "demo-sim@v1",
+      "start_s": 17433.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 34867
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_69fcf3cb43974cea977c8e2f6beeae87",
+      "recipe": "demo-sim@v1",
+      "start_s": 25505.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 51011
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_a8f9592025ea47c0b4d4f83b6c097fbd",
+      "recipe": "demo-sim@v1",
+      "start_s": 33948.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 67896
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_6f52ea0090674cb2a367b531b4f233ce",
+      "recipe": "demo-sim@v1",
+      "start_s": 46858.5,
+      "ph_start": 6.584375,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 93717
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_0392ad64b7174cac93c2642af74502a7",
+      "recipe": "demo-sim@v1",
+      "start_s": 49584.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 99168
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_2780ae117e4642f3936b8ee3230f0a05",
+      "recipe": "demo-sim@v1",
+      "start_s": 52012.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 104024
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_51a2611d62e54399be1f4b5936d31439",
+      "recipe": "demo-sim@v1",
+      "start_s": 55201.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 110403
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_5be36874cefa45e5b2758b5d2148b305",
+      "recipe": "demo-sim@v1",
+      "start_s": 59318.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 118636
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_45ba32aaedc248b498a0f4fc52cef536",
+      "recipe": "demo-sim@v1",
+      "start_s": 64492.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 128984
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_c7656d0012064c9092473bf2ab21e5e1",
+      "recipe": "demo-sim@v1",
+      "start_s": 70866.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 141732
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_8352caeadb4b4685b0e2634595257604",
+      "recipe": "demo-sim@v1",
+      "start_s": 78815.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 157630
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_848d565e7d0f4da38514ffa06e503a07",
+      "recipe": "demo-sim@v1",
+      "start_s": 87518.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 175036
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_8d1ef6cefbe0418ca30ed3ebc198afb5",
+      "recipe": "demo-sim@v1",
+      "start_s": 97699.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 195399
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_ecdc236dbab74cc3aba3b2a45bbdab9b",
+      "recipe": "demo-sim@v1",
+      "start_s": 110438.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 220877
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_e51516080e024385b066244c6d3f32f4",
+      "recipe": "demo-sim@v1",
+      "start_s": 124286.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 248573
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_30c7b83b82f8492c9965c6f21c622783",
+      "recipe": "demo-sim@v1",
+      "start_s": 142474.5,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 284949
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_9a3a60ecc00445349d7969ab631cc945",
+      "recipe": "demo-sim@v1",
+      "start_s": 167061.5,
+      "ph_start": 6.839875,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 334123
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_a34a4ce568f548558bbfd42de4efb3d3",
+      "recipe": "demo-sim@v1",
+      "start_s": 170289.0,
+      "ph_start": 6.20025,
+      "doses": [],
+      "total_L": 0.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 340578
+     }
+    }
+   ]
+  },
+  "ACID_BATCH_ENDED": {
+   "count": 19,
+   "per_day": 9.5,
+   "mean_payload_bytes": 490,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_7d16afcaa15743ca83bcb3cf7ffa909d",
+      "recipe": "demo-sim@v1",
+      "start_s": 10297.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 10297.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.08125
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 10917.0,
+      "ph_end": 6.08125,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 21834
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_0d3136c6ef1546ff9bccd84f9d17df75",
+      "recipe": "demo-sim@v1",
+      "start_s": 17433.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 17433.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.069875
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 18053.5,
+      "ph_end": 6.069875,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 36107
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_69fcf3cb43974cea977c8e2f6beeae87",
+      "recipe": "demo-sim@v1",
+      "start_s": 25505.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 25505.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.05325
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 26125.5,
+      "ph_end": 6.05325,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 52251
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_a8f9592025ea47c0b4d4f83b6c097fbd",
+      "recipe": "demo-sim@v1",
+      "start_s": 33948.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 33948.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.03575
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 34568.0,
+      "ph_end": 6.03575,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 69136
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_6f52ea0090674cb2a367b531b4f233ce",
+      "recipe": "demo-sim@v1",
+      "start_s": 46858.5,
+      "ph_start": 6.584375,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.584375,
+        "at_s": 46858.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.486375
+       },
+       {
+        "n": 2,
+        "requested_L": 2.0,
+        "ph_before": 6.486375,
+        "at_s": 47478.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.377
+       },
+       {
+        "n": 3,
+        "requested_L": 2.0,
+        "ph_before": 6.377,
+        "at_s": 48098.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.28425
+       },
+       {
+        "n": 4,
+        "requested_L": 2.0,
+        "ph_before": 6.28425,
+        "at_s": 48718.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.18975
+       }
+      ],
+      "total_L": 8.407033333333334,
+      "end_s": 49338.5,
+      "ph_end": 6.18975,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 98677
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_0392ad64b7174cac93c2642af74502a7",
+      "recipe": "demo-sim@v1",
+      "start_s": 49584.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 49584.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.1285
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 50204.0,
+      "ph_end": 6.1285,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 100408
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_2780ae117e4642f3936b8ee3230f0a05",
+      "recipe": "demo-sim@v1",
+      "start_s": 52012.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 52012.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.097875
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 52632.0,
+      "ph_end": 6.097875,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 105264
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_51a2611d62e54399be1f4b5936d31439",
+      "recipe": "demo-sim@v1",
+      "start_s": 55201.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 55201.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.09175
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 55821.5,
+      "ph_end": 6.09175,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 111643
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_5be36874cefa45e5b2758b5d2148b305",
+      "recipe": "demo-sim@v1",
+      "start_s": 59318.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 59318.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.089125
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 59938.0,
+      "ph_end": 6.089125,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 119876
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_45ba32aaedc248b498a0f4fc52cef536",
+      "recipe": "demo-sim@v1",
+      "start_s": 64492.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 64492.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.07775
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 65112.0,
+      "ph_end": 6.07775,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 130224
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_c7656d0012064c9092473bf2ab21e5e1",
+      "recipe": "demo-sim@v1",
+      "start_s": 70866.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 70866.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.0585
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 71486.0,
+      "ph_end": 6.0585,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 142972
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_8352caeadb4b4685b0e2634595257604",
+      "recipe": "demo-sim@v1",
+      "start_s": 78815.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 78815.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.038375
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 79435.0,
+      "ph_end": 6.038375,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 158870
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_848d565e7d0f4da38514ffa06e503a07",
+      "recipe": "demo-sim@v1",
+      "start_s": 87518.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 87518.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.01825
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 88138.0,
+      "ph_end": 6.01825,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 176276
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_8d1ef6cefbe0418ca30ed3ebc198afb5",
+      "recipe": "demo-sim@v1",
+      "start_s": 97699.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 97699.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 5.992
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 98319.5,
+      "ph_end": 5.992,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 196639
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_ecdc236dbab74cc3aba3b2a45bbdab9b",
+      "recipe": "demo-sim@v1",
+      "start_s": 110438.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 110438.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 5.940375
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 111058.5,
+      "ph_end": 5.940375,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 222117
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_e51516080e024385b066244c6d3f32f4",
+      "recipe": "demo-sim@v1",
+      "start_s": 124286.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 124286.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 5.8905
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 124906.5,
+      "ph_end": 5.8905,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 249813
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_30c7b83b82f8492c9965c6f21c622783",
+      "recipe": "demo-sim@v1",
+      "start_s": 142474.5,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 142474.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 5.786375
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 143094.5,
+      "ph_end": 5.786375,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 286189
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_9a3a60ecc00445349d7969ab631cc945",
+      "recipe": "demo-sim@v1",
+      "start_s": 167061.5,
+      "ph_start": 6.839875,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.839875,
+        "at_s": 167061.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.649125
+       },
+       {
+        "n": 2,
+        "requested_L": 2.0,
+        "ph_before": 6.649125,
+        "at_s": 167681.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.46625
+       },
+       {
+        "n": 3,
+        "requested_L": 2.0,
+        "ph_before": 6.46625,
+        "at_s": 168301.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.3105
+       },
+       {
+        "n": 4,
+        "requested_L": 2.0,
+        "ph_before": 6.3105,
+        "at_s": 168921.5,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.139875
+       }
+      ],
+      "total_L": 8.407033333333334,
+      "end_s": 169541.5,
+      "ph_end": 6.139875,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 339083
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "acid_a34a4ce568f548558bbfd42de4efb3d3",
+      "recipe": "demo-sim@v1",
+      "start_s": 170289.0,
+      "ph_start": 6.20025,
+      "doses": [
+       {
+        "n": 1,
+        "requested_L": 2.0,
+        "ph_before": 6.20025,
+        "at_s": 170289.0,
+        "delivered_L": 2.1017583333333336,
+        "result": "TARGET_REACHED",
+        "ph_after": 6.0235
+       }
+      ],
+      "total_L": 2.1017583333333336,
+      "end_s": 170909.0,
+      "ph_end": 6.0235,
+      "result": "PH_IN_BAND",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 341818
+     }
+    }
+   ]
+  },
+  "REFILL_PATH_ENDED": {
+   "count": 16,
+   "per_day": 8.0,
+   "mean_payload_bytes": 367,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 84975
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 84975
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 86991
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 86991
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 88710
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 88710
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 90520
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 90520
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 92289
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 92289
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "name": "WATER",
+      "state": "DONE",
+      "result": "FINAL_LEVEL_REACHED",
+      "failed": false,
+      "delivered_L": 6335.469609375674,
+      "target_L": null,
+      "max_time_s": 7200.0,
+      "measured_by": "flow.FILL_MAIN",
+      "outputs": [
+       "valve.FILL_MAIN.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 92518
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 329342
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 329342
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "name": "A",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_A",
+      "outputs": [
+       "pump.TP_A.cmd",
+       "valve.OUT_A.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 331980
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "name": "B",
+      "state": "DONE",
+      "result": "TARGET_REACHED",
+      "failed": false,
+      "delivered_L": 10.257458333333332,
+      "target_L": 10.0,
+      "max_time_s": 900.0,
+      "measured_by": "flow.TP_B",
+      "outputs": [
+       "pump.TP_B.cmd",
+       "valve.OUT_B.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 331980
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "name": "WATER",
+      "state": "DONE",
+      "result": "FINAL_LEVEL_REACHED",
+      "failed": false,
+      "delivered_L": 6399.638281250699,
+      "target_L": null,
+      "max_time_s": 7200.0,
+      "measured_by": "flow.FILL_MAIN",
+      "outputs": [
+       "valve.FILL_MAIN.cmd"
+      ],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 332924
+     }
+    }
+   ]
+  },
+  "REFILL_EC_STEP": {
+   "count": 7,
+   "per_day": 3.5,
+   "mean_payload_bytes": 216,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "ec_before": 1.69625,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 42451.5,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 84903
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "n": 2,
+      "ec_before": 1.6996875,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 43459.5,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 86919
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "n": 3,
+      "ec_before": 1.6996875,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 44319.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 88638
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "n": 4,
+      "ec_before": 1.6996875,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 45224.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 90448
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "n": 5,
+      "ec_before": 1.6996875,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 46108.5,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 92217
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "n": 1,
+      "ec_before": 1.6996875,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 164635.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 329270
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "n": 2,
+      "ec_before": 1.6996875,
+      "a_L": 10.0,
+      "b_L": 10.0,
+      "at_s": 165954.0,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 331908
+     }
+    }
+   ]
+  },
+  "STOCK_READINESS_ACKNOWLEDGED": {
+   "count": 3,
+   "per_day": 1.5,
+   "mean_payload_bytes": 304,
+   "samples": [
+    {
+     "actor": "scenario",
+     "payload": {
+      "stock": "A",
+      "status": "PREPARED",
+      "actor": "scenario",
+      "utc": "2026-10-12T23:34:40.743819+00:00",
+      "sim_s": 0.0,
+      "level_at_ack_L": 3000.0,
+      "note": "measurement: synthetic stocks prepared",
+      "reason": "acknowledged by the operator",
+      "seq": 1,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 0
+     }
+    },
+    {
+     "actor": "scenario",
+     "payload": {
+      "stock": "B",
+      "status": "PREPARED",
+      "actor": "scenario",
+      "utc": "2026-10-12T23:34:40.743900+00:00",
+      "sim_s": 0.0,
+      "level_at_ack_L": 3000.0,
+      "note": "measurement: synthetic stocks prepared",
+      "reason": "acknowledged by the operator",
+      "seq": 2,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 0
+     }
+    },
+    {
+     "actor": "scenario",
+     "payload": {
+      "stock": "ACID",
+      "status": "PREPARED",
+      "actor": "scenario",
+      "utc": "2026-10-12T23:34:40.743987+00:00",
+      "sim_s": 0.0,
+      "level_at_ack_L": 2000.0,
+      "note": "measurement: synthetic stocks prepared",
+      "reason": "acknowledged by the operator",
+      "seq": 3,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 0
+     }
+    }
+   ]
+  },
+  "REFILL_BATCH_STARTED": {
+   "count": 2,
+   "per_day": 1.0,
+   "mean_payload_bytes": 382,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "start_s": 42451.0,
+      "start_level_L": 7975.0,
+      "start_ec": 1.69625,
+      "start_ph": 6.194125,
+      "endpoint_mode": "FINAL_LEVEL",
+      "nutrient_mode": "EC_TARGET",
+      "ec_steps": [],
+      "ec_state": "EVAL",
+      "nutrients": "PENDING",
+      "fault_occurrence": null,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 84902
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "start_s": 162615.5,
+      "start_level_L": 7975.0,
+      "start_ec": 2.0821875,
+      "start_ph": 6.18275,
+      "endpoint_mode": "FINAL_LEVEL",
+      "nutrient_mode": "EC_TARGET",
+      "ec_steps": [],
+      "ec_state": "EVAL",
+      "nutrients": "PENDING",
+      "fault_occurrence": null,
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 325231
+     }
+    }
+   ]
+  },
+  "REFILL_BATCH_ENDED": {
+   "count": 2,
+   "per_day": 1.0,
+   "mean_payload_bytes": 1468,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "batch_6cb81e5306f241ce988ae372f198a5b1",
+      "recipe": "demo-sim@v1",
+      "start_s": 42451.0,
+      "start_level_L": 7975.0,
+      "start_ec": 1.69625,
+      "start_ph": 6.194125,
+      "endpoint_mode": "FINAL_LEVEL",
+      "nutrient_mode": "EC_TARGET",
+      "ec_steps": [
+       {
+        "n": 1,
+        "ec_before": 1.69625,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 42451.5
+       },
+       {
+        "n": 2,
+        "ec_before": 1.6996875,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 43459.5
+       },
+       {
+        "n": 3,
+        "ec_before": 1.6996875,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 44319.0
+       },
+       {
+        "n": 4,
+        "ec_before": 1.6996875,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 45224.0
+       },
+       {
+        "n": 5,
+        "ec_before": 1.6996875,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 46108.5
+       }
+      ],
+      "ec_state": "EVAL",
+      "nutrients": "EC_TARGET_REACHED (1.78 mS/cm)",
+      "end_s": 46858.5,
+      "end_level_L": 15623.75,
+      "end_ec": 1.781875,
+      "end_ph": 6.584375,
+      "paths": {
+       "WATER": {
+        "name": "WATER",
+        "state": "DONE",
+        "result": "FINAL_LEVEL_REACHED",
+        "failed": false,
+        "delivered_L": 6335.469609375674,
+        "target_L": null,
+        "max_time_s": 7200.0,
+        "measured_by": "flow.FILL_MAIN",
+        "outputs": [
+         "valve.FILL_MAIN.cmd"
+        ]
+       },
+       "A": {
+        "name": "A",
+        "state": "DONE",
+        "result": "TARGET_REACHED",
+        "failed": false,
+        "delivered_L": 10.257458333333332,
+        "target_L": 10.0,
+        "max_time_s": 900.0,
+        "measured_by": "flow.TP_A",
+        "outputs": [
+         "pump.TP_A.cmd",
+         "valve.OUT_A.cmd"
+        ]
+       },
+       "B": {
+        "name": "B",
+        "state": "DONE",
+        "result": "TARGET_REACHED",
+        "failed": false,
+        "delivered_L": 10.257458333333332,
+        "target_L": 10.0,
+        "max_time_s": 900.0,
+        "measured_by": "flow.TP_B",
+        "outputs": [
+         "pump.TP_B.cmd",
+         "valve.OUT_B.cmd"
+        ]
+       }
+      },
+      "result": "COMPLETED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 93717
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "batch_id": "batch_98d921e2121f4f9495ecb7f2bff67c08",
+      "recipe": "demo-sim@v1",
+      "start_s": 162615.5,
+      "start_level_L": 7975.0,
+      "start_ec": 2.0821875,
+      "start_ph": 6.18275,
+      "endpoint_mode": "FINAL_LEVEL",
+      "nutrient_mode": "EC_TARGET",
+      "ec_steps": [
+       {
+        "n": 1,
+        "ec_before": 1.6996875,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 164635.0
+       },
+       {
+        "n": 2,
+        "ec_before": 1.6996875,
+        "a_L": 10.0,
+        "b_L": 10.0,
+        "at_s": 165954.0
+       }
+      ],
+      "ec_state": "EVAL",
+      "nutrients": "EC_TARGET_REACHED (1.79 mS/cm)",
+      "end_s": 167061.5,
+      "end_level_L": 15507.5,
+      "end_ec": 1.7921875,
+      "end_ph": 6.839875,
+      "paths": {
+       "WATER": {
+        "name": "WATER",
+        "state": "DONE",
+        "result": "FINAL_LEVEL_REACHED",
+        "failed": false,
+        "delivered_L": 6399.638281250699,
+        "target_L": null,
+        "max_time_s": 7200.0,
+        "measured_by": "flow.FILL_MAIN",
+        "outputs": [
+         "valve.FILL_MAIN.cmd"
+        ]
+       },
+       "A": {
+        "name": "A",
+        "state": "DONE",
+        "result": "TARGET_REACHED",
+        "failed": false,
+        "delivered_L": 10.257458333333332,
+        "target_L": 10.0,
+        "max_time_s": 900.0,
+        "measured_by": "flow.TP_A",
+        "outputs": [
+         "pump.TP_A.cmd",
+         "valve.OUT_A.cmd"
+        ]
+       },
+       "B": {
+        "name": "B",
+        "state": "DONE",
+        "result": "TARGET_REACHED",
+        "failed": false,
+        "delivered_L": 10.257458333333332,
+        "target_L": 10.0,
+        "max_time_s": 900.0,
+        "measured_by": "flow.TP_B",
+        "outputs": [
+         "pump.TP_B.cmd",
+         "valve.OUT_B.cmd"
+        ]
+       }
+      },
+      "result": "COMPLETED",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 334123
+     }
+    }
+   ]
+  },
+  "REFILL_REARMED": {
+   "count": 2,
+   "per_day": 1.0,
+   "mean_payload_bytes": 136,
+   "samples": [
+    {
+     "actor": "controller",
+     "payload": {
+      "level_L": 15622.5,
+      "rearm_above_L": 9000.0,
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 93718
+     }
+    },
+    {
+     "actor": "controller",
+     "payload": {
+      "level_L": 15506.25,
+      "rearm_above_L": 9000.0,
+      "recipe": "demo-sim@v1",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 334124
+     }
+    }
+   ]
+  },
+  "RECIPE_VALIDATED": {
+   "count": 1,
+   "per_day": 0.5,
+   "mean_payload_bytes": 130,
+   "samples": [
+    {
+     "actor": "system",
+     "payload": {
+      "recipe": "demo-sim@v1",
+      "digest": "17cc31084891cf79",
+      "issues": [],
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 0
+     }
+    }
+   ]
+  },
+  "RECIPE_ACTIVATED": {
+   "count": 1,
+   "per_day": 0.5,
+   "mean_payload_bytes": 368,
+   "samples": [
+    {
+     "actor": "system",
+     "payload": {
+      "seq": 1,
+      "utc": "2026-10-12T23:34:40.742671+00:00",
+      "actor": "system",
+      "recipe": "demo-sim@v1",
+      "digest": "17cc31084891cf79",
+      "action": "ACTIVATE",
+      "previous": null,
+      "reason": "DEMO preset seeded for the simulation",
+      "applies": "next cycle or batch of each process; running operations keep their version",
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "tick": 0
+     }
+    }
+   ]
+  },
+  "RUN_STARTED": {
+   "count": 1,
+   "per_day": 0.5,
+   "mean_payload_bytes": 384,
+   "samples": [
+    {
+     "actor": "system",
+     "payload": {
+      "run_id": "run_cad67bce1e90453fada5e48f15d57f2f",
+      "seed": 1,
+      "config_id": "installation-48",
+      "config_version": "2026-10-12.2",
+      "source": "TWIN",
+      "dt_s": 0.5,
+      "provenance": "DEMO",
+      "topology": "installation",
+      "recipe": "demo-sim@v1",
+      "recipe_digest": "17cc31084891cf79",
+      "stocks": {
+       "A": "NOT_PREPARED",
+       "B": "NOT_PREPARED",
+       "ACID": "NOT_PREPARED"
+      },
+      "control_period_s": 0.5,
+      "tick": 0
+     }
+    }
+   ]
+  }
+ }
+}

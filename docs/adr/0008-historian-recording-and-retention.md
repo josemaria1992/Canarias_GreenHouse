@@ -311,3 +311,19 @@ about 57 GiB, which is why backups are compressed.
 
 Retain the proposed 10 GiB main-database allowance for evaluation, without shortening the approved
 one-year window or enabling five-minute recording.
+
+## Addendum 2026-10-13: the process workload (OP-06)
+
+The measurement was repeated with the events and commands of the process controllers added at the
+rates of the simulated installation with irrigation, return, refill and acid all in AUTO around the
+clock (about 7,900 events and 1,300 commands a day on top of the traffic above;
+`operations/measurements/2026-10-13-measurements.md`). Growth rose to 28.6 MB a day: 9.71 GiB at
+365 days, 0.55 GiB per compressed backup, a restore drill needing 11.7 GiB of scratch space, and
+free space once the window is full of about 7.7 GiB instead of 10 GiB.
+
+Both allowances still hold for this worst case: the database leaves 0.28 GiB (about 3%) of its
+10 GiB, and eight backups take about 4.4 GiB of 4.5 GiB. The margin is thin, so the decision stays as
+accepted (10 GiB, 365 days, 60 s) and nothing was changed; the projection on the controller in
+CP-00, with the owner's real irrigation schedule, decides whether the owner wants to raise the
+allowances into the 3.8 GiB left unallocated. `STORAGE_CAPACITY` warns if the 365-day projection
+exceeds the allowance.
