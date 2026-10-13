@@ -156,7 +156,8 @@
       return;
     }
     const t = st.twin, c = st.controller;
-    $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · controller ${c.state}/${c.phase}` +
+    const ctl = isInst() ? `processes ${c.state} · recipe ${c.recipe || "none active"}` : `controller ${c.state}/${c.phase}`;
+    $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${ctl}` +
       ` · twin ${t.activity} ${t.speed}× sim ${t.sim_s.toFixed(1)} s · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
       ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
   }
@@ -165,6 +166,7 @@
   const VIEWS = {};
 
   function isReal() { return S.status && S.status.profile !== "SIMULATED"; }
+  function isInst() { return S.status && S.status.topology === "installation"; }
   function devTable(st) {
     return h("table", null, h("thead", null, h("tr", null, ["Device", "Bus/address", "Health", "Failures", "Last error", "Last OK age"].map(x => h("th", null, x)))),
       h("tbody", null, Object.entries(st.devices).map(([k, d]) => h("tr", null, h("td", null, k), h("td", null, d.bus_id + " @" + d.address),
@@ -369,9 +371,105 @@
     mount("v-io", panel, groups);
   }
 
+  // ------------------------------------------------ installation topology (simulation; interim pages)
+  function procPill(s) { return pill(s, s === "FAULT_LOCKOUT" ? "bad" : s === "AUTO" ? "ok" : s === "MANUAL" ? "warn" : ""); }
+  function instWaterCard(pl) {
+    return h("div", { class: "card" }, h("h2", null, "Water (simulated installation)"), h("dl", { class: "kv" },
+      ...Object.entries(pl.tanks).flatMap(([k, t]) => [h("dt", null, k), h("dd", null, `${t.volume_L.toFixed(0)} / ${t.capacity_L} L`)]),
+      ...Object.entries(pl.flows_L_min).filter(([, q]) => q > 0.05).flatMap(([k, q]) => [h("dt", null, "Flow " + k), h("dd", null, q.toFixed(1) + " L/min")]),
+      h("dt", null, "pH / EC (probe, synthetic)"), h("dd", null, `${num(pl.chemistry.probe_ph)} / ${num(pl.chemistry.probe_ec_mS_cm)} mS/cm`),
+      h("dt", null, "Ledger residual"), h("dd", null, pl.ledger.residual_L.toExponential(2) + " L")),
+      h("p", { class: "muted" }, "Sizes and equipment confirmed by the owner; dynamics, levels and chemistry are DEMO."));
+  }
+  async function instTwin() {
+    const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
+    if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
+    const tc = (action, extra) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), action);
+    const sel = h("select", { id: "scn" }, S.scenarios.map(s => h("option", { value: s.name }, s.name)));
+    const fsel = (kind, ids, faults) => {
+      const id = h("select", null, ids.map(x => h("option", { value: x }, x)));
+      const f = h("select", null, h("option", { value: "" }, "no fault"), faults.map(x => h("option", { value: x }, x)));
+      return h("div", { class: "row" }, h("span", null, kind), id, f, cbtn("Apply", () => act("POST", "/api/twin/actuator-fault", { kind, ident: id.value, fault: f.value || null }, "fault applied")));
+    };
+    const lg = pl.ledger;
+    mount("v-twin",
+      h("div", { class: "card" }, h("div", { class: "row" },
+        cbtn("Run", () => tc("run")), cbtn("Pause", () => tc("pause")), cbtn("Step", () => tc("step")),
+        ...[1, 10, 60].map(sp => cbtn(sp + "×", () => tc("speed", { speed: sp }), tw.speed === sp ? "" : "ghost")),
+        cbtn("Reset run", () => confirm("Start a new simulation run? History remains.") && tc("reset"), "ghost"),
+        h("span", { class: "muted" }, `${tw.activity} · ${tw.speed}× · t=${sn.sim_s.toFixed(1)} s · tick ${sn.tick}`)),
+        h("div", { class: "row" }, h("label", null, "Scenario preset", sel), cbtn("Load scenario (new run)", () => act("POST", "/api/twin/scenario", { name: sel.value }, "scenario loaded")),
+          h("span", { class: "muted" }, tw.scenario ? "Active: " + tw.scenario : ""))),
+      h("div", { class: "grid" }, instWaterCard(pl),
+        h("div", { class: "card" }, h("h3", null, "Equipment (requested / actual)"), h("dl", { class: "kv" },
+          h("dt", null, "Drive"), h("dd", null, `run ${pl.drive.run_requested ? "ON" : "OFF"}, speed ${(pl.drive.speed * 100).toFixed(0)} %${pl.drive.tripped ? " TRIPPED: " + pl.drive.tripped : ""}`),
+          ...Object.entries(pl.contactors).flatMap(([k, c]) => [h("dt", null, "Contactor " + k), h("dd", null, `${c.requested ? "ON" : "OFF"} / ${c.closed ? "closed" : "open"}${c.fault ? " FAULT " + c.fault : ""}`)]),
+          ...Object.entries(pl.pumps).flatMap(([k, p]) => [h("dt", null, "Pump " + k), h("dd", null, `${p.requested ? "ON" : "OFF"} / ${(p.speed * 100).toFixed(0)} %${p.fault ? " FAULT " + p.fault : ""}`)]),
+          ...Object.entries(pl.valves).flatMap(([k, v]) => [h("dt", null, "Valve " + k), h("dd", null, `${v.requested ? "OPEN" : "CLOSED"} / ${(v.position * 100).toFixed(0)} %${v.fault ? " FAULT " + v.fault : ""}`)]))),
+        h("div", { class: "card" }, h("h3", null, "Volume ledger (L)"), h("dl", { class: "kv" },
+          ...[["initial stored", lg.initial_stored_L], ["stored", lg.stored_L], ["consumption", lg.consumption_L], ["spill", lg.spill_total_L],
+             ["drained to sump", lg.drained_to_sump_L], ["returned to main", lg.returned_to_main_L], ["residual", lg.residual_L]]
+            .flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: "mono" }, k === "residual" ? v.toExponential(3) : v.toFixed(1))]))),
+        h("div", { class: "card" }, h("h3", null, "Actuator faults (change plant dynamics)"),
+          fsel("drive", ["MAIN"], ["TRIP", "NO_RUN", "STUCK_ON"]),
+          fsel("contactor", Object.keys(pl.contactors), ["WELDED", "NO_CLOSE"]),
+          fsel("pump", Object.keys(pl.main_pumps).concat(Object.keys(pl.pumps)), ["NO_RUN", "NO_FLOW", "STUCK_ON"]),
+          fsel("valve", Object.keys(pl.valves), ["STUCK_CLOSED", "STUCK_OPEN"]),
+          fsel("mains", ["MAINS"], ["NO_SUPPLY"]), fsel("safety", ["CHAIN"], ["CHAIN_OPEN"]),
+          h("p", { class: "muted" }, "Main pumps accept NO_RUN and NO_FLOW only. Sensor overrides are on the I/O test bench."))));
+  }
+  async function instControl() {
+    const pr = await api("GET", "/api/processes");
+    const pc = can("process_control");
+    const pbtn = (label, onclick, cls, perm) => h("button", { class: "cmd small " + (cls || ""), onclick, disabled: !can(perm || "process_control") }, label);
+    const setState = (pid, target) => act("POST", `/api/processes/${pid}/state`, { target }, `${pid} → ${target}`);
+    const rows = pr.order.map(pid => {
+      const p = pr.processes[pid];
+      return h("tr", null, h("td", null, h("strong", null, p.title || pid), h("div", { class: "muted mono" }, pid)),
+        h("td", null, procPill(p.state)), h("td", null, p.phase),
+        h("td", null, p.fault_reason ? h("span", { class: "error" }, p.fault_reason + (p.fault_detail ? ": " + p.fault_detail : "")) : (p.inhibit || "")),
+        h("td", { class: "muted" }, p.next || ""),
+        h("td", null, pbtn("AUTO", () => setState(pid, "AUTO")), " ", pbtn("MANUAL", () => setState(pid, "MANUAL"), "ghost"), " ",
+          pbtn("STOP", () => setState(pid, "STOPPED"), "danger"), " ",
+          p.state === "FAULT_LOCKOUT" ? pbtn("Reset", () => act("POST", `/api/processes/${pid}/reset`, undefined, "reset"), "ghost", "lockout_reset") : null));
+    });
+    const stocks = Object.entries(pr.stocks).map(([s, r]) => h("tr", null, h("td", null, s),
+      h("td", null, pill(r.status, r.status === "PREPARED" ? "ok" : "warn")),
+      h("td", { class: "muted" }, r.actor ? `${r.actor} ${fmtTime(r.utc)}${r.level_at_ack_L != null ? " at " + r.level_at_ack_L.toFixed(0) + " L" : ""}` : ""),
+      h("td", { class: "muted" }, r.reason || r.note || ""),
+      h("td", null, pbtn("Acknowledge prepared", () => { const note = prompt(`Stock ${s}: what was prepared (recorded)?`); if (note != null) act("POST", `/api/stocks/${s}/acknowledge`, { note }, "acknowledged"); }))));
+    mount("v-control",
+      h("div", { class: "card" }, h("h2", null, "Process controllers (simulation only)"),
+        h("p", null, "Active recipe: ", h("strong", null, pr.recipe.active || "none"), pr.recipe.provenance ? " · " + pr.recipe.provenance : ""),
+        h("table", null, h("thead", null, h("tr", null, ["Process", "State", "Phase", "Fault / inhibit", "Next", ""].map(x => h("th", null, x)))), h("tbody", null, rows)),
+        h("div", { class: "row" }, pbtn("Stop all processes", () => confirm("Stop every process?") && act("POST", "/api/processes/stop-all", { reason: "operator stop all" }, "stop all"), "danger"),
+          pc ? null : h("span", { class: "muted" }, "Process control needs the operator role.")),
+        h("p", { class: "muted" }, "Physical AUTO does not exist in this release. Bounded MANUAL operations and recipe editing are available through the API; their pages follow.")),
+      h("div", { class: "card" }, h("h2", null, "Stock preparation (operator acknowledgement)"),
+        h("table", null, h("tbody", null, stocks)),
+        h("p", { class: "muted" }, "Water filling never marks a stock as prepared. A fill or an unexplained level rise invalidates the acknowledgement.")),
+      h("div", { class: "card" }, h("h2", null, "Not verified on any physical profile"),
+        h("ul", null, (pr.recipe.physical_readiness || []).map(x => h("li", null, x)))));
+  }
+
   VIEWS.overview = async function () {
     if (isReal()) return hwOverview();
     const st = S.status, tw = await api("GET", "/api/twin"), pl = tw.snapshot.plant;
+    if (isInst()) {
+      const al = await api("GET", "/api/alarms");
+      return mount("v-overview", h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
+          h("dt", null, "Backend"), h("dd", null, st.profile, " ", pill("physical writes impossible", "ok")),
+          h("dt", null, "Recipe"), h("dd", null, st.controller.recipe || "none active"),
+          ...Object.entries(st.controller.processes).flatMap(([k, p]) => [h("dt", null, k), h("dd", null, procPill(p.state), " ", p.phase,
+            p.fault_reason ? " — " + p.fault_reason : p.inhibit ? " — " + p.inhibit : "")]),
+          h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad")),
+          h("dt", null, "Live control"), h("dd", null, st.live_control))),
+        instWaterCard(pl),
+        h("div", { class: "card" }, h("h2", null, `Active alarms (${al.open.length})`),
+          al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
+            h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"), h("td", null, o.acknowledged ? "ack" : "unack"))))) : h("p", { class: "muted" }, "None"))));
+    }
     const devRows = Object.entries(st.devices).map(([k, d]) => h("tr", null, h("td", null, k), h("td", null, d.bus_id + " @" + d.address),
       h("td", null, d.online ? pill("online", "ok") : pill("FAILED", "bad")), h("td", { class: "mono" }, d.last_error || ""),
       h("td", null, d.last_ok_utc ? age(d.last_ok_utc) : "never")));
@@ -459,6 +557,7 @@
 
   VIEWS.twin = async function () {
     if (isReal()) return mount("v-twin", h("div", { class: "card" }, "The digital twin is available in the simulation profile only."));
+    if (isInst()) return instTwin();
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
     const tc = (action, extra) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), action);
@@ -545,6 +644,7 @@
   // ------------------------------------------------ control
   VIEWS.control = async function () {
     if (isReal()) return mount("v-control", h("div", { class: "card" }, "The controller exists only in simulation in this release."));
+    if (isInst()) return instControl();
     const c = await api("GET", "/api/controller"), d = await api("GET", "/api/points");
     const st = s => act("POST", "/api/controller/state", { target: s }, s);
     const mapped = d.devices.flatMap(g => g.points).filter(p => p.kind === "DO" && p.mapping);

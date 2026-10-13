@@ -1,5 +1,10 @@
 # Causal process twin: equations, assumptions, AUTO sequence
 
+> **Scope:** this document describes the legacy `demo` topology (the 24/48-point demo fixtures kept
+> from v0.1). The confirmed installation (20,000 L main tank, three stock tanks, sump, shared drive,
+> 13 channels) is the `installation` topology: see `installation_model.md`, `signal_budget.md`,
+> `cause_and_effect.md`, ADR-0013 and ADR-0014.
+
 **Every number in this document is a DEMO proposal** (brief §7). None is an engineering fact about
 the AquaCrop greenhouse. No pump curve, pressure, pipe, chemistry, EC/pH or crop-uptake model
 exists. The production topology is `TBD — requires operator confirmation`.

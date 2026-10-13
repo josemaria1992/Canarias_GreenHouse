@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased (2026-10-12): installation model and process controllers (ADR-0013, ADR-0014)
+
+Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists and no flag enables it.
+
+### Added
+- `installation` twin topology and the `installation-48` configuration: the owner's installation
+  (20,000 L main tank, stock tanks A, B and acid of 5,000 L, a sump of about 5,000 L, two main pumps
+  on one shared drive selected by K1/K2, two return pumps, three transfer pumps, nine valve duties,
+  13 channels with retained water and 52 hand-adjusted outlets). Facts are OWNER_CONFIRMED; every
+  dynamic, switch level and span is DEMO.
+- A volume ledger over every tank, channel and pipe (additions, consumption, spill, unmet demand)
+  checked every scan, and a labelled synthetic pH/EC fixture (`synthetic-carbonate-ec-v1`) for
+  qualitative controller tests. It is not a calibrated chemical model.
+- A proposed 48-point allocation (`docs/model/signal_budget.md`): the drive run command is bound to
+  a drive adapter (SIMULATED in the twin, NOT_CONFIGURED on hardware) because 16 DO are one short;
+  missing feedbacks are handled explicitly and listed with owner options.
+- Seven process controllers (irrigation, return, refill, acid, three stock fills) with their own
+  modes, phases, permissives and fault latches; a supervisor and an equipment arbiter; separate
+  acknowledge, reset and restart; bounded MANUAL operations; raw DO commands refused on the twin.
+- Irrigation alternates P1/S1 and P2/S2 with the owner's changeover sequence and holds the valve and
+  selection when the drive does not confirm stop. Refill latches one batch per low level and runs
+  water and nutrients concurrently (fixed volumes with EC validation, or EC target keeping the A:B
+  ratio). Acid lowers pH only, in bounded steps with settling and response checks. Return follows
+  sump thresholds and the main-tank inhibit, with an alarm when the sump is high and the main tank
+  full.
+- Versioned recipes (draft, validate, activate, roll back) with units in field names; a labelled
+  DEMO preset for simulation only (deliberately not the owner's illustrative example). Operator
+  stock-preparation acknowledgements, invalidated by a fill or an uncovered level rise.
+- Historian schema v3 (`recipes`, `recipe_activations`, `stock_readiness`), migrated after a verified
+  backup. API: `/api/processes`, `/api/stocks`, `/api/recipes`; permissions `PROCESS_CONTROL`,
+  `RECIPE_EDIT` (operator) and `RECIPE_ACTIVATE` (administrator, a changeable default).
+- 40 installation scenarios; `demo verify --config installation-48` (42 checks); PH and PC
+  acceptance tests; CI and the installed-wheel check run the installation verification.
+- Docs: ADR-0013, ADR-0014, `model/installation_model.md`, `model/signal_budget.md`,
+  `model/cause_and_effect.md`.
+
+### Changed
+- The simulation runtime acquires once per control period for the installation topology (the demo
+  topology still scans every tick); configuration lookups are cached.
+
+### Fixed (owner review of 2026-10-13)
+- R3: irrigation checks the main level (low-low switch and the dry-run guard) during the valve lead
+  and re-checks the start permissives in the scan that requests drive RUN. A loss there locks out
+  (`MAIN_LOW_LOW` or `START_INHIBITED`) without the drive ever being started.
+- R4: EC-target batch maxima count measured delivery, not commanded step sizes. Paths now integrate
+  the meter for as long as they hold the valve (start-up flow was previously not counted); each step
+  keeps commanded and measured quantities; the next step is shortened by the largest coast measured in
+  the batch; a measured total above a maximum (tolerance 0 L) is an overrun: dosing stops, alarm
+  `REFILL_EC_LIMIT_EXCEEDED`, batch `OUT_OF_SPEC`.
+- R2: an unusable EC probe during an active EC-target A/B step stops both nutrient paths in the same
+  scan (previously only after the step completed), records the measured delivery and the reason, and
+  no further step runs in that batch even if the probe returns. The batch keeps its first stop reason.
+  Second review: the EC check runs before the paths advance, so a step whose valve is still opening
+  never sends its pump ON (the audit showed ON then OFF in the same scan); regressions read the
+  command audit.
+
 ## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 
 ### Added

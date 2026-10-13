@@ -1,4 +1,4 @@
-# Handover: AquaCrop platform 0.2.0.dev0 (2026-10-11, historian update, quarantine and off-device backups 2026-10-12)
+# Handover: AquaCrop platform 0.2.0.dev0 (2026-10-11; historian, quarantine, off-device backups and the installation model 2026-10-12)
 
 ## What works (software, verified on a desktop)
 
@@ -31,6 +31,18 @@
   the cloud copy into SD scratch space, and pruning only after an administrator confirms the copy
   policy. Shipped disabled until the card and the account/folder are confirmed (ADR-0012,
   `operations/offsite-backups.md`).
+
+- **Installation model and process controllers (2026-10-12, pre-hardware stages 1 and 2,
+  simulation only)**: `installation-48` simulates the confirmed installation (20,000 L main tank,
+  stock tanks A, B and acid, the sump, two main pumps on one shared drive, return and transfer
+  pumps, 13 channels with retained water and hand-set outlets) with a volume ledger and a labelled
+  synthetic pH/EC fixture. Seven process controllers run together under a supervisor and an
+  equipment arbiter: irrigation alternates P1/S1 and P2/S2 with the verified changeover, refill
+  latches one batch per low level and runs water and nutrients concurrently, acid lowers pH in
+  bounded steps, return follows the sump, and stock tanks fill on request. Recipes are versioned and
+  activated by an administrator; stock preparation is an operator acknowledgement. 40 scenarios
+  cover normal operation and faults (ADR-0013, ADR-0014, `model/installation_model.md`,
+  `model/signal_budget.md`, `model/cause_and_effect.md`). There is no physical AUTO.
 
 ## What changed from v0.1
 
@@ -79,11 +91,20 @@ accepted by the owner on 2026-10-12 20:04 UTC.
    `operations/offsite-backups.md` sections 1 and 3.1.
 2. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
    future-dated records are now resolved by the administrator's quarantine (ADR-0011).
-3. Production facts still `TBD`: hydraulic topology, wiring/physical mapping (also unblocks shadow
-   mode), VFD interface, probes and calibration, recipes, safe-state/cause-and-effect matrix,
-   physical alarm severities, role assignments and remote rights, OS update policy.
-4. The supporting files named in the brief (`ACCEPTANCE_TEST_PLAN.md` and others) were never
-   supplied. The acceptance IDs here are this project's own.
+3. Production facts still `TBD`: wiring/physical mapping (also unblocks shadow mode), VFD
+   interface, probes and calibration, production recipe values, mixing method, physical alarm
+   severities, role assignments and remote rights, OS update policy. The installation's sizes and
+   equipment are confirmed (2026-10-12).
+4. **48-point allocation (ADR-0013, `model/signal_budget.md`)**: the processes need 17 outputs and
+   the modules have 16. Choose one: confirm VFD control over Modbus or a drive terminal (the drive
+   run command then goes through the drive adapter), or add a third relay module (drive run, sector
+   valve closed limits and stock valve feedback). Confirm or change the proposed allocation and the
+   cause-and-effect table (`model/cause_and_effect.md`).
+5. **Site time zone**: the configurations say `Europe/Stockholm` (the company office in Malmö). If the
+   controller sits in the Canary Islands it should be `Atlantic/Canary`. Not changed; please confirm.
+6. The original brief's `ACCEPTANCE_TEST_PLAN.md` was never supplied, so the milestone 1-4 IDs are
+   this project's own. The pre-hardware gates (PH, PC and the later UI, OP, BK, DL) come from the
+   owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` of 12 Oct 2026.
 
 ## Physical tests still required (milestone 5, none performed)
 

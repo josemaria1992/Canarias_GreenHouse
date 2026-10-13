@@ -14,3 +14,5 @@
 | 0010 | Polling instead of streams | accepted |
 | 0011 | Timestamp quarantine after a clock correction | accepted |
 | 0012 | SD-card daily backups and encrypted OneDrive copies | accepted, not activated |
+| 0013 | Full-installation twin, 48-point signal budget and the drive adapter | proposed |
+| 0014 | One controller per process, an arbiter, recipes with versions | proposed |
