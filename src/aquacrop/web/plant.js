@@ -105,14 +105,15 @@
         if (rf) e("text", { x, y: y + 36, "text-anchor": "middle", class: "small muted-t" }, short(rf, 0, ["open", "not open"]));
       });
     }
-    function pump(x, y, id, label, page, cmd, fb, extra) {
-      const rc = v(cmd), rf = fb ? v(fb) : null;
-      hot(page, `${label}: requested ${short(rc, 0)}${rf ? ", observed " + short(rf, 0, ["running", "stopped"]) : ""}`, () => {
+    function pump(x, y, id, label, page, cmd, fb, extra, words) {
+      // words: what the feedback observes ([on, off]); main pumps observe their contactor, not the motor
+      const rc = v(cmd), rf = fb ? v(fb) : null, w = words || ["run", "stop"];
+      hot(page, `${label}: requested ${short(rc, 0)}${rf ? ", observed " + short(rf, 0, words || ["running", "stopped"]) : ""}`, () => {
         e("circle", { cx: x, cy: y, r: 16, class: rf && rf.ok ? "equip-act" : "equip-unk", "fill-opacity": rf && rf.ok ? (rf.v ? 1 : 0.15) : null });
         e("circle", { cx: x, cy: y, r: 20, class: reqClass(cmd) + " hl" });
         e("text", { x, y: y + 4, "text-anchor": "middle", class: "small" }, id);
         e("text", { x, y: y + 34, "text-anchor": "middle", class: "small muted-t" },
-          `req ${short(rc, 0)}${rf ? " · " + short(rf, 0, ["run", "stop"]) : ""}${extra || ""}`);
+          `req ${short(rc, 0)}${rf ? " · " + short(rf, 0, w) : ""}${extra || ""}`);
       });
     }
     function flowText(x, y, n, anchor) {
@@ -152,7 +153,7 @@
     mps.forEach((mp, i) => {
       const y = 290 + i * 120, k = "K" + (i + 1);
       pipe(`M700 410 V${y} H740`, null);
-      pump(760, y, mp, `Main pump ${mp} (contactor ${k})`, "#main-pumps", `contactor.${mp}.cmd`, `contactor.${mp}.closed`, ` · ${k}`);
+      pump(760, y, mp, `Main pump ${mp} (contactor ${k})`, "#main-pumps", `contactor.${mp}.cmd`, `contactor.${mp}.closed`, "", [`${k} closed`, `${k} open`]);
       pipe(`M780 ${y} H830`, null);
     });
     pipe("M830 200 V440", null);
@@ -257,9 +258,11 @@
             h("td", null, t.reason), h("td", null, t.actor), h("td", { class: "mono" }, t.recipe || "")))))));
   }
   function summary(r) {
-    const skip = new Set(["events", "paths", "ec_steps", "doses"]);
+    // a readable line (the full record is in the batch table and Alarms & events)
+    const skip = new Set(["events", "paths", "ec_steps", "doses", "kind", "batch_id", "run_id", "cycle_id"]);
+    const label = k => k.replace(/^ph_/, "pH ").replace(/^ec_/, "EC ").replace(/_L$/, " (L)").replace(/_s$/, " (s)").replace(/_/g, " ");
     return Object.entries(r).filter(([k, x]) => !skip.has(k) && x != null && typeof x !== "object").slice(0, 8)
-      .map(([k, x]) => `${k}=${typeof x === "number" ? (Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(2)) : x}`).join(" ");
+      .map(([k, x]) => `${label(k)} ${typeof x === "number" ? (Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(2)) : x}`).join(" · ");
   }
   function table(hdr, rows) {
     return h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows));
@@ -437,7 +440,7 @@
     const cards = [
       h("div", { class: "card" }, h("h2", null, "Nutrient stocks and acid"),
         table(["Tank", "Level", "Preparation", "Transfer pump", "Valves", ""], stockRows(P, PR)),
-        h("p", { class: "muted" }, "Stocks are prepared by hand. Water filling never marks a stock prepared; a fill, a level rise above the acknowledged level or an invalidation revokes it. Stock low switches are not in the 48-point proposal: the reserve comes from the level transmitter only.")),
+        h("p", { class: "muted" }, "Stocks are prepared by hand. Water filling never marks a stock prepared; a fill, a level rise above the acknowledged level or an invalidation revokes it. There are no stock low switches in the point allocation (the 32 added IO 8CH channels stay unassigned): the reserve comes from the level transmitter only.")),
       h("div", { class: "card" }, tabs,
         h("div", { class: "grid" },
           h("div", null, h("h3", null, `${name}: ${P.layout.tanks_L[tab]} L`), kvRows([["Level", obs(P, `tank.${tab}.level`, 0)],
@@ -528,7 +531,7 @@
         ["Flow", obs(P, `flow.${id}`, 1)], ["Pressure", obs(P, `pressure.${id}`, 2)], ["AUTO pump", s.auto_pump],
         PR ? ["Recipe duration", step.length ? step.map(x => x.duration_s + " s").join(", ") : "not in the sequence"] : null,
         ir ? ["Now", ir.sector === id ? `${ir.phase}, ${num(ir.irrigated_s, 0)} s irrigated` : "not irrigating"] : null]),
-        h("p", { class: "muted" }, "No closed-limit point in the 48-point proposal: closure is the open limit released and no measured flow (weaker evidence).")),
+        h("p", { class: "muted" }, "No closed-limit point in the point allocation (the 32 added IO 8CH channels stay unassigned): closure is the open limit released and no measured flow (weaker evidence).")),
       h("div", { class: "card" }, h("h2", null, "Channels"),
         h("p", null, `Channels ${s.channels.join(", ")}: about ${ch.length_m} × ${ch.width_m} × ${ch.height_m} m, ${ch.retained_depth_m} m of water retained (${num(ch.retained_L, 0)} L each, ${num(ch.retained_L * s.channels.length, 0)} L in this sector).`),
         h("p", null, `${P.layout.outlets_per_channel} outlets per channel (${P.layout.outlets_per_channel * s.channels.length} here), adjusted by hand. They are not electric valves and are not observed.`),
@@ -563,11 +566,18 @@
     cur[ks[ks.length - 1]] = val;
   }
   const GROUPS = [["main", "Main tank levels"], ["refill", "Refill"], ["acid", "Acid dosing"], ["irrigation", "Irrigation"], ["return", "Drainage return"], ["stock_fill", "Stock fills"]];
+  let recipesKey = null;
   async function recipes() {
     if (U.isReal()) return mount("v-plant", h("div", { class: "card" }, h("h2", null, "Recipes"),
       h("p", null, pill("NOT AVAILABLE", "warn"), " Recipes drive the simulated process controllers only; a hardware profile has none in this release (ADR-0009).")));
     const R = await api("GET", "/api/recipes");
     const E = S.recipeEdit;
+    // nothing live on this page: rebuild it only when the recipes or the draft being edited changed, so a
+    // button is never replaced under the pointer while the owner clicks it
+    // (the fields themselves write into the draft: only a new, discarded or re-shaped draft needs a rebuild)
+    const key = JSON.stringify([R, E && [E.recipe_id, E.version, E.from, ((E.body.irrigation || {}).sequence || []).length], S.perms]);
+    if (key === recipesKey && document.getElementById("v-plant").dataset.view === "recipes") return;
+    recipesKey = key;
     const statusPill = st => pill(st, st === "ACTIVE" ? "ok" : st === "VALIDATED" ? "" : st === "DRAFT" ? "warn" : "");
     const edit = (rec, asNew) => {
       S.recipeEdit = { recipe_id: asNew ? "" : rec.recipe_id, name: asNew ? "" : rec.name, version: !asNew && rec.status === "DRAFT" ? rec.version : null,
@@ -596,6 +606,15 @@
     kids.push(h("div", { class: "card" }, h("h2", null, "Activation log"), table(["Time", "Action", "Recipe", "By", "Reason"], R.activations.slice().reverse().map(a => h("tr", null,
       h("td", null, fmtTime(a.utc)), h("td", null, a.action), h("td", { class: "mono" }, a.recipe + (a.previous ? " (was " + a.previous + ")" : "")), h("td", null, a.actor || ""), h("td", null, a.reason || ""))))));
     mount("v-plant", kids);
+  }
+  // the sections the user opened stay open when the page refreshes
+  function keepOpen(g, d) {
+    d.addEventListener("toggle", () => {
+      const o = new Set(S.recipeOpen || ["main", "refill"]);
+      d.open ? o.add(g) : o.delete(g);
+      S.recipeOpen = [...o];
+    });
+    return d;
   }
   function editor(R, E) {
     const groups = {};
@@ -633,10 +652,10 @@
       h("h2", null, E.version != null ? `Editing draft ${E.recipe_id}@v${E.version}` : `New draft from ${E.from}`),
       h("div", { class: "row" }, h("label", null, "Recipe id", rid), h("label", null, "Name", nm)),
       h("p", { class: "muted" }, "Units are part of every field. Saving checks types; Validate checks ranges, required fields for the chosen modes and ordered thresholds. Nothing here is a production value until you set it."),
-      GROUPS.filter(([g]) => groups[g]).map(([g, title]) => h("details", { open: g === "main" || g === "refill" }, h("summary", null, title),
+      GROUPS.filter(([g]) => groups[g]).map(([g, title]) => keepOpen(g, h("details", { open: (S.recipeOpen || ["main", "refill"]).includes(g) }, h("summary", null, title),
         table(["Field", "Value", "Unit", "Allowed"], groups[g].map(field)),
         g === "irrigation" ? [h("h3", null, "Sequence (one AUTO cycle)"), table(["#", "Sector", "Duration", ""], seqRows),
-          h("button", { class: "small ghost", onclick: () => { seq.push({ sector: R.sectors[0], duration_s: 300 }); U.refresh(); } }, "Add step")] : null)),
+          h("button", { class: "small ghost", onclick: () => { seq.push({ sector: R.sectors[0], duration_s: 300 }); U.refresh(); } }, "Add step")] : null))),
       h("div", { class: "row" }, pbtn("Save draft", save, "", "recipe_edit"), h("button", { class: "small ghost", onclick: () => { S.recipeEdit = null; U.refresh(); } }, "Discard changes")));
   }
 

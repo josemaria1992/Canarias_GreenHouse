@@ -45,6 +45,7 @@ th { color: var(--muted); font-weight: 600; }
 .q-OVERRIDDEN { background: #fde7c4; color: #6b3f00; }
 .q-UNAVAILABLE, .q-INVALID, .q-STALE { background: #f7d4d1; color: #7a1a14; }
 .q-UNSCALED { background: #e2e6f0; color: #2c3a5a; }
+.q-UNASSIGNED { background: transparent; color: #4a5568; border: 1px dashed #8a94a6; }
 .origin { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; border: 1px solid currentColor; }
 .origin-SIMULATED { color: var(--sim); }
 .origin-REAL { color: var(--real); }
@@ -93,6 +94,7 @@ details summary { cursor: pointer; color: var(--muted); }
 .tabs .tab { background: transparent; color: var(--ink); border: 1px solid var(--line); border-bottom: none; border-radius: 6px 6px 0 0; }
 .tabs .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .diagram .hot { cursor: pointer; outline: none; }
+.diagram .hot .tank-wall, .diagram .hot .equip-req { pointer-events: all; }   /* the whole tank or symbol opens its page, not only the drawn water or outline */
 .diagram .hot:hover .hl, .diagram .hot:focus .hl { stroke: var(--accent); stroke-width: 3; }
 .diagram .hot:focus-visible .hl { stroke-dasharray: none; stroke-width: 4; }
 .diagram .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }

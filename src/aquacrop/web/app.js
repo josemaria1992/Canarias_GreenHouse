@@ -34,10 +34,43 @@
     if (v) { edits.seq += 1; edits.id = v.id; }
   }, true);
   let rendering = null;          // the edit count when the current refresh started
+  let renderingView = null;      // the page the current refresh is drawing (the user may already have moved on)
+  // Fields and choices the user has changed survive the once-a-second rebuild of the page, so a pump picked
+  // in a form is still the pump that the button next to it sends, even after the user clicked elsewhere.
+  document.addEventListener("input", e => { if (e.target && e.target.dataset) e.target.dataset.dirty = "1"; }, true);
+  document.addEventListener("change", e => { if (e.target && e.target.dataset) e.target.dataset.dirty = "1"; }, true);
+  function fieldKeys(el) {
+    const seen = {};
+    return [...el.querySelectorAll("input,select,textarea")].map(f => {
+      const card = f.closest(".card"), row = f.closest("tr"), lab = f.closest("label");
+      const sig = [f.tagName, f.type, f.placeholder, f.getAttribute("aria-label"), f.name,
+        card && card.querySelector("h2") ? card.querySelector("h2").textContent : "",
+        row && row.querySelector("td") ? row.querySelector("td").textContent : "",
+        lab ? lab.firstChild && lab.firstChild.textContent : ""].join("|");
+      seen[sig] = (seen[sig] || 0) + 1;
+      return [sig + "#" + seen[sig], f];
+    });
+  }
   function mount(id, ...kids) {
     const el = $(id);
     if (rendering !== null && edits.seq !== rendering && edits.id === id) return el;
-    el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false)); return el;
+    const view = renderingView || S.view;
+    if (view !== S.view) return el;      // the user moved to another page meanwhile: the next refresh draws that one
+    const keep = el.dataset.view === view ? new Map(fieldKeys(el).filter(([, f]) => f.dataset.dirty && f.type !== "file")
+      .map(([k, f]) => [k, f.type === "checkbox" || f.type === "radio" ? f.checked : f.value])) : new Map();
+    const same = el.dataset.view === view;
+    const opened = new Map(same ? [...el.querySelectorAll("details > summary")].map(x => [x.textContent, x.parentElement.open]) : []);
+    el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
+    el.dataset.view = view;
+    for (const x of el.querySelectorAll("details > summary")) if (opened.has(x.textContent)) x.parentElement.open = opened.get(x.textContent);
+    if (keep.size) for (const [k, f] of fieldKeys(el)) {
+      if (!keep.has(k)) continue;
+      const v = keep.get(k);
+      if (f.type === "checkbox" || f.type === "radio") f.checked = v;
+      else if (f.tagName !== "SELECT" || [...f.options].some(o => o.value === v)) f.value = v;
+      f.dataset.dirty = "1";
+    }
+    return el;
   }
   function toast(msg, bad) {
     const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
@@ -45,6 +78,10 @@
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), 5000);
   }
   function can(p) { return S.perms.includes(p); }
+  function simClock(sec) {          // simulated seconds since the run started, as h:mm:ss
+    const t = Math.max(0, Math.floor(sec)), hh = Math.floor(t / 3600), mm = Math.floor(t / 60) % 60, ss = t % 60;
+    return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  }
   function fmtTime(iso) {
     if (!iso) return "—";
     return new Intl.DateTimeFormat("sv-SE", { timeZone: S.tz, dateStyle: "short", timeStyle: "medium" }).format(new Date(iso));
@@ -73,7 +110,11 @@
   }
   async function act(method, path, body, okMsg) {
     if (S.stale) { toast("Connection stale: command not sent", true); return null; }
-    try { const r = await api(method, path, body); if (okMsg) toast(okMsg); refresh(); return r; }
+    try {
+      const r = await api(method, path, body); if (okMsg) toast(okMsg);
+      document.querySelectorAll("section [data-dirty]").forEach(f => { delete f.dataset.dirty; });   // done: the form starts afresh
+      refresh(); return r;
+    }
     catch (e) { toast(String(e.message || e), true); return null; }
   }
   function rid() { return "ui_" + crypto.getRandomValues(new Uint32Array(4)).join("").slice(0, 24); }
@@ -135,6 +176,9 @@
   }
   window.addEventListener("hashchange", route);
 
+  let pressed = 0;                   // time a pointer button went down; 0 once it is released
+  window.addEventListener("pointerdown", () => { pressed = Date.now(); }, true);
+  ["pointerup", "pointercancel", "blur"].forEach(ev => window.addEventListener(ev, () => { pressed = 0; }, true));
   let busy = false, again = false;
   async function refresh(queue = true) {
     if ($("app").classList.contains("hidden")) return;
@@ -142,13 +186,15 @@
     busy = true; again = false;
     rendering = edits.seq;
     const view = S.view;
+    renderingView = view;
     try {
       S.status = await api("GET", "/api/status");
       S.lastOk = Date.now(); S.cfgVersion = S.status.config_version; S.tz = S.status.timezone;
       setStale(false);
       renderBanner();
       const ae = document.activeElement;   // don't rebuild a view while the user is typing in it
-      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
+      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)
+        || Date.now() - pressed < 2000;     // nor between pressing and releasing a button: the click would be lost
       const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
       if (fn && !typing) await fn();
       else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
@@ -156,7 +202,7 @@
     } catch (e) {
       if (String(e.message) !== "not authenticated") setStale(true);
     } finally {
-      busy = false; rendering = null;
+      busy = false; rendering = null; renderingView = null;
       if (again) refresh();
     }
   }
@@ -180,7 +226,7 @@
     document.querySelectorAll('#nav a[href="#twin"]').forEach(a => a.classList.toggle("hidden", real));
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
     if (real) {
-      $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${st.physical_writes}` +
+      $("statusline").textContent = `AquaCrop ${st.software_version} · Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${st.physical_writes}` +
         ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
       if (window.AqPlant) window.AqPlant.buildNav();   // read-only process pages (ADR-0009 addendum)
       return;
@@ -188,9 +234,9 @@
     if (isInst() && window.AqPlant) window.AqPlant.buildNav();
     const t = st.twin, c = st.controller;
     const ctl = isInst() ? `processes ${c.state} · recipe ${c.recipe || "none active"}` : `controller ${c.state}/${c.phase}`;
-    $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${ctl}` +
-      ` · twin ${t.activity} ${t.speed}× sim ${t.sim_s.toFixed(1)} s · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
-      ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
+    $("statusline").textContent = `AquaCrop ${st.software_version} · Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${ctl}` +
+      ` · twin ${t.activity} ${t.speed}× · simulated time ${simClock(t.sim_s)} since the run started · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
+      ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · site clock ${fmtTime(new Date().toISOString())} ${S.tz}`;
   }
 
   // ---------------------------------------------------------------- views
@@ -484,7 +530,16 @@
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
     const tc = (action, extra) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), action);
-    const sel = h("select", { id: "scn" }, S.scenarios.map(s => h("option", { value: s.name }, s.name)));
+    // owner-tour start conditions first (they start nothing), then the scripted test scenarios
+    const opt = x => h("option", { value: x.name }, x.name);
+    const tour = S.scenarios.filter(x => x.name.startsWith("tour_")), scripted = S.scenarios.filter(x => !x.name.startsWith("tour_"));
+    const sel = h("select", { id: "scn" },
+      tour.length ? h("optgroup", { label: "Owner tour presets (simulation only)" }, tour.map(opt)) : null,
+      h("optgroup", { label: "Scripted test scenarios (they run by themselves)" }, scripted.map(opt)));
+    if (S.scnSel && S.scenarios.some(x => x.name === S.scnSel)) sel.value = S.scnSel;
+    const describe = () => (S.scenarios.find(x => x.name === sel.value) || {}).description || "";
+    const desc = h("p", { class: "muted", id: "scn-desc" }, describe());
+    sel.addEventListener("change", () => { S.scnSel = sel.value; desc.textContent = describe(); });
     const fsel = (kind, ids, faults) => {
       const id = h("select", null, ids.map(x => h("option", { value: x }, x)));
       const f = h("select", null, h("option", { value: "" }, "no fault"), faults.map(x => h("option", { value: x }, x)));
@@ -496,9 +551,11 @@
         cbtn("Run", () => tc("run")), cbtn("Pause", () => tc("pause")), cbtn("Step", () => tc("step")),
         ...[1, 10, 60].map(sp => cbtn(sp + "×", () => tc("speed", { speed: sp }), tw.speed === sp ? "" : "ghost")),
         cbtn("Reset run", () => confirm("Start a new simulation run? History remains.") && tc("reset"), "ghost"),
+        cbtn("Stall acquisition", () => tc("acq_stall"), "ghost"), cbtn("Resume acquisition", () => tc("acq_resume"), "ghost"),
         h("span", { class: "muted" }, `${tw.activity} · ${tw.speed}× · t=${sn.sim_s.toFixed(1)} s · tick ${sn.tick}`)),
         h("div", { class: "row" }, h("label", null, "Scenario preset", sel), cbtn("Load scenario (new run)", () => act("POST", "/api/twin/scenario", { name: sel.value }, "scenario loaded")),
-          h("span", { class: "muted" }, tw.scenario ? "Active: " + tw.scenario : ""))),
+          h("span", { class: "muted" }, tw.scenario ? "Active: " + tw.scenario : "")), desc,
+        h("p", { class: "muted" }, "Load scenario and Reset run start a new simulation run: levels and the plant return to the start condition, every process is STOPPED, actuator faults and overrides are cleared. History, accounts, recipes and stock acknowledgements are kept; the speed stays as set.")),
       h("div", { class: "grid" }, instWaterCard(pl),
         h("div", { class: "card" }, h("h3", null, "Equipment (requested / actual)"), h("dl", { class: "kv" },
           h("dt", null, "Drive"), h("dd", null, `run ${pl.drive.run_requested ? "ON" : "OFF"}, speed ${(pl.drive.speed * 100).toFixed(0)} %${pl.drive.tripped ? " TRIPPED: " + pl.drive.tripped : ""}`),
@@ -518,6 +575,15 @@
           fsel("mains", ["MAINS"], ["NO_SUPPLY"]), fsel("safety", ["CHAIN"], ["CHAIN_OPEN"]),
           h("p", { class: "muted" }, "Main pumps accept NO_RUN and NO_FLOW only. drive_comm faults act on the simulated drive's Modbus interface. Sensor overrides are on the I/O test bench."))));
   }
+  function releaseLine(r) {
+    if (!r) return "unknown";
+    if (r.status === "NOT_A_RELEASE") return `not started from a release folder (${r.detail})`;
+    const commit = (r.commit || "unknown").slice(0, 12);
+    return [`${r.release_version} · source commit ${commit} · built ${r.built_utc || "?"} `,
+      pill(r.status === "VERIFIED" ? "wheel verified" : r.status, r.status === "VERIFIED" ? "ok" : "bad"),
+      r.status === "VERIFIED" ? null : ` ${r.detail}`];
+  }
+
   async function instControl() {
     const pr = await api("GET", "/api/processes");
     const pc = can("process_control");
@@ -689,6 +755,8 @@
     const groups = d.devices.map(g => {
       const rows = g.points.map(p => {
         const s = p.sample || {};
+        // an input with no plant signal reads "no value" in TWIN mode: show it as unassigned, not as a fault
+        const unassigned = !ioTest && !s.override && s.reason === "UNMAPPED";
         let ctl = null;
         if (p.kind === "DO") ctl = h("span", null, cbtn("ON", () => cmd(p.id, true)), " ", cbtn("OFF", () => cmd(p.id, false), "ghost"));
         else if (ioTest && p.kind === "DI") ctl = h("span", null, cbtn("Inject 1", () => act("POST", "/api/io/inject", { point: p.id, raw: true })), " ", cbtn("Inject 0", () => act("POST", "/api/io/inject", { point: p.id, raw: false }), "ghost"));
@@ -705,8 +773,9 @@
           h("td", { class: "mono" }, "0x" + p.register_address.toString(16).padStart(4, "0")), h("td", null, p.mode || ""),
           h("td", { class: "mono" }, s.raw == null ? "—" : String(s.raw) + (s.raw_unit && s.raw_unit !== "bool" ? " " + s.raw_unit : "")),
           h("td", { class: "mono" }, s.value == null ? "—" : num(s.value) + (s.unit ? " " + s.unit : "")),
-          h("td", null, qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
-          h("td", { class: "muted" }, s.override ? `override by ${s.override.owner}: ${s.override.reason} (base ${s.override.base_raw})` : (s.reason || "")),
+          h("td", null, unassigned ? pill("UNASSIGNED", "q-UNASSIGNED") : qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
+          h("td", { class: "muted" }, s.override ? `override by ${s.override.owner}: ${s.override.reason} (base ${s.override.base_raw})` :
+            unassigned ? "no plant signal: unassigned test channel (not a fault)" : (s.reason || "")),
           h("td", null, age(s.acquired_utc)), h("td", null, ctl));
       });
       return h("div", { class: "card" },
@@ -886,8 +955,12 @@
     mount("v-settings",
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
-          h("dt", null, "Software"), h("dd", null, s.software_version), h("dt", null, "Python"), h("dd", null, s.python), h("dt", null, "Platform"), h("dd", null, s.platform),
-          h("dt", null, "Config"), h("dd", null, `${c.config_id}@${c.config_version} (${c.profile})`))),
+          h("dt", null, "Software"), h("dd", null, s.software_version),
+          h("dt", null, "Release"), h("dd", null, releaseLine(s.release)),
+          h("dt", null, "Config"), h("dd", null, `${c.config_id}@${c.config_version} (${c.profile})`),
+          h("dt", null, "Inventory"), h("dd", null, s.inventory ? `${s.inventory.modules} modules: ${s.inventory.AI} AI + ${s.inventory.DI} DI + ${s.inventory.DO} DO = ${s.inventory.points} points` : "—"),
+          s.state_dir ? [h("dt", null, "Data folder"), h("dd", null, s.state_dir)] : null,
+          h("dt", null, "Python"), h("dd", null, s.python), h("dt", null, "Platform"), h("dd", null, s.platform))),
         h("div", { class: "card" }, h("h2", null, "Storage"), h("dl", { class: "kv" },
           h("dt", null, "Recording"), h("dd", null, `complete snapshot every ${s.storage.recording_interval_s} s of wall time` +
             (s.storage.sim_time_recording_s ? `; plus a separate simulation-time series every ${s.storage.sim_time_recording_s} simulated s` : ""),
