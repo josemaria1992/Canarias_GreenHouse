@@ -39,9 +39,11 @@ step: `docs/RELEASE_READINESS.md`.
 - Trends over a whole year: ranges up to 365 days; a point with more samples than fit is answered
   per bucket of 10 min, 1 h or 1 day with mean, min, max and sample counts, drawn as a solid mean
   with dashed min and max and labelled as aggregated. The CSV export (paged, complete) keeps every
-  sample.
+  sample. The server keeps the buckets that can no longer change, so a refresh reads only the first
+  and the newest ones, and the page fetches ranges over a day once a minute.
 - `scripts/measure_process_workload.py` and `measure_storage.py --process-workload`: the storage
-  measurement with the event and command rates of all processes running in AUTO.
+  measurement with the event and command rates of all processes running in AUTO;
+  `scripts/measure_trend_cache.py` times a year chart with and without the kept buckets.
 - `docs/RELEASE_READINESS.md`; acceptance rows for OP-01 to OP-06, BK-01 to BK-07, DL-01 to DL-05
   and UI-06; tests for 144 observations from three snapshots, kept configuration records, the year
   chart and paged export, no bus frame from backup, drill and restore, and the gate manifest.

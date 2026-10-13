@@ -77,10 +77,10 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-370 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
+373 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
 local encrypted remote: the round trip and the replacement-controller recovery; they are skipped where
 rclone is not installed and required on CI's Linux jobs. `demo verify` gives 21/21 on both demo
-fixtures and 42/42 on `installation-48`. The browser check (`scripts/ui_check/`) passes S4_UI in
+fixtures and 42/42 on `installation-48`. The browser check (`scripts/ui_check/`) passes 55/55 in
 headless Chromium, and the wheel from the built release ZIP passes 16/16 from outside the
 repository. A simulated 400-day history at 60 s with the event and command rates of every process
 running in AUTO measured the one-year size, the WAL, the bytes written, the compressed backup and
