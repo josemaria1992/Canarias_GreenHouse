@@ -32,6 +32,8 @@ GATES = {
     "PC-12": ["vfd_trip_recovery", "drive_modbus_comm_loss", "safety_chain_open", "main_pump_no_flow", "sector_valve_stuck_open",
               "main_level_open_loop", "stale_acquisition", "module_timeout", "main_source_empty", "main_low_low"],
     "PC-13": ["manual_bounds_rejected", "raw_command_refused"],
+    # owner tour start states (simulation only, DEMO values; see tests/acceptance/test_owner_tour.py)
+    "TOUR": ["tour_low_main", "tour_ph_high", "tour_sump_high", "tour_main_full_sump_high", "tour_ec_lost_at_valve_opening"],
 }
 
 
