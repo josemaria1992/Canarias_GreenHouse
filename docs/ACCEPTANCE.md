@@ -15,7 +15,9 @@ Windows and macOS (3.11 to 3.13) and Ubuntu ARM64 for every pull request.
 The AT-... IDs of milestones 1 to 5 are this project's own (`docs/IMPLEMENTATION_PLAN.md`); the
 original brief's `ACCEPTANCE_TEST_PLAN.md` was never supplied, so no cross-mapping exists. The PH,
 PC, UI, OP, BK and DL gates are the owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` (12 Oct 2026); the
-release ZIP carries them as `acceptance-manifest.json`, generated from this file.
+release ZIP carries them as `acceptance-manifest.json`, generated from this file; there a gate's
+status is PASS only when every part of it passed (38 of 45 in this release), otherwise the first part
+that did not, and each part is listed with its scope.
 
 **Modbus results come from the real pymodbus client and RTU framer running over an in-memory
 serial port. They are software evidence, not hardware evidence.** No hardware was connected and no

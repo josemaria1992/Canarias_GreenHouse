@@ -65,7 +65,8 @@ _ROW = re.compile(r"^\| ((?:PH|PC|UI|OP|BK|DL)-\d\d) (.+?) \| (.+?) \| (.+) \|$"
 def acceptance_manifest(text: str) -> dict:
     """The owner's 45 pre-hardware gates with status and evidence, taken from docs/ACCEPTANCE.md (the one
     source); every gate exactly once, statuses from the status key only. A status like
-    "PASS (desktop) / NOT RUN (CM4)" keeps both parts: the software part passed, the physical part did not run."""
+    "PASS (desktop) / NOT RUN (CM4)" keeps both parts: the software part passed, the physical part did not
+    run. The gate's own `status` is PASS only when every part passed, otherwise the first part that did not."""
     gates = {}
     for line in text.splitlines():
         m = _ROW.match(line)
@@ -81,13 +82,17 @@ def acceptance_manifest(text: str) -> dict:
                 raise ValueError(f"{gid}: unknown status {part!r}")
             scope = part[len(word):].strip(" ()") or None
             parts.append({"status": word.replace(" ", "_"), "scope": scope})
-        gates[gid] = {"id": gid, "requirement_summary": summary, "status": parts[0]["status"], "parts": parts,
+        status = next((p["status"] for p in parts if p["status"] != "PASS"), "PASS")
+        gates[gid] = {"id": gid, "requirement_summary": summary, "status": status, "parts": parts,
                       "evidence": evidence, "physical_verification": False}
     missing = [g for g in GATES if g not in gates]
     if missing:
         raise ValueError(f"gates missing from ACCEPTANCE.md: {missing}")
+    counts: dict = {}
+    for g in gates.values():
+        counts[g["status"]] = counts.get(g["status"], 0) + 1
     return {"type": "pre-hardware acceptance report, generated from docs/ACCEPTANCE.md",
-            "gate_count": len(GATES), "gates": [gates[g] for g in GATES],
+            "gate_count": len(GATES), "status_counts": counts, "gates": [gates[g] for g in GATES],
             "physical_and_live_cloud_evidence": "NOT_RUN: hardware, CM4, SD card and OneDrive steps are listed in "
                                                 "docs/RELEASE_READINESS.md"}
 

@@ -27,6 +27,13 @@ def test_every_gate_once_with_a_known_status_and_evidence(build):
     # the parts that need the hardware, the account or the real keys are never reported as passed
     for gid, word in (("UI-06", "NOT_RUN"), ("BK-04", "NOT_CONFIGURED"), ("BK-07", "NOT_RUN"), ("DL-02", "NOT_RUN")):
         assert word in [p["status"] for p in by[gid]["parts"]], by[gid]["parts"]
+    # and a gate whose physical part did not run is not a PASS, although its software part passed
+    for g in rep["gates"]:
+        assert (g["status"] == "PASS") == all(p["status"] == "PASS" for p in g["parts"]), g
+    assert by["OP-06"]["status"] == "NOT_RUN" and by["OP-06"]["parts"][0] == {"status": "PASS", "scope": "desktop"}
+    assert sum(rep["status_counts"].values()) == 45
+    text = (ROOT / "docs" / "ACCEPTANCE.md").read_text(encoding="utf-8")
+    assert f"({rep['status_counts']['PASS']} of 45 in this release)" in " ".join(text.split())
     assert "NOT demonstrated" in by["BK-07"]["evidence"]
 
 
