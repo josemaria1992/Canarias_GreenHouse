@@ -1,9 +1,29 @@
 # Desktop installation (Windows, macOS, Linux)
 
-Tested: Python 3.11.15, 3.12.13 and 3.13.16 on Linux x86_64 (full test suite and `pip check`
-green on each, 2026-10-11). The CI workflow (`.github/workflows/ci.yml`) adds Windows, macOS and
-ARM64 Linux, but **it has not run yet** (no GitHub repository is connected). Treat Windows and macOS
-as untested until it does.
+Tested: Python 3.11, 3.12 and 3.13 on Linux x86_64 (full suite locally), and on every pull request
+by GitHub CI on Ubuntu, Windows and macOS (3.11 to 3.13) and Ubuntu ARM64. The release ZIP is built
+and its Windows launcher is run offline on a hosted Windows runner (CI job `release-windows`). No
+test has run on the owner's own PC.
+
+## The quick way: the release ZIP (Windows demo)
+
+1. Install 64-bit Python 3.12 from python.org and keep the "py launcher" option ticked.
+2. Unpack `aquacrop-<version>.zip` and double-click `AquaCrop-Demo.cmd`.
+3. The first run prepares a private environment under `%LOCALAPPDATA%\AquaCrop` from the bundled
+   `wheelhouse-win_amd64-py312` folder (no internet needed), checks the prerequisites (Python
+   version, packages, free disk space, the port), and asks you to choose the first administrator's
+   password. There is no default password.
+4. The browser opens at <http://127.0.0.1:8000/> with the full installation simulated
+   (`installation-48`). The simulation is served on this PC only.
+5. Stop with Ctrl+C or by closing the window. History, accounts and logs stay in
+   `%LOCALAPPDATA%\AquaCrop\demo` and are there again at the next start.
+
+Options are passed through, for example `AquaCrop-Demo.cmd --check-only` (the prerequisite checks
+only) or `AquaCrop-Demo.cmd --port 8010`. On macOS and Linux run `./aquacrop-demo.sh` from the same
+folder; the state lives in `~/Library/Application Support/AquaCrop/demo` or
+`~/.local/share/aquacrop/demo`. From any installed copy the same launcher is
+`python -m aquacrop launch` (`--config demo-48` for the smaller demo). It only starts SIMULATED
+configurations; a controller is installed with `installation/cm4.md`.
 
 ## From the source tree (online)
 

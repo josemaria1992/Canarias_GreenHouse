@@ -105,3 +105,5 @@ details summary { cursor: pointer; color: var(--muted); }
 .diagram text.muted-t { fill: var(--muted); }
 .w-num { width: 110px; }
 #nav-inst a { display: inline-block; }
+.subcard { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+.subcard .row input[type=text] { flex: 1 1 220px; min-width: 0; }

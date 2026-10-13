@@ -253,23 +253,44 @@ STOPPED / read-only. It never re-sends an old command.
 
 ## Upgrade and rollback
 
-Layout: `/opt/aquacrop/releases/<version>/venv`, `/opt/aquacrop/current` symlink.
+Layout: `/opt/aquacrop/releases/<version>/venv`, `/opt/aquacrop/current` (a relative symlink),
+`/opt/aquacrop/previous` (the release to roll back to), and an install log in
+`/var/lib/aquacrop-install.log`. With the guided installer, from the new release's unpacked folder:
 
-1. Build the wheelhouse for the new version (aarch64, the Pi's Python) and copy it over.
-2. `backup create` and `backup verify`. Keep the manifest.
-3. Create the new release venv and install from the wheelhouse.
-4. Test against a restored copy: `backup restore --target /tmp/upgrade-test.sqlite3`, then run the
-   new version's `serve` with a scratch state dir pointing at that copy; confirm it migrates and
-   starts read-only.
-5. `systemctl stop`, switch the symlink, `systemctl start`. The new version migrates (after its own
-   safety copy) on start. The safety copy needs the database size plus 20 % free above the reserve;
-   once the window is full that does not fit on the eMMC, so the migration refuses to start until
-   space is provided (ADR-0008). This release has no migration.
+```text
+sudo python3 deploy/aquacrop-cm4.py upgrade --release .          # add --dry-run first to see every step
+sudo python3 deploy/aquacrop-cm4.py rollback                      # back to /opt/aquacrop/previous
+sudo python3 deploy/aquacrop-cm4.py status
+```
 
-Rollback: stop, switch the symlink back. If the database was migrated to a newer schema, the old
-version refuses to open it (by design); restore the pre-upgrade backup to the state directory with
-`backup restore --maintenance --config ...`. Never downgrade a migrated database in place. Secrets
-and configuration in `/etc/aquacrop` stay untouched by upgrades.
+`upgrade` checks the host and the release (`MANIFEST.sha256`), takes a backup with the running
+version and verifies it (`/var/lib/aquacrop/backups/pre-upgrade`, three kept), installs the new
+release offline beside the old one, validates the configuration named in `/etc/aquacrop/aquacrop.env`
+with the new version, updates the units, then stops the service, switches `current` and starts it,
+and waits for `/api/health`. The configuration and secrets in `/etc/aquacrop` are never overwritten.
+If the new release does not report healthy it says so and how to roll back.
+
+Schema migrations: a new version migrates the database on its first start, after its own safety
+copy. This release (0.3.0) migrates schema 2 to 3 (recipes, recipe activations and stock readiness,
+ADR-0014); a database from an earlier version (schema 2) is migrated once and that version cannot open it afterwards. The safety copy
+needs the database size plus 20 % free above the reserve; once the window is full that does not fit
+on the eMMC, so the migration refuses to start until space is provided (ADR-0008). Before an upgrade
+with a full year of history, test it on a restored copy:
+`backup restore --target /tmp/upgrade-test.sqlite3`, then the new version's `serve` with a scratch
+state directory pointing at that copy; confirm it migrates and starts read-only.
+
+Rollback: `rollback` stops the service, switches `current` to the previous release and starts it. If
+the database was already migrated to a newer schema, the old version refuses to open it (by design):
+restore the pre-upgrade backup into the state directory with
+`backup restore --maintenance --config ...` (server stopped), then start. Never downgrade a migrated
+database in place.
+
+By hand, the same steps: back up and verify; create `/opt/aquacrop/releases/<version>/venv` and
+install from the release's wheelhouse with `--require-hashes`; `systemctl stop`; switch the symlink;
+`systemctl start`.
+
+The installer's upgrade, rollback and status run in CI from the built release on an ARM64 runner in
+a staging root (no systemd there); they have not run on a CM4.
 
 ## Clock
 

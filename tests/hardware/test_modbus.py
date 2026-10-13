@@ -186,6 +186,32 @@ def test_at_mb_05_read_only_start_poll_reconnect_shutdown_zero_writes(fake_bus):
     assert relay.writes_applied == 0
 
 
+def test_dl03_backup_restore_and_restore_drill_send_no_frame(fake_bus, tmp_path):
+    """DL-03: backing up, the full restore drill (which starts the historian on the restored copy with
+    the hardware configuration) and a restore to a new instance never open the bus: not one frame."""
+    import time
+    from aquacrop.api.hardware import HardwareService
+    from aquacrop.historian.backup import create_backup, restore_backup, verify_backup
+    from aquacrop.historian.writer import Historian
+    cfg, bus, relay, ai = fake_bus
+    hist = Historian(tmp_path / "h.sqlite3", cfg, "sess-1")
+    svc = HardwareService(cfg, hist, "sess-1")
+    svc.start()
+    deadline = time.monotonic() + 5
+    while svc.workers["rs485_a"].polls < 3 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    svc.stop()
+    hist.close()
+    frames = len(bus.frames_in)
+    assert frames > 0
+    man = create_backup(tmp_path / "h.sqlite3", tmp_path / "backups", config_id=cfg.config_id,
+                        config_version=cfg.config_version)
+    v = verify_backup(man["path"], full=True, scratch_dir=tmp_path / "scratch", cfg=cfg)
+    assert v["ok"] and v["full"]["smoke"]["historian_started"], v
+    restore_backup(man["path"], tmp_path / "restored" / "h.sqlite3")
+    assert len(bus.frames_in) == frames and bus.write_frames() == [] and relay.writes_applied == 0
+
+
 def test_at_mb_05_backend_refuses_writes_without_gate(fake_bus):
     cfg, bus, relay, ai = fake_bus
     be = ModbusBackend(cfg, context=ctx)

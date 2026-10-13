@@ -1,23 +1,30 @@
 # Acceptance matrix
 
 **Environment:** Linux x86_64 container, Python 3.13.16 (also 3.11.15 and 3.12.13), pymodbus
-3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-12 (historian update ADR-0008;
-quarantine ADR-0011 and off-device backups ADR-0012), software 0.2.0.dev0. The 2026-10-11 run was at
-`0ce4842` (183 tests); the ADR-0008 run at `f0b18e2` (252 tests).
-**Results:** `python -m pytest`: 352 passed on 3.11, 3.12 and 3.13 locally (pre-hardware release
-stages 1 to 3; 271 before them); `pip check` clean. `demo verify --seed 42`: 21/21 PASS for `demo-48`
-and `demo-24`, 42/42 for `installation-48`. Installed-wheel check
-(`scripts/check_installed_wheel.py`): 16/16 PASS. Storage measurement and concurrency stress: `operations/measurements/2026-10-12-measurements.md`.
+3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-13, software 0.3.0 (the
+pre-hardware release). Earlier runs: 2026-10-11 at `0ce4842` (183 tests), ADR-0008 at `f0b18e2` (252
+tests), quarantine and off-device backups (271 tests), pre-hardware stages 1 to 3 (352 tests).
+**Results:** `python -m pytest`: 370 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
+`demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`, 42/42 for `installation-48`.
+Installed-wheel check (`scripts/check_installed_wheel.py`) on the wheel from the built release ZIP:
+16/16 PASS. Browser check (`scripts/ui_check/`, headless Chromium): S4_UI. Storage measurements and
+concurrency stress: `operations/measurements/2026-10-12-measurements.md` and
+`operations/measurements/2026-10-13-measurements.md`. GitHub CI repeats the suite on Ubuntu,
+Windows and macOS (3.11 to 3.13) and Ubuntu ARM64 for every pull request.
 
-The acceptance IDs are this project's own (`docs/IMPLEMENTATION_PLAN.md`); the owner's
-`ACCEPTANCE_TEST_PLAN.md` was never supplied, so no cross-mapping exists.
+The AT-... IDs of milestones 1 to 5 are this project's own (`docs/IMPLEMENTATION_PLAN.md`); the
+original brief's `ACCEPTANCE_TEST_PLAN.md` was never supplied, so no cross-mapping exists. The PH,
+PC, UI, OP, BK and DL gates are the owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` (12 Oct 2026); the
+release ZIP carries them as `acceptance-manifest.json`, generated from this file.
 
 **Modbus results come from the real pymodbus client and RTU framer running over an in-memory
 serial port. They are software evidence, not hardware evidence.** No hardware was connected and no
 physical test was performed.
 
 Status key: PASS · FAIL · BLOCKED (cannot run until something outside the software exists) ·
-NOT RUN (could run, has not).
+NOT RUN (could run, has not) · NOT CONFIGURED (needs the owner's account or settings). "PASS
+(desktop)", "PASS (fakes)" or "PASS (fake bus)" name what stood in for the hardware; none of them is
+physical verification.
 
 ## Milestone 1: desktop platform
 
@@ -216,7 +223,34 @@ Playwright 1.56.1 and Chromium. **Simulation and a fake bus only; none of this i
 | UI-03 owner walkthrough: edit a recipe, run concurrent processes, inject a fault, recover deliberately, export data, restart | PASS (simulation) | `ui_check` "UI-03 *": sector 1 300 to 240 s saved, validated and activated as `demo-sim@v2`; irrigation, return, refill and acid in AUTO together with the three stocks acknowledged; drive TRIP locks irrigation out while the other three stay AUTO; reset refused (409) before acknowledgement, then acknowledge, reset (stays STOPPED) and AUTO on request; CSV downloaded with rows and its completeness footer; after a server restart every process is STOPPED, `demo-sim@v2` is still active and the stocks are still PREPARED. Screenshots `walk-1` to `walk-6` |
 | UI-04 viewer/operator/admin table enforced at the API including forged and direct requests; individual login, expiry/revocation, password change, CSRF/origin and rate-limit regressions | PASS | `integration/test_api_installation.py::test_role_table_is_enforced_on_every_process_and_recipe_mutation` (12 mutations x 3 roles, plus missing CSRF, wrong origin, forged token and no session); `ui_check` "UI-04 viewer" (new account must change its password, controls disabled, forged browser request 403); existing regressions `test_every_mutation_requires_session_origin_and_csrf`, `test_roles_enforced_server_side`, `test_login_failures_and_rate_limit`, `test_idle_expiry`, `test_password_change_revokes_sessions_and_logout` in `integration/test_api.py` |
 | UI-05 offline packaged assets; PC, tablet and phone viewports; no colour-only alarm semantics; a broken and reconnected network shows stale data and does not replay commands | PASS | `ui_check` "UI-05 viewport phone 390px / tablet 820px / pc 1366px" (eight pages each, no horizontal overflow), "UI-05 text on every status mark", "UI-05 offline" (stale banner while offline; a STOP clicked offline is not sent and not replayed after reconnecting); `test_static_ui_is_packaged_and_offline` |
-| UI-06 OpenVPN/TLS deployment guide and route test; real home-to-greenhouse check | NOT RUN | Guide and route test follow in the stage 4 pull request; the real check stays NOT RUN until the endpoint exists. Local operation needs no internet (all assets packaged) |
+| UI-06 OpenVPN/TLS deployment guide and route test; real home-to-greenhouse check | PASS (guide and route test) / NOT RUN (real route) | `security/remote-access.md` (OpenVPN route, return path and name; Caddy `tls internal` on 443 in front of 127.0.0.1:8000; firewall example `deploy/nftables-aquacrop.conf.example`); `deploy/aquacrop-cm4.py tls` (`test_tls_step_writes_the_proxy_and_dropin_only`: loopback bind, `--behind-tls-proxy`, never 0.0.0.0); route test `aquacrop netcheck` (`integration/test_netcheck.py`: name, TCP, certificate from the private root, validity, health through the proxy, no plain HTTP; failures name the fix). Local operation needs no internet (assets packaged). The home-to-greenhouse check stays NOT RUN until the controller is on the LAN (`RELEASE_READINESS.md`) |
+
+## Pre-hardware release: operations, backups and delivery (OP, BK, DL)
+
+Gates of the owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` (12 Oct 2026). Where an earlier row already
+proves part of a gate it is named (AT-...). **Fakes only for hardware, card, cloud and CM4**
+(`RELEASE_READINESS.md` section 5); the parts that need them are NOT RUN or NOT CONFIGURED, never PASS.
+
+| ID | Status | Evidence |
+|---|---|---|
+| OP-01 three complete 60 s snapshots of 48 points are 144 observations, unchanged and unavailable values included; 300 s is an option, not the default, and does not slow acquisition or control | PASS | `integration/test_recording.py::test_op01_three_60_s_snapshots_of_the_installation_are_144_observations` (installation-48, a module timed out: its 8 points recorded UNAVAILABLE in every snapshot; the same control ticks at 60 s and 300 s); AT-HIS-02, AT-HIS-03, AT-HIS-04 |
+| OP-02 commands and outcomes, alarms, configuration and observed DI/DO changes recorded when they happen, between snapshots; a stale sample keeps its original acquisition time and last good value apart from the snapshot time | PASS | AT-HIS-05, AT-HIS-06 (`test_hw_snapshot_marks_stale_and_never_acquired_points`: `last_good_value`, `last_good_utc`); process commands with process and recipe: `acceptance/test_installation_ph.py::test_ph05_controller_commands_are_audited_with_process_and_recipe` |
+| OP-03 365-day boundary; active state, configuration and calibration references kept; no deletion inside the window for size; year-range queries and exports complete; bounded, aggregated charts | PASS | AT-RET-01, AT-RET-03, AT-RET-08; `integration/test_retention.py::test_op03_configuration_definitions_referenced_by_retained_records_are_kept` (newest `CONFIG_LOADED` of each configuration kept beyond the window; unfinished commands, open alarms, recipes and stock readiness never pruned); `integration/test_api.py::test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete` (a year of one point charted whole as 355 daily buckets with mean, min, max and counts, partial days and a ten-day hole marked; a 12 h range stays raw; the paged CSV export returns all 8,520 samples exactly once and ends `COMPLETE`); `ui_check` "OP-03 year range on the trends page" |
+| OP-04 clock jumps and restarts hold retention, show the proposed cutoff and need a distinct administrator confirmation; detection deletes, restarts and outputs nothing | PASS | AT-RET-04, AT-RET-06, AT-RET-07, AT-HIS-11 |
+| OP-05 quarantine and resume: original rows and stamps unchanged, time reliability separate from quality, durable epoch, no label collision, provenance in charts and exports, retention guarded separately; suspect ranges kept until an administrator reviews them | PASS | AT-QUA-01 … AT-QUA-07; review before pruning (stage 4): `integration/test_quarantine.py::test_forward_step_then_correction_quarantine_restart_and_retention` (an unreviewed quarantine is kept past the window; KEEP keeps it; RELEASE lets it go a window after the quarantine; refused reviews leave the writer healthy), `test_unreviewed_quarantine_older_than_the_window_raises_review_due` (`HISTORY_QUARANTINE_REVIEW_DUE`), `test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports` (review: operator 403, bad reason 422, unknown 409, administrator 200, audited `HISTORY_QUARANTINE_REVIEWED`) |
+| OP-06 storage report with the process event workload: database, WAL, bytes written and free space apart; long readers and checkpoints; backup and export at the same time; low and full disk. No CM4 endurance claim | PASS (desktop) / NOT RUN (CM4) | OP06_RESULT |
+| BK-01 consistent backup while acquisition, events and retention run; corrupted copy rejected; partial copy never selectable; a failed backup keeps the earlier good one | PASS | AT-BAK-01 … AT-BAK-03, AT-BAK-07, AT-BAK-08 |
+| BK-02 card missing, wrong, read-only, removed during a job or too small: clear failure, never the bare mount point or the eMMC | PASS (fakes) / NOT RUN (the card) | AT-OFF-01, AT-OFF-02, AT-OFF-06; the 64 GB card in its USB reader: `RELEASE_READINESS.md` |
+| BK-03 upload queue survives restarts; idempotent retries for no internet, expired authorization, throttling and quota; process availability unaffected | PASS (fakes) | AT-OFF-05, AT-OFF-10; `test_backup_verified_queued_offline_then_uploaded_when_back` |
+| BK-04 copies only under the installation's crypt prefix; decrypted content verified, an upload alone is not enough; completion receipt last; secrets kept out of files, logs and source; recovery keys documented | PASS (real rclone, local remote) / NOT CONFIGURED (OneDrive account) | AT-OFF-04; receipt uploaded and checked after `cryptcheck`, none for an unverified upload, removed first when pruning (`test_backup_verified_queued_offline_then_uploaded_when_back`, `test_pruning_waits_for_confirmation_and_never_deletes_unuploaded`); `test_real_rclone_crypt_round_trip` (names and contents encrypted at rest); keys: `operations/offsite-backups.md` section 4 |
+| BK-05 7 local / 30 daily / 12 monthly; one copy can serve several roles; pending uploads, the last recoverable copy, active drills and clock holds protected; local removal never deletes the cloud copy | PASS | AT-OFF-07 |
+| BK-06 monthly cloud download, decryption and restore check (integrity, schema, counts, provenance, application queries) in isolated card scratch; capacity at least about 10 GiB plus working space; no drivers, sessions or leases revived | PASS (fakes and real rclone) / NOT RUN (live cloud) | AT-OFF-08; the drill also checks the receipt; `hardware/test_modbus.py::test_dl03_backup_restore_and_restore_drill_send_no_frame` |
+| BK-07 replacement-machine recovery with temporary fake secrets and provider; say whether real key and account recovery was shown | PASS (rehearsal) / NOT RUN (real keys and account) | `integration/test_offsite.py::test_bk07_replacement_controller_recovers_with_only_the_escrowed_keys`: with the real rclone crypt remote, the old database, card and `rclone.conf` deleted; a fresh directory with only the two escrowed values lists, passes over a newer copy cut off before its receipt, downloads, decrypts, checks the receipt checksum, runs `backup verify --full` and the maintenance restore, and the restored database records again; a mistyped salt reads nothing. **Real key and account recovery was NOT demonstrated** (test-only keys, a local folder for OneDrive). Procedure: `operations/offsite-backups.md` section 8.1 |
+| DL-01 Windows launcher: cold start, missing prerequisite, first administrator, browser, persistence, clean stop; installed wheel outside the checkout serves UI and configurations offline | PASS | `integration/test_launcher.py` (on Windows, macOS and Ubuntu in CI); CI job `release-windows` (the built ZIP unpacked on Windows, offline first run from the bundled wheelhouse, installed-wheel check); `scripts/check_installed_wheel.py` 16/16 PASS on the wheel from the locally built ZIP (Python 3.13) |
+| DL-02 ARM64 locked dependencies and build; guided install, upgrade and rollback validated in CI or an isolated host; CM4 OS, UART and performance NOT RUN | PASS (CI, staging root) / NOT RUN (CM4) | `unit/test_cm4_installer.py` (install, upgrade with the pre-upgrade backup before the switch, rollback, damaged release refused, dry run changes nothing, TLS step, never formats or edits the boot configuration); CI job `release-cm4-staging` (the built ZIP on Ubuntu ARM64, Python 3.11: check, install, demo verify, installed-wheel check, upgrade, rollback, status); test matrix on `ubuntu-24.04-arm` |
+| DL-03 simulated, read-only, restore and shadow paths cannot write to hardware; fake-serial regression for start, reconnect, shutdown, recovery and rejected API calls | PASS (fake bus) | AT-MB-05 (`test_at_mb_05_read_only_start_poll_reconnect_shutdown_zero_writes`, `test_at_mb_05_simulated_and_shadow_profiles_cannot_open_a_bus`), `test_dl03_backup_restore_and_restore_drill_send_no_frame` (backup, full drill with the hardware configuration and restore: not one frame); `ui_check` "DL-03 no write from the browser on the read-only profile"; on the wire: CP-05, NOT RUN |
+| DL-04 bench lease: scope, expiry, session, configuration, preflight, readback, unknown outcome; short or empty replies rejected; one bus owner, serialized, stop priority, module faults isolated | PASS (fake bus) | AT-MB-03, AT-MB-04, AT-MB-06, AT-MB-07; real relays: CP-04, NOT RUN |
+| DL-05 release ZIP, hashes, version and commit, exact commands, guides, readiness report and requirement-to-test manifest; no unsigned template presented as a PASS | PASS | `scripts/build_release.py` (CI job `release`, artifact `release`): wheel, launchers, CM4 installer, configurations, guides, `requirements.lock`, offline wheelhouses `win_amd64-py312` and `aarch64-py311`, `RELEASE.json` (version, commit, `physical_verification: false`), `MANIFEST.sha256` of every file and the ZIP's own `.sha256`; `RELEASE_READINESS.md`; `acceptance-manifest.json`; commissioning templates marked UNSIGNED |
 
 ## Milestone 5: hardware arrival
 

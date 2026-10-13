@@ -86,6 +86,34 @@ def test_rolling_window_boundary_is_exactly_365_days(h):
     assert h.query("SELECT count(*) FROM events WHERE kind='RETENTION_PRUNED'")[0][0] == 1
 
 
+def test_op03_configuration_definitions_referenced_by_retained_records_are_kept(h):
+    """OP-03: the newest CONFIG_LOADED of each distinct configuration stays (it defines the
+    config_version and scaling that retained samples refer to), also when it is older than the window;
+    an older load of the same configuration goes. Open alarms, unfinished commands, recipes and stock
+    readiness are never pruned."""
+    old = iso(CUTOFF - timedelta(days=30))
+    older = iso(CUTOFF - timedelta(days=60))
+
+    def op(c):
+        for ts, sha, ver in ((older, "a" * 64, "v1"), (old, "a" * 64, "v1"), (older, "b" * 64, "v0")):
+            c.execute("INSERT INTO events(utc,kind,session_id,payload_json) VALUES(?,'CONFIG_LOADED','old',?)",
+                      (ts, json.dumps({"config_id": "c", "config_version": ver, "sha256": sha, "config": {}})))
+        c.execute("INSERT INTO commands(request_id,actor,target,desired,origin,issued_utc,expires_utc,"
+                  "expected_config_version,priority,backend,session_id,intent_utc,outcome) VALUES('cmd-open','u',"
+                  "'relay_A.DO1',1,'BENCH',?,?,'v',5,'MODBUS','old',?,'EXECUTING')", (older, older, older))
+        c.execute("INSERT INTO stock_readiness(stock,status,actor,utc,json) VALUES('A','PREPARED','op',?,'{}')",
+                  (older,))
+    h.submit(op, wait=True)
+    seed(h, CUTOFF - timedelta(days=1), tag="old", open_alarm=True)
+    res = prune_expired(h, now=NOW)
+    assert res["deleted"]["events"] >= 2
+    kept = h.query("SELECT utc, payload_json FROM events WHERE kind='CONFIG_LOADED' ORDER BY id")
+    assert [(r[0], json.loads(r[1])["sha256"][0]) for r in kept] == [(old, "a"), (older, "b")]
+    assert h.query("SELECT outcome FROM commands WHERE request_id='cmd-open'")[0][0] == "EXECUTING"
+    assert h.query("SELECT count(*) FROM stock_readiness")[0][0] == 1
+    assert h.query("SELECT count(*) FROM alarm_occurrences WHERE closed=0")[0][0] == 1
+
+
 def test_prune_runs_in_small_batches(h):
     t = CUTOFF - timedelta(days=3)
     for i in range(300):

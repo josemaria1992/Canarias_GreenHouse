@@ -78,8 +78,9 @@ answers) and the hold survives restarts: at start the newest of `RETENTION_HELD`
 confirmation of the date and the proposed cutoff (ADR-0008) releases it.
 
 Quarantined records are never judged by their suspect stamps: label- and time-based pruning skips
-their id ranges, and they are deleted whole only when the quarantine's own confirmation time (a
-trusted time) is older than the retention cutoff. Then retention writes
+their id ranges. Age alone never removes them (addendum below): they are deleted whole only after an
+administrator released them in a disposition review, and only when the quarantine's own confirmation
+time (a trusted time) is older than the retention cutoff. Then retention writes
 `HISTORY_QUARANTINE_RETIRED` for it: SQLite can hand out the highest ids again once they are deleted,
 so a retired quarantine's ranges no longer flag or delete anything (its clock epoch still counts).
 Range deletion runs from the lowest id up, so the top of a range is the last row to go. The newest-record checks that decide whether the
@@ -101,8 +102,9 @@ clock is trusted ignore quarantined rows and sessions.
 
 - Recording recovers right after a confirmed quarantine instead of waiting for real time to pass
   the wrong labels; history keeps every record with its original stamp.
-- A quarantine cannot delete or authorize deletion; quarantined records live one retention window
-  past the confirmation time, then go whole.
+- A quarantine cannot delete or authorize deletion; quarantined records stay until an administrator
+  reviews them, and after a RELEASE they live one retention window past the confirmation time, then go
+  whole.
 - Readers that ignore the new columns still see the original stamps; the flags are additive.
 - The anchors depend on clock markers written by this software version; a database from before
   ADR-0011 has no watermarks, so its quarantine starts at the session start (a wider, still
@@ -113,3 +115,30 @@ clock is trusted ignore quarantined rows and sessions.
 
 `tests/integration/test_quarantine.py` (AT-QUA-01 to AT-QUA-07); headless Chromium check of the
 Settings card, the trends chart and the `SUSPECT TIME` markers on 2026-10-12.
+
+## Addendum (2026-10-12, pre-hardware release brief §9): disposition review before pruning
+
+The brief requires that suspect segments stay protected from automatic age pruning until an
+administrator explicitly reviews their disposition. The first version let quarantined records go one
+window after the quarantine; that is replaced:
+
+- `POST /api/history/quarantine/review` (administrator; Settings, "Clock and timestamps") records
+  `HISTORY_QUARANTINE_REVIEWED` with the quarantine id, the disposition, the previous one, the
+  reviewer, the time and a required reason. These events are registers (never pruned); the newest
+  review of a quarantine applies.
+- `KEEP`: the records stay, whatever their age, until a later review. `RELEASE`: rolling retention
+  may remove them, whole, once the quarantine's confirmation time is older than the window, at a later
+  scheduled run that is still subject to every retention hold. A review deletes nothing by itself and
+  does not release a retention hold; releasing a hold stays the separate cutoff confirmation.
+- Until reviewed, a quarantine is `UNREVIEWED`. Once its time leaves the window, pruning reports it as
+  `quarantines_review_due` and the retention task raises the WARNING alarm
+  `HISTORY_QUARANTINE_REVIEW_DUE` on `historian`; acknowledging the alarm decides nothing.
+- Storage: kept quarantines are outside the 365-day budget. A wrong-clock segment is normally minutes
+  to days of history (about 22.7 MiB per day at 60 s with 48 points, ADR-0008 measurement), so keeping one is cheap;
+  the storage view still counts it.
+
+Evidence: `test_quarantine.py::test_forward_step_then_correction_quarantine_restart_and_retention`
+(unreviewed records survive pruning past the window, KEEP keeps them, RELEASE lets the next run remove
+them, refused reviews never fail the writer), `::test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports`
+(administrator only, 422 and 409 cases, audit) and
+`::test_unreviewed_quarantine_older_than_the_window_raises_review_due`.

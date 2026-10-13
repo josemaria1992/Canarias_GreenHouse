@@ -223,17 +223,70 @@ only proves the keys on the controller; this proves the escrowed ones.
 
 - **From the card** (controller intact): `python -m aquacrop backup restore --backup /media/aquacrop-sd/aquacrop/backups/<file> --target /tmp/restore-test.sqlite3`
   first, then the maintenance restore of `service.md` with the server stopped.
-- **From the cloud** (controller lost): install the software on the replacement, rebuild
-  `rclone.conf` from the escrowed keys plus a new authorization (sections 3 and 4), list the copies
-  with `rclone lsjson aquacrop-crypt:backups`, download one with `rclone copyto`, then
-  `backup verify --full` and `backup restore` to a new instance as above. A restored database holds
-  the user accounts (password hashes) and old login sessions, which still expire by their idle and
-  absolute limits; bench leases from an earlier process are closed at start, never restored, and the
-  restored installation starts read-only. (The monthly drill goes further: it deletes sessions and
-  leases from its throw-away copy.)
+- **From the cloud** (controller lost): section 8.1. A restored database holds the user accounts
+  (password hashes) and old login sessions, which still expire by their idle and absolute limits;
+  bench leases from an earlier process are closed at start, never restored, and the restored
+  installation starts read-only. (The monthly drill goes further: it deletes sessions and leases from
+  its throw-away copy.)
+
+### 8.1 Replacement controller (BK-07)
+
+What you need: the release ZIP, the sealed envelope, a Microsoft account that can open the shared
+folder, and a card or disk with room for two copies of the database plus 20 % (section 1).
+
+1. Install the release on the replacement (`docs/installation/cm4.md`, `deploy/aquacrop-cm4.py install`)
+   with the read-only configuration. Do not create users and do not start the application; if it was
+   started, stop it: `sudo systemctl stop aquacrop-greenhouse`.
+2. Open the envelope. Run `sudo -u aquacrop rclone config --config /var/lib/aquacrop/rclone/rclone.conf`
+   and create the two remotes of section 3 again: `aquacrop-onedrive` with a new authorization (and section 3.1 for the shared
+   folder), and `aquacrop-crypt` with *Yes, type in my own password* for both the password and the
+   salt, typed from the printout.
+3. List the copies. Below, `RC` stands for `sudo -u aquacrop rclone --config /var/lib/aquacrop/rclone/rclone.conf`
+   and `AQ` for `sudo -u aquacrop /opt/aquacrop/current/venv/bin/python -m aquacrop`:
+   `RC lsjson aquacrop-crypt:backups`. A mistyped value lists nothing and says
+   `directory not found`: retype it (step 2). Pick the newest `aquacrop-<time>.sql.gz` that has an
+   `aquacrop-<time>.receipt.json` beside it. The receipt is uploaded last, after the copy was verified
+   in the cloud; a copy without one was cut off and may be incomplete.
+4. Download the copy, its manifest and its receipt into a scratch folder on the card, then verify:
+
+   ```text
+   RC copyto aquacrop-crypt:backups/aquacrop-<time>.sql.gz        /media/aquacrop-sd/recovery/aquacrop-<time>.sql.gz
+   RC copyto aquacrop-crypt:backups/aquacrop-<time>.manifest.json /media/aquacrop-sd/recovery/aquacrop-<time>.manifest.json
+   RC copyto aquacrop-crypt:backups/aquacrop-<time>.receipt.json  /media/aquacrop-sd/recovery/aquacrop-<time>.receipt.json
+   sha256sum /media/aquacrop-sd/recovery/aquacrop-<time>.sql.gz     # must equal "sha256" in the receipt
+   AQ backup verify --backup /media/aquacrop-sd/recovery/aquacrop-<time>.sql.gz --full \
+       --scratch-dir /media/aquacrop-sd/recovery/scratch
+   ```
+
+   Only continue when the checksums match and `verify` prints `"ok": true`.
+5. Restore into the stopped installation (maintenance restore, `service.md`), then start it:
+
+   ```text
+   AQ backup restore --backup /media/aquacrop-sd/recovery/aquacrop-<time>.sql.gz \
+       --target /var/lib/aquacrop/<file named in historian.db_path> --maintenance --config /etc/aquacrop/<config>.yaml \
+       --state-dir /var/lib/aquacrop
+   sudo systemctl start aquacrop-greenhouse
+   ```
+
+   The history, alarms and accounts are back; the application starts `REAL — READ ONLY`. Sign in
+   with an existing account and check the newest trend points against the backup time.
+6. Seal the printout in a new envelope. Enrol the new card or reader (section 2) before switching
+   the off-device backups back on (section 5). Record the recovery, with who did it and when, in
+   `CP-00_platform_record.md`.
+
+**What has been rehearsed.** `test_bk07_replacement_controller_recovers_with_only_the_escrowed_keys`
+(`tests/integration/test_offsite.py`, required on Linux CI) runs steps 2 to 5 with the real rclone
+binary and crypt remote: a backup is uploaded and the old database, card and `rclone.conf` are
+deleted; a fresh directory with only the two escrowed values lists the copies, picks the newest one
+with a receipt (a later upload cut off before its receipt is passed over), downloads, decrypts,
+verifies and restores it with the commands above, the restored database records again, and a
+mistyped salt reads nothing. It uses test-only keys and a local folder in place of OneDrive. **The owner's sealed
+envelope, the Microsoft account sign-in and re-authorization, and a restore on a CM4 have NOT been
+demonstrated**; the escrow test of section 4 and CP-00 cover them.
 
 ## 9. Not yet verified
 
 The USB reader and card on the CM4 (mount at boot, hot-plug, write speed, power loss), the 0.5 GiB
-daily upload over the site's connection, OneDrive token refresh over weeks, and the escrow test.
-These belong to CP-00 and need the hardware and the owner's account.
+daily upload over the site's connection, OneDrive token refresh over weeks, the escrow test, and a
+replacement-controller recovery with the real envelope and account (section 8.1 says what was
+rehearsed instead). These belong to CP-00 and need the hardware and the owner's account.

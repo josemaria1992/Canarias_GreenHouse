@@ -1,6 +1,62 @@
 # Changelog
 
-## Unreleased (2026-10-12): process pages and installation diagram
+## 0.3.0 (2026-10-13): pre-hardware release
+
+Stage 4 of the pre-hardware release, and the release itself: it contains the three 0.3.0 sections
+below as well. Software and simulation only: nothing has run on the CM4, the modules, the card or the
+OneDrive account, and no setting enables physical AUTO. What is still needed before each physical
+step: `docs/RELEASE_READINESS.md`.
+
+### Added
+- Release ZIP (`scripts/build_release.py`): the wheel, `AquaCrop-Demo.cmd` and `aquacrop-demo.sh`,
+  `README-FIRST.md`, the CM4 installer, configurations, guides, `requirements.lock`, offline
+  wheelhouses for Windows (Python 3.12) and the CM4 (aarch64, Python 3.11), `RELEASE.json`
+  (version, commit, `physical_verification: false`), `MANIFEST.sha256` of every file, the ZIP's own
+  SHA-256, and `acceptance-manifest.json` (the owner's 45 gates with status and evidence, generated
+  from `docs/ACCEPTANCE.md`). Private files (keys, databases, `rclone.conf`, `.env`) are refused.
+- Desktop launcher `python -m aquacrop launch`: prerequisite checks, the full installation demo
+  (`installation-48`, simulated) with its state under `%LOCALAPPDATA%\AquaCrop` (or the platform
+  equivalent), a guided first administrator (no default password), a log file, the browser opened
+  after the health check, and a clean stop. `AquaCrop-Demo.cmd` prepares a private environment from
+  the bundled wheelhouse, offline.
+- Guided CM4 installer `deploy/aquacrop-cm4.py` (standard library only): `check`, `install`,
+  `upgrade` (verified backup with the running version first), `rollback`, `tls`, `status`;
+  `--dry-run` and a staging `--root`. It verifies the release manifest, installs offline with hashes,
+  switches releases atomically and never formats a disk, edits the boot configuration or creates an
+  account with a default password.
+- Remote access through the owner's OpenVPN: `docs/security/remote-access.md` (routes, return path,
+  name, profiles), a Caddy TLS proxy on 443 with the application on 127.0.0.1, a firewall example,
+  and the route test `python -m aquacrop netcheck --url https://... --ca-file ...`.
+- Quarantine review before pruning: an administrator keeps quarantined records or releases them to
+  retention, with a reason (`HISTORY_QUARANTINE_REVIEWED`, Settings, `POST
+  /api/history/quarantine/review`). Unreviewed quarantines are never pruned; once older than the
+  window they raise `HISTORY_QUARANTINE_REVIEW_DUE`.
+- Cloud completion receipt (`aquacrop-<time>.receipt.json`), uploaded last after `cryptcheck` and
+  checked the same way; pruning removes it first and the drill checks it. A replacement controller
+  with no ledger picks the newest copy that has one.
+- Replacement-controller recovery procedure (`offsite-backups.md` section 8.1), rehearsed by a test
+  with the real rclone crypt remote, test-only keys and a local folder in place of OneDrive.
+- Trends over a whole year: ranges up to 365 days; a point with more samples than fit is answered
+  per bucket of 10 min, 1 h or 1 day with mean, min, max and sample counts, drawn as a solid mean
+  with dashed min and max and labelled as aggregated. The CSV export (paged, complete) keeps every
+  sample.
+- `scripts/measure_process_workload.py` and `measure_storage.py --process-workload`: the storage
+  measurement with the event and command rates of all processes running in AUTO.
+- `docs/RELEASE_READINESS.md`; acceptance rows for OP-01 to OP-06, BK-01 to BK-07, DL-01 to DL-05
+  and UI-06; tests for 144 observations from three snapshots, kept configuration records, the year
+  chart and paged export, no bus frame from backup, drill and restore, and the gate manifest.
+- CI jobs `launcher` (Windows, macOS, Ubuntu), `release` (builds the ZIP), `release-windows`
+  (offline first run from the ZIP) and `release-cm4-staging` (installer from the ZIP on ARM64).
+
+### Changed
+- Retention keeps the newest `CONFIG_LOADED` event of each distinct configuration, which defines
+  the configuration and scaling that retained samples refer to, also past the window.
+- `docs/installation/cm4.md` and `docs/operations/service.md` use the guided installer for install,
+  upgrade and rollback; `service.md` now says this release migrates schema 2 to 3.
+- The Tailscale section of `docs/security/security.md` is replaced by the OpenVPN route.
+- Version 0.3.0.
+
+## 0.3.0 (2026-10-12): process pages and installation diagram
 
 Pre-hardware release, stage 3. Process control is simulation only; on a hardware profile the diagram
 and the process pages are read-only observation and every signal stays UNBOUND.
@@ -42,7 +98,7 @@ and the process pages are read-only observation and every signal stays UNBOUND.
 - `/api/plant` returns full alarm occurrences (latch and reset state included) so pages can say what
   to do next.
 
-## Unreleased (2026-10-12): installation model and process controllers (ADR-0013, ADR-0014)
+## 0.3.0 (2026-10-12): installation model and process controllers (ADR-0013, ADR-0014)
 
 Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists and no flag enables it.
 
@@ -82,7 +138,7 @@ Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists a
 - The simulation runtime acquires once per control period for the installation topology (the demo
   topology still scans every tick); configuration lookups are cached.
 
-## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
+## 0.3.0 (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 
 ### Added
 - Timestamp quarantine: when records are stamped later than the clock (a clock that ran ahead and
@@ -117,7 +173,7 @@ Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists a
 - A confirmed quarantine supersedes the clock hold it answers (`TIMESTAMPS_QUARANTINED`); a hold
   that was in force at shutdown is restored at start.
 
-## Unreleased (2026-10-12): historian at 60 s, rolling 365 days (ADR-0008, revised after review)
+## 0.3.0 (2026-10-12): historian at 60 s, rolling 365 days (ADR-0008, revised after review)
 
 ### Changed
 - History is a complete snapshot of every point every 60 s of wall time (`historian.recording_interval_s`,

@@ -93,24 +93,53 @@ clock for all timing.
 
 ## 6. Install the software
 
+From the unpacked release folder (`README-FIRST.md`), with the guided installer
+(`deploy/aquacrop-cm4.py`, standard library only). Each command says what it does and stops at the
+first failure; add `--dry-run` to see every command and file change first.
+
 ```text
-sudo adduser --system --group --home /var/lib/aquacrop aquacrop
-sudo usermod -aG dialout aquacrop
-sudo mkdir -p /opt/aquacrop/releases/0.2.0 /etc/aquacrop
-sudo python3 -m venv /opt/aquacrop/releases/0.2.0/venv
-# copy the aarch64 py3.11 wheelhouse built with scripts/build_wheelhouse.sh, then:
-sudo /opt/aquacrop/releases/0.2.0/venv/bin/python -m pip install --no-index --find-links /path/to/wheelhouse "aquacrop-greenhouse[hardware]"
-sudo ln -sfn /opt/aquacrop/releases/0.2.0 /opt/aquacrop/current
+sha256sum -c MANIFEST.sha256                                    # the release is intact
+sudo python3 deploy/aquacrop-cm4.py check   --release .         # read-only: architecture, Python, space, release files
+sudo python3 deploy/aquacrop-cm4.py install --release . --config /etc/aquacrop/hardware-read-only.yaml
+sudo python3 deploy/aquacrop-cm4.py status
 ```
 
-Copy `configs/hardware-read-only.example.yaml` to `/etc/aquacrop/hardware-read-only.yaml`, fill in
-only verified facts (ports, addresses, evidence), keep AI modes `UNKNOWN` until CP-02, and validate:
+`install` verifies every file against `MANIFEST.sha256`, creates the `aquacrop` system user (group
+`dialout` only), installs the wheel offline from `wheelhouse-aarch64-py311` with the hashes in
+`requirements.lock`, lays out `/opt/aquacrop/releases/<version>` with the `current` link, writes
+`/etc/aquacrop/aquacrop.env` (0640) and `/var/lib/aquacrop` (0700), and installs and enables the
+systemd units. It does not start the application, create an account, format anything or touch
+`/boot/firmware`. It then prints the next steps: the configuration, the first administrator
+(one-time password), the start and the health check. Upgrade, rollback and the pre-upgrade backup:
+`docs/operations/service.md`. TLS for the LAN and OpenVPN: `docs/security/remote-access.md`.
+
+The configuration: copy `configs/hardware-read-only.example.yaml` to
+`/etc/aquacrop/hardware-read-only.yaml`, fill in only verified facts (ports, addresses, evidence),
+keep AI modes `UNKNOWN` until CP-02, and validate:
 
 ```text
 sudo -u aquacrop /opt/aquacrop/current/venv/bin/python -m aquacrop config validate --config /etc/aquacrop/hardware-read-only.yaml
 ```
 
-Then follow `docs/operations/service.md` for the systemd unit, the first admin user and backups.
+By hand, without the installer (the same result):
+
+```text
+sudo adduser --system --group --home /var/lib/aquacrop aquacrop
+sudo usermod -aG dialout aquacrop
+sudo mkdir -p /opt/aquacrop/releases/<version> /etc/aquacrop
+sudo python3 -m venv /opt/aquacrop/releases/<version>/venv
+sudo /opt/aquacrop/releases/<version>/venv/bin/python -m pip install --no-index \
+     --find-links wheelhouse-aarch64-py311 --require-hashes -r requirements.lock
+sudo /opt/aquacrop/releases/<version>/venv/bin/python -m pip install --no-deps wheels/aquacrop_greenhouse-<version>-py3-none-any.whl
+sudo ln -sfn releases/<version> /opt/aquacrop/current
+```
+
+Then follow `docs/operations/service.md` for the systemd units, the first admin user and backups.
+
+**Tested how:** in CI the installer runs from the built release ZIP on a hosted Ubuntu ARM64 runner
+in a staging root (check, install, demo verify, installed-wheel check, upgrade, rollback, status),
+and `tests/unit/test_cm4_installer.py` covers it with fake releases. A staging root skips the user,
+ownership and systemd steps (they are listed). **Not run on a CM4.**
 
 ## 7. Performance on the CM4
 
