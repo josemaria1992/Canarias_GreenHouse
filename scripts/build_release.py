@@ -28,6 +28,13 @@ FORBIDDEN_SUFFIXES = (".key", ".pem", ".sqlite3", ".sqlite3-wal", ".sqlite3-shm"
 FORBIDDEN_NAMES = ("rclone.conf", "secret.key", ".env", "aquacrop.env")
 LINUX_PLATFORMS = {"aarch64": ("manylinux_2_17_aarch64", "manylinux2014_aarch64", "manylinux_2_28_aarch64"),
                    "x86_64": ("manylinux_2_17_x86_64", "manylinux2014_x86_64", "manylinux_2_28_x86_64")}
+# The environment markers of each wheelhouse target: `pip download --platform` selects wheels for the target
+# but evaluates markers on the build machine, which would leave out e.g. tzdata (`sys_platform == 'win32'`).
+MARKER_ENVS = {
+    "win_amd64": {"sys_platform": "win32", "platform_system": "Windows", "os_name": "nt", "platform_machine": "AMD64"},
+    "aarch64": {"sys_platform": "linux", "platform_system": "Linux", "os_name": "posix", "platform_machine": "aarch64"},
+    "x86_64": {"sys_platform": "linux", "platform_system": "Linux", "os_name": "posix", "platform_machine": "x86_64"},
+}
 
 
 def sha256(p: Path) -> str:
@@ -97,16 +104,44 @@ def acceptance_manifest(text: str) -> dict:
                                                 "docs/RELEASE_READINESS.md"}
 
 
+def lock_for(text: str, plat: str, pyv: str) -> str:
+    """requirements.lock with its environment markers decided for the target: an entry whose marker holds
+    there keeps its pin and hashes without the marker, any other entry is left out."""
+    try:
+        from packaging.markers import Marker
+    except ImportError:                                   # pip's own copy, when packaging is not installed
+        from pip._vendor.packaging.markers import Marker
+    env = {"python_version": pyv, "python_full_version": pyv + ".0", "implementation_name": "cpython",
+           "platform_python_implementation": "CPython", **MARKER_ENVS.get(plat, {"sys_platform": plat})}
+    out, keep = [], True
+    for line in text.splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            req, sep, rest = line.partition(";")
+            keep = True
+            if sep:
+                marker = rest.rstrip().removesuffix("\\").strip()
+                keep = Marker(marker).evaluate(env)
+                line = req.rstrip() + " \\"
+        if keep:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def wheelhouse(stage: Path, spec: str) -> Path:
     plat, pyv = spec.split(":")
     tag = "py" + pyv.replace(".", "")
     out = stage / f"wheelhouse-{plat}-{tag}"
     plats = LINUX_PLATFORMS.get(plat, (plat,))
+    lock = stage / f"requirements-{plat}-{tag}.lock"
+    lock.write_text(lock_for((ROOT / "requirements.lock").read_text(encoding="utf-8"), plat, pyv), encoding="utf-8")
     cmd = [sys.executable, "-m", "pip", "download", "--disable-pip-version-check", "--require-hashes", "-r",
-           str(ROOT / "requirements.lock"), "--only-binary=:all:", "--python-version", pyv, "-d", str(out)]
+           str(lock), "--only-binary=:all:", "--python-version", pyv, "-d", str(out)]
     for p in plats + ("any",):
         cmd += ["--platform", p]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    finally:
+        lock.unlink(missing_ok=True)
     (out / "TARGET.txt").write_text(f"python {pyv} platform {plat}\n", encoding="utf-8")
     return out
 

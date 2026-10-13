@@ -46,3 +46,17 @@ def test_a_duplicate_or_missing_gate_or_an_unknown_status_is_refused(build):
         build.acceptance_manifest(text.replace(row, ""))
     with pytest.raises(ValueError, match="unknown status"):
         build.acceptance_manifest(text.replace(row, row.replace("| PASS |", "| MOSTLY |", 1)))
+
+
+def test_wheelhouse_lock_decides_markers_for_the_target_platform(build):
+    """`pip download --platform` evaluates markers on the build machine; the wheelhouse lock decides them for
+    the target, so the Windows wheelhouse carries tzdata (sys_platform == 'win32') and the CM4 one does not."""
+    text = (ROOT / "requirements.lock").read_text(encoding="utf-8")
+    win, cm4 = build.lock_for(text, "win_amd64", "3.12"), build.lock_for(text, "aarch64", "3.11")
+    assert "\ntzdata==" in win and "tzdata" not in cm4.replace("# via", "")
+    assert ";" not in "".join(ln for ln in win.splitlines() if not ln.lstrip().startswith("#"))
+    entry = win[win.index("\ntzdata=="):].split("\n")
+    assert entry[1].endswith(" \\") and entry[2].lstrip().startswith("--hash=sha256:")     # pin and hashes kept
+    for out in (win, cm4):
+        pins = [ln.split("==")[0] for ln in out.splitlines() if ln and not ln[0].isspace() and not ln.startswith("#")]
+        assert "fastapi" in pins and "pycparser" in pins and len(pins) == len(set(pins))
