@@ -76,7 +76,9 @@ sector valves, verify, deselect pumps, verify.
 | EC_TARGET: batch maxima reached below target (on measured delivery) | Alarm `REFILL_EC_LIMIT_REACHED`. |
 | EC_TARGET: each step | `max_a_L`/`max_b_L` apply to the **measured** delivery: the flow meter integrated from valve open until the stop is verified, start-up and stopping coast included. The next step is shortened by the largest coast (measured minus commanded) seen in this batch for that stock (the stopping margin). Commanded and measured quantities are both recorded per step (`REFILL_EC_STEP_DELIVERED`). |
 | EC_TARGET: measured total above a maximum (tolerance 0 L; possible on the first step, before any coast has been measured) | Dosing stops (`MAX_EXCEEDED`, measured totals shown), alarm `REFILL_EC_LIMIT_EXCEEDED`, batch `OUT_OF_SPEC`. |
-| EC_TARGET: EC unavailable | Nutrient dosing stops; alarm `REFILL_EC_UNAVAILABLE`. |
+| EC_TARGET: EC unusable (invalid, stale, module timeout) while an A/B step is opening, starting or running | In that scan both nutrient paths are stopped (`EC_UNAVAILABLE`), the step's measured delivery is recorded, event `REFILL_EC_STEP_STOPPED`, alarm `REFILL_EC_UNAVAILABLE`, batch nutrients `STOPPED` (batch `INCOMPLETE`, or `FAILED` if a path also failed). No further nutrient step in this batch, even when the probe returns. Water, irrigation and return follow their own permissives. |
+| EC_TARGET: EC unusable between steps | Nutrient dosing stops; alarm `REFILL_EC_UNAVAILABLE`. |
+| FIXED_VOLUMES | Unchanged and distinct: the fixed A/B volumes are not EC-controlled; EC is only validated after the settling window. |
 
 ## ACID (lowering pH only; no base dosing exists)
 

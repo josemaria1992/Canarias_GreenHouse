@@ -86,6 +86,71 @@ def test_r3_healthy_alternation_still_starts(icfg):
     assert irr.state == CS.AUTO and drive_runs(rt, 0)
 
 
+# ------------------------------------------------------------------------------------------ R2
+def batch_of(rf):
+    return rf.batch if rf.batch is not None else rf.batches[-1]
+
+
+@pytest.mark.parametrize("fault", ["invalid", "stale", "unavailable"])
+def test_r2_unusable_ec_during_a_step_stops_both_nutrient_paths(icfg, fault):
+    """invalid: open-circuit raw 0 on the EC input; stale: acquisition stalls (every observation ages,
+    the twin has no per-point staleness); unavailable: the EC probe's analog module stops answering."""
+    rt = refill_rt(icfg, {"refill": {"ec": {"step_total_L": 200}}})
+    assert rt.process_request("t", "REFILL", CS.AUTO)[0]
+    rf = rt.sup.by_id["REFILL"]
+    until(rt, lambda: "A" in rf.paths and rf.paths["A"].state == "RUNNING")
+    a0, b0 = rt.plant.tanks["A"].volume, rt.plant.tanks["B"].volume
+    n_steps = len(rf.batch["ec_steps"])
+    p = ec_point(rt)
+    if fault == "invalid":
+        rt.set_override("t", p, 0, "open circuit during a nutrient step")
+    elif fault == "stale":
+        rt.freeze_observation("t", p)
+        rt.set_acquisition_stall("t", True)
+    else:
+        rt.set_device_fault("t", p.split(".")[0], "TIMEOUT")
+    rt.run_for(2)
+    # same scan as the EC loss: both nutrient pumps commanded off, the reason is the EC probe
+    assert not rt.plant.pumps["TP_A"].cmd and not rt.plant.pumps["TP_B"].cmd
+    assert rt.obs().num("main.ec") is None
+    b = batch_of(rf)
+    assert b["nutrients"].startswith("STOPPED (EC unavailable during step"), b["nutrients"]
+    assert rt.alarms.is_active("REFILL_EC_UNAVAILABLE", "process.REFILL")
+    assert any(e["kind"] == "REFILL_EC_STEP_STOPPED" for e in rt.events)
+    if fault == "stale":
+        rt.set_acquisition_stall("t", False)          # measurements return; the stop can be verified
+    rt.run_for(15)
+    assert rf.batch is None or all(rf.paths[s].finished for s in ("A", "B") if s in rf.paths)
+    b = batch_of(rf)
+    assert b["nutrients"].startswith("STOPPED (EC unavailable during step")
+    step = b["ec_steps"][-1]
+    assert len(b["ec_steps"]) == n_steps                                  # no further step
+    assert step["a_delivered_L"] < step["a_L"] and step["b_delivered_L"] < step["b_L"]   # measured, audited
+    # bounded: what left the stocks after the stop is the stopping coast, not a continuing transfer
+    a_used, b_used = a0 - rt.plant.tanks["A"].volume, b0 - rt.plant.tanks["B"].volume
+    rt.run_for(30)
+    assert a0 - rt.plant.tanks["A"].volume == pytest.approx(a_used, abs=1e-6)
+    assert b0 - rt.plant.tanks["B"].volume == pytest.approx(b_used, abs=1e-6)
+    assert not [e for e in rt.events if e["kind"] == "REFILL_EC_STEP"][n_steps:]
+
+
+def test_r2_no_new_nutrient_step_when_the_probe_returns(icfg):
+    rt = refill_rt(icfg, {"refill": {"ec": {"step_total_L": 200, "settle_s": 1}}})
+    assert rt.process_request("t", "REFILL", CS.AUTO)[0]
+    rf = rt.sup.by_id["REFILL"]
+    until(rt, lambda: "A" in rf.paths and rf.paths["A"].state == "RUNNING")
+    p = ec_point(rt)
+    rt.set_override("t", p, 0, "open circuit")
+    rt.run_for(10)
+    n = len(batch_of(rf)["ec_steps"])
+    rt.clear_override("t", p)
+    rt.run_for(60)
+    b = batch_of(rf)
+    assert len(b["ec_steps"]) == n and b["nutrients"].startswith("STOPPED")
+    starts = [e for e in rt.events if e["kind"] == "REFILL_EC_STEP"]
+    assert len(starts) == n
+
+
 # ------------------------------------------------------------------------------------------ R4
 def _max_run(icfg, changes, **plant):
     rt = refill_rt(icfg, changes, **plant)

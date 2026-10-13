@@ -49,6 +49,9 @@ Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists a
   keeps commanded and measured quantities; the next step is shortened by the largest coast measured in
   the batch; a measured total above a maximum (tolerance 0 L) is an overrun: dosing stops, alarm
   `REFILL_EC_LIMIT_EXCEEDED`, batch `OUT_OF_SPEC`.
+- R2: an unusable EC probe during an active EC-target A/B step stops both nutrient paths in the same
+  scan (previously only after the step completed), records the measured delivery and the reason, and
+  no further step runs in that batch even if the probe returns. The batch keeps its first stop reason.
 
 ## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 

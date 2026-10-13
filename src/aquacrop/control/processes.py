@@ -656,7 +656,8 @@ class Refill(_PathProcess):
                 other = self.paths.get("B" if p.name == "A" else "A")
                 if other and not other.finished:
                     other.stop(ctx, f"partner path {p.name} failed: A:B ratio cannot be kept")
-                b["nutrients"] = f"STOPPED (path {p.name} failed)"
+                if not b["nutrients"].startswith("STOPPED"):     # the first stop reason stays the batch's reason
+                    b["nutrients"] = f"STOPPED (path {p.name} failed)"
 
     def _ec_tick(self, ctx: Ctx) -> None:
         b, ec_r = self.batch, self.recipe.body.refill.ec
@@ -666,6 +667,17 @@ class Refill(_PathProcess):
         steps = b["ec_steps"]
         doing = [self.paths[s] for s in ("A", "B") if s in self.paths and not self.paths[s].finished]
         if doing:
+            if ctx.obs.num("main.ec") is None:     # the step is EC-controlled: no usable EC, no more nutrient
+                why = ctx.obs.why("main.ec")
+                for p in doing:
+                    p.stop(ctx, f"EC_UNAVAILABLE ({why}): nutrient dosing stopped")
+                b["nutrients"] = f"STOPPED (EC unavailable during step {len(steps)}: {why})"
+                self.sup.emit("REFILL_EC_STEP_STOPPED", {"batch": b["batch_id"], "step": len(steps), "reason": why,
+                                                         "paths": [p.name for p in doing]}, "controller")
+                self.sup.alarms.raise_or_update("REFILL_EC_UNAVAILABLE", "process.REFILL", severity="WARNING",
+                                                sim_s=ctx.now, message=f"Refill: EC probe unusable ({why}) during a "
+                                                f"nutrient step; both nutrient paths stopped")
+                return
             b["nutrients"] = "DOSING"
             return
         if b["nutrients"] == "DOSING":
