@@ -37,10 +37,13 @@ def main() -> int:
     bus = pf.bus("uicheck")
     bus.add("relay", 1)
     bus.add("ai", 2)
+    bus.add("digital_io", 5)          # an IO 8CH (SKU 26244) beside the Relay (D): transistor outputs
     vfd = bus.add("vfd", 9)
     vfd.holding = {100: 0, 101: 1, 102: 0, 103: 0, 104: 0}
     data = yaml.safe_load((ROOT / "tests" / "fixtures" / "hw-fake.yaml").read_text(encoding="utf-8"))
     data["buses"][0]["port"] = "aquafake://uicheck"
+    data["devices"].append({"device_uid": "digital_A", "bus_id": "rs485_a", "address": 5,
+                            "model": "WAVESHARE_MODBUS_RTU_IO_8CH", "sku": "26244"})
     data["drive_adapters"] = [{"adapter_id": "MAIN", "kind": "MODBUS_RTU", "signals": ["drive.MAIN.run"], "modbus": {
         "bus_id": "rs485_a", "address": 9, "drive_model": "test double", "manual_reference": "tests/fakes",
         "control_register": 100, "run_sequence": [1, 3], "stop_value": 0, "status_register": 101,

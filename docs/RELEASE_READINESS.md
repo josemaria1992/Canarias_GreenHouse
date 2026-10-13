@@ -1,5 +1,11 @@
 # Release readiness: AquaCrop 0.3.0 (pre-hardware release)
 
+**Inventory supplement, 2026-10-13:** two IO 8CH modules (SKU 26244) were added: 80 points over six
+modules, 16 AI + 32 DI + 32 DO, of which 16 DO are open-drain transistor sinks, not relay contacts
+(ADR-0016, `model/digital_io_8ch.md`). The added channels are configured and testable but carry no
+field assignment (item 2). Storage is re-measured for 80 points (item 24). The owner review findings
+R1-R4 of the same day are fixed and await re-review (`ACCEPTANCE.md`).
+
 **This release is software and simulation only.** Nothing in it has run on the CM4, the I/O
 modules, the drive, a probe, the SD card or the owner's OneDrive account. Physical AUTO does not
 exist and no setting, profile or flag enables it. A real installation starts and stays
@@ -45,7 +51,7 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 | # | Item | Today | Needed to close it |
 |---|---|---|---|
 | 1 | 17th output: drive run (the modules give 16 DO) | decided 2026-10-13: over the drive's Modbus interface (ADR-0015); software and simulation done; adapter `NOT_CONFIGURED` on hardware | drive make, model and Modbus manual; the register map entered as `PROPOSED` on the bench and `VERIFIED` by CP-06 (`model/vfd_modbus.md`) |
-| 2 | Point allocation of the 48 channels | all 16 DI and 16 DO in use, no third module (owner, 2026-10-13); the per-channel table is still the proposal of ADR-0013 | owner confirms or changes the per-channel table; wiring drawings that match it |
+| 2 | Point allocation of the 80 channels | relay/analog modules: all 16 DI and 16 DO in use (owner, 2026-10-13), per-channel table still the ADR-0013 proposal; IO 8CH modules: 16 DI and 16 transistor DO unallocated, with a concrete proposal (`model/signal_budget.md`, last section) | owner confirms or changes both tables (which valve limits, stock low switches, drive ready and starter trip contacts are fitted); wiring drawings that match them |
 | 3 | Cause-and-effect table | proposal (`model/cause_and_effect.md`) | owner confirms each row, especially fault propagation through the shared drive |
 | 4 | Safe-state matrix: what each output does on fault, power loss and restart | relays keep state; software sends no write at start or reconnect | owner and electrician decide per output; hardwired where it matters |
 | 5 | Independent protections: E-stop, motor protection, dry-run, overfill, K1/K2 mutual exclusion | outside the software | electrician's design and test record; the software only reads the safety chain |
@@ -53,7 +59,7 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 | 7 | AI channel data types, jumpers and hardware variant | `UNKNOWN`, values unscaled | CP-01 (photos) and CP-02 per channel |
 | 8 | Probes: main, sump and stock levels, pH, EC, flows, pressures | proposed tags; DEMO scaling in simulation; a real profile refuses unverified scaling and shows raw values | sensor model, span and calibration certificate per probe; scaling profile set to `VERIFIED` with that evidence |
 | 9 | Drive stop and run proof | hardwired DI in the proposal (relay_A DI1/DI2); the Modbus status word is a second opinion | which drive outputs prove running and fault, wired to which DI; status bits checked in CP-06 |
-| 10 | Valve feedback (sector closed limits, stock outlet and fill valves) | indirect (flow or level rise), shown as weaker evidence; no third module (owner, 2026-10-13) | measured during commissioning that the indirect proof detects a stuck valve |
+| 10 | Valve feedback (sector closed limits, stock outlet and fill valves) | indirect (flow or level rise), shown as weaker evidence; IO 8CH inputs are proposed for limit switches if the valves have them | owner says which limit switches are fitted; otherwise measured during commissioning that the indirect proof detects a stuck valve |
 | 11 | Hydraulics: pump flows and curves, channel hold-up (about 16,575 L from the stated sizes), main and sump usable headroom, transit times | DEMO parameters with provenance | measured flows and levels during commissioning |
 | 12 | Refill recipe: trigger, endpoint, fixed A/B volumes or EC target with A:B ratio, tolerances, transfer limits | user recipe; DEMO preset in simulation only; the owner's 5,000 + 1,000 + 1,000 + 12,500 + 500 L example is not seeded | production values entered and validated as a recipe |
 | 13 | Acid: concentration, dose step, settling window, batch maximum; pH target (owner preference about 6) | synthetic fixture `synthetic-carbonate-ec-v1` | acid stock data sheet and a measured response on the real tank |
@@ -67,6 +73,7 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 | 21 | Network time and OS updates | not set | NTP source on the LAN or the RTC only; `apt` update schedule (never during a bench session) |
 | 22 | Remote access site values | examples only in `remote-access.md` | VPN server location, LAN and VPN subnets, controller address and name, one VPN profile per person |
 | 23 | Off-device backup activation | disabled; card, folder, key escrow and copy counts chosen 2026-10-12 | `offsite-backups.md` sections 2, 3 and 5 on the controller |
+| 24 | Storage for 80 points: database budget, WAL, backups and restore scratch | 60 s complete snapshots, 365 days, SQLite unchanged; the 10 GiB database budget was sized for 48 points and is provisional; the owner's one-day 80-point run projects about 13.2 GiB/year | a representative 80-point measurement and an agreed storage layout (CM4 eMMC size, SD card use) before deployment; retention, cadence and format are not changed to fit |
 
 ## 4. Not part of this release
 

@@ -94,6 +94,15 @@ async function main() {
     const stale = await p.locator("#stale").evaluate(e => !e.classList.contains("hidden"));
     await shot(p, "page-" + v);
     check("UI-01 page " + v, txt.length > 80 && !txt.includes("This page does not exist in this profile") && !stale, `${txt.length} chars, stale banner ${stale}`);
+    if (v === "io") {
+      const heads = await p.$$eval("#v-io .card h3", hs => hs.map(x => x.parentElement.textContent));
+      const sink = heads.filter(t => /TRANSISTOR SINK — not relay contacts, max 500 mA/.test(t)).map(t => t.split(" ")[0]);
+      const relay = heads.filter(t => /relay contacts/.test(t) && !/TRANSISTOR/.test(t)).map(t => t.split(" ")[0]);
+      const pts = (await get(p, "/api/points")).devices;
+      check("UI-01 six modules, 80 points", pts.length === 6 && pts.reduce((n, g) => n + g.points.length, 0) === 80 &&
+        sink.join() === "digital_A,digital_B" && relay.join() === "relay_A,relay_B",
+        `transistor sinks ${sink.join(", ")}; relay contacts ${relay.join(", ")}`);
+    }
   }
 
   // UI-01: each process page carries its part of the diagram, its controls, its alarms and its trend
@@ -346,6 +355,10 @@ async function hardware() {
   const ioDrv = await p.locator("#v-io tr", { hasText: "drive:MAIN" }).first();
   const runBtns = await ioDrv.locator("button").count();
   check("HW drive read-only without a lease", (await ioDrv.count()) > 0 && runBtns === 0, `drive row on the I/O page, ${runBtns} Run/Stop buttons without a lease`);
+  const hwIoHead = await p.$$eval("#v-io .card h3", hs => hs.map(x => x.parentElement.textContent));
+  const hwDig = hwIoHead.find(t => t.startsWith("digital_A")) || "", hwRel = hwIoHead.find(t => t.startsWith("relay_A")) || "";
+  check("HW output types", /TRANSISTOR SINK — not relay contacts, max 500 mA/.test(hwDig) && /relay contacts/.test(hwRel) && !/TRANSISTOR/.test(hwRel),
+    "I/O page: digital_A (SKU 26244) labelled transistor sink, relay_A labelled relay contacts");
   check("HW page errors", errs.length === 0, errs.join("; ") || "none");
   await b.close();
 }

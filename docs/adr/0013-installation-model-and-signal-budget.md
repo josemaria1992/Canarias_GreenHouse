@@ -61,3 +61,10 @@ The owner chose option 1 of `docs/model/signal_budget.md`: all 16 DI and 16 DO a
 and no third relay module is added; the weaker valve evidence is accepted. The drive's run command
 goes over the drive's own Modbus interface (ADR-0015): `MODBUS_RTU` against the simulated drive in
 the twin, `NOT_CONFIGURED` on hardware until CP-06. The per-channel table remains a proposal.
+
+## Addendum 2026-10-13, afternoon (owner)
+
+The inventory is six modules, 80 points: the two Relay (D) and two AI boards above plus two IO 8CH
+(SKU 26244) with 8 DI and 8 open-drain DO each (ADR-0016). "No third relay module" still holds; the
+48-point allocation above is unchanged, and the 32 added channels stay unallocated until the owner
+answers the proposal in `docs/model/signal_budget.md`.

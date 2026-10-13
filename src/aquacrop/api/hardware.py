@@ -23,7 +23,7 @@ from collections import deque
 from concurrent.futures import Future
 from datetime import datetime, timezone
 
-from ..config.catalog import ModelId
+from ..config.catalog import DIGITAL_IO_MODELS, ModelId
 from ..config.schema import InstallationConfig
 from ..control.alarms import AlarmEngine
 from ..control.bench import BenchGate, close_stale_leases, historian_persistence
@@ -184,11 +184,11 @@ class HardwareService:
             ri = self.backend.read_inputs(d.device_uid)
             got += ri.samples
             ok, err = ri.ok, ri.error
-            if d.model == ModelId.WAVESHARE_RELAY_D and ri.ok:
+            if d.model in DIGITAL_IO_MODELS and ri.ok:
                 ro = self.backend.read_outputs(d.device_uid)
                 got += ro.samples
                 ok, err = ro.ok, ro.error
-            elif d.model == ModelId.WAVESHARE_RELAY_D:
+            elif d.model in DIGITAL_IO_MODELS:
                 # inputs already failed this cycle: don't spend another timeout on coils
                 got += self.backend.unavailable(d.device_uid, ri.error or "device read failed", (PointKind.DO,)).samples
             status[d.device_uid] = (ok, err)

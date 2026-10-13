@@ -223,6 +223,19 @@ bus (not physical verification).
 | RV-R2 an unusable EC probe during an active EC-controlled A/B step stops both nutrient paths in the same scan, records the measured delivery and reason, and allows no further step when the probe returns | PASS | `test_r2_unusable_ec_during_a_step_stops_both_nutrient_paths[invalid,stale,unavailable]` (pumps off within the scan, stock volumes constant afterwards, no new `REFILL_EC_STEP`), `test_r2_no_new_nutrient_step_when_the_probe_returns`; FIXED_VOLUMES scenarios unchanged. "stale" uses an acquisition stall: the twin has no per-point staleness |
 | RV-R1 bench authorization re-checked immediately before every physical write frame; expiry or revocation stops the remaining frames; partial sequences audited as uncertain; no retry or compensating write | PASS (fake bus) | `hardware/test_vfd_modbus.py::test_drive_lease_is_rechecked_at_every_write_frame[expiry_in_preflight,revoke_after_first_frame]` (zero frames after expiry during the status read; one frame and `OUTCOME_UNKNOWN` "1 of 2" after revocation), `hardware/test_modbus.py::test_r1_relay_lease_expiring_during_preflight_sends_no_frame`; zero-write startup, reconnect, shutdown and lease end: `test_at_mb_05_*`, `test_at_mb_06_expiry_sends_no_off_sequence` |
 
+### Added digital I/O modules (owner inventory of 13 October 2026, ADR-0016)
+
+In-memory fake bus and simulation only; no IO 8CH module has been connected.
+
+| ID | Status | Evidence |
+|---|---|---|
+| IO80-01 six modules, 16 AI + 32 DI + 32 DO = 80 points; relay contacts and open-drain sinks distinguished in catalogue, configuration and API | PASS | `hardware/test_digital_io_8ch.py::test_owner_inventory_and_electrical_types`, `test_api_reports_six_modules_and_transistor_outputs`; `unit/test_inventory.py`; `ui_check` "UI-01 six modules, 80 points" and "HW output types"; `check_installed_wheel.py` (inventory, SKUs, API output types) |
+| IO80-02 all 80 points independent on the I/O test source; loss of one added module isolated | PASS | `test_all_80_virtual_points_independent_and_new_module_loss_isolated`; `demo verify --config installation-80` |
+| IO80-03 read-only acquisition, diagnostics and history use the digital protocol with zero writes | PASS | `test_read_only_diagnostics_and_backend_use_digital_protocol`, `test_hardware_recorder_persists_all_80_without_writes` |
+| IO80-04 added outputs only under an isolated bench lease, one channel at a time; non-NORMAL, short, empty or unreadable modes refuse the write; expiry in preflight sends nothing | PASS | `test_bench_lease_supports_new_outputs_and_channel_isolation`, `test_new_output_refuses_unsafe_or_unreadable_modes[*]`, `test_expiry_during_new_module_preflight_sends_no_write` |
+| IO80-05 legacy 24/48-point configurations and the installed wheel still work | PASS | `integration/test_launcher.py`, `scripts/check_installed_wheel.py` (CI job installed-wheel) |
+| IO80-06 field assignment of the 32 added channels | OPEN (owner) | proposal in `model/signal_budget.md`; nothing bound |
+
 ## Pre-hardware release: process pages and installation diagram (UI)
 
 Browser evidence comes from `scripts/ui_check/run_ui_check.py`: it serves `installation-48`

@@ -22,7 +22,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from ..config.catalog import CATALOG, Capability, ModelId
+from ..config.catalog import CATALOG, Capability, DIGITAL_IO_MODELS, ModelId
 from ..config.schema import InstallationConfig
 from ..domain.model import (AccessPolicy, AcquisitionResult, DeviceHealth, Origin, OutputCommand, Outcome, PointId,
                             PointKind, WriteResult, utcnow)
@@ -56,7 +56,8 @@ class ModbusBackend:
         self.devices = {d.device_uid: WaveshareDevice(self.buses[d.bus_id], d.model, d.address) for d in cfg.devices}
         self._health = {d.device_uid: DeviceHealth(d.device_uid, d.bus_id) for d in cfg.devices}
         self.relay_modes: dict[str, RelayModes | None] = {d.device_uid: None for d in cfg.devices
-                                                          if d.model == ModelId.WAVESHARE_RELAY_D}
+                                                          if d.model in DIGITAL_IO_MODELS}
+        self.output_modes = self.relay_modes  # compatibility alias; includes transistor output modes
         self.ai_modes: dict[str, list | None] = {d.device_uid: None for d in cfg.devices
                                                  if d.model == ModelId.WAVESHARE_AI_8CH}
         self.drives = {a.target: VfdDevice(self.buses[a.modbus.bus_id], a.modbus) for a in cfg.drive_adapters
@@ -81,7 +82,7 @@ class ModbusBackend:
         wd = self.devices[device_uid]
         t0 = self._mono()
         try:
-            if dev.model == ModelId.WAVESHARE_RELAY_D:
+            if dev.model in DIGITAL_IO_MODELS:
                 bits = wd.read_discrete_inputs()
                 self.relay_modes[device_uid] = wd.read_relay_modes()
                 raws = {PointId(device_uid, PointKind.DI, i + 1): v for i, v in enumerate(bits)}
@@ -93,7 +94,7 @@ class ModbusBackend:
                 raws = {PointId(device_uid, PointKind.AI, i + 1): v for i, v in enumerate(regs)}
                 observed = {PointId(device_uid, PointKind.AI, i + 1): m for i, m in enumerate(modes)}
         except RtuError as e:
-            if dev.model == ModelId.WAVESHARE_RELAY_D:
+            if dev.model in DIGITAL_IO_MODELS:
                 self.relay_modes[device_uid] = None
             return self._failed(device_uid, f"{e.kind}: {e}", kinds)
         ctx, now = self._context(), utcnow()
@@ -106,7 +107,7 @@ class ModbusBackend:
     def read_outputs(self, device_uid: str) -> AcquisitionResult:
         dev = self.cfg.device(device_uid)
         kinds = (PointKind.DO,)
-        if dev.model != ModelId.WAVESHARE_RELAY_D:
+        if dev.model not in DIGITAL_IO_MODELS:
             return AcquisitionResult(device_uid, dev.bus_id, True, utcnow(), ())
         if (why := self._in_backoff(device_uid)) is not None:
             return self.unavailable(device_uid, why, kinds)
@@ -143,8 +144,8 @@ class ModbusBackend:
             return self._write_drive(command)
         pid = PointId.parse(command.target)
         dev = self.cfg.device(pid.device_uid)
-        if pid.kind != PointKind.DO or dev.model != ModelId.WAVESHARE_RELAY_D:
-            return WriteResult(Outcome.REJECTED, None, "target is not a relay coil")
+        if pid.kind != PointKind.DO or dev.model not in DIGITAL_IO_MODELS:
+            return WriteResult(Outcome.REJECTED, None, "target is not a supported digital output coil")
         wd = self.devices[dev.device_uid]
         try:   # preflight immediately before dispatch: modes must be NORMAL on all 8 channels
             modes = wd.read_relay_modes()

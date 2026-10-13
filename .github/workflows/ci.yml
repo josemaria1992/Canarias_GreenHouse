@@ -44,6 +44,7 @@ jobs:
           python -m aquacrop demo verify --config demo-48 --seed 42
           python -m aquacrop demo verify --config demo-24 --seed 42
           python -m aquacrop demo verify --config installation-48 --seed 42
+          python -m aquacrop demo verify --config installation-80 --seed 42
       - name: Simulation never loads serial libraries
         shell: python
         run: |

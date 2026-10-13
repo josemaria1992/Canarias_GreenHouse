@@ -1,6 +1,6 @@
 # The shared drive's run command over Modbus RTU
 
-Owner decision, 2026-10-13: keep the 48 points (all 16 DI and 16 DO are allocated) and investigate
+Owner decision, 2026-10-13: keep the relay/analog allocation (all 16 relay DI and DO are allocated) and investigate
 the drive's own Modbus interface for the extra run command. Keep the physical interface unconfigured
 until it is verified; finish the simulation and bench software meanwhile. ADR-0015 records the design.
 

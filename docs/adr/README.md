@@ -17,3 +17,4 @@
 | 0013 | Full-installation twin, 48-point signal budget and the drive adapter | proposed |
 | 0014 | One controller per process, an arbiter, recipes with versions | proposed |
 | 0015 | The shared drive's run command over its Modbus interface | proposed |
+| [0016](0016-added-digital-io-modules.md) | Two additional SKU 26244 modules, 80-point inventory | owner-confirmed inventory; physical allocation pending |

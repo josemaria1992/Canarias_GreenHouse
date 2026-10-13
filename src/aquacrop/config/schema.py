@@ -650,9 +650,7 @@ class InstallationConfig(_Strict):
         return None if self.twin is None else getattr(self.twin, "topology", "demo_small")
 
     def expected_point_count(self) -> int:
-        n_ai = sum(1 for d in self.devices if d.model == ModelId.WAVESHARE_AI_8CH)
-        n_rd = sum(1 for d in self.devices if d.model == ModelId.WAVESHARE_RELAY_D)
-        return 8 * n_ai + 16 * n_rd
+        return sum(CATALOG[d.model].ai + CATALOG[d.model].di + CATALOG[d.model].do for d in self.devices)
 
 
 def load_config(path: str | Path) -> InstallationConfig:

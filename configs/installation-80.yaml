@@ -1,0 +1,306 @@
+# SIMULATED full-installation fixture on the owner's six-module inventory of 2026-10-13: 80 virtual
+# points (2 x Relay (D) 26517 + 2 x AI 8CH 25821 + 2 x Modbus RTU IO 8CH 26244). The process model is
+# the same as installation-48; the 32 added channels are unallocated test points until the owner
+# confirms the proposed assignment (docs/model/signal_budget.md).
+#
+# Installation facts (tanks, pumps, valves, channels, sectors) are the owner's answers of 2026-10-12.
+# Dynamics, chemistry, scaling spans and the point binding below are DEMO proposals: the binding is
+# the signal-budget proposal of docs/model/signal_budget.md, not approved wiring. physical_mapping
+# stays empty. Nothing here is copied into a hardware profile.
+schema_version: 1
+config_id: installation-80
+config_version: "2026-10-13.80"
+profile: SIMULATED
+label: "SIMULATION — CONFIRMED SIX-MODULE INVENTORY, DEMO PROCESS MODEL (80 points)"
+site:
+  name: "AquaCrop greenhouse, Canary Islands — SIMULATION"
+  timezone: Atlantic/Canary       # owner, 2026-10-13 (the Malmö test bench uses Europe/Stockholm)
+  facts:
+    main_tank: "20,000 L nominal (owner 2026-10-12)"
+    stock_tanks: "A, B, acid: 5,000 L each (owner 2026-10-12)"
+    sump: "approximately 5,000 L (owner 2026-10-12)"
+    channels: "13 channels, about 85 x 0.30 x 0.15 m, 0.05 m retained; S1 = 1-6, S2 = 7-13; 4 adjustable outlets each"
+    pumps: "2 main pumps on one shared VFD, 2 return pumps, 3 stock transfer pumps; no agitators"
+    valves: "9 electric valve duties: 4 mains fill, 3 stock outlet, 2 sector"
+    io: "2 x 26517 Relay (D), 2 x 25821 AI, 2 x 26244 IO 8CH: 16 AI + 32 DI + 32 DO"
+    storage: "80-point annual growth not yet measured; existing 10 GiB warning budget is provisional"
+    physical_mapping: "TBD: requires the signal budget to be approved and the wiring verified"
+buses:
+  - bus_id: bus_sim_1
+    kind: virtual
+    poll_interval_s: 0.5
+devices:
+  - device_uid: relay_A
+    bus_id: bus_sim_1
+    address: 1
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: "26517"
+    label: "Relay module A (virtual) — irrigation and return (proposal)"
+    do:
+      1: {label: "K1 main pump 1 selection (proposal)"}
+      2: {label: "K2 main pump 2 selection (proposal)"}
+      3: {label: "Sector 1 valve (proposal)"}
+      4: {label: "Sector 2 valve (proposal)"}
+      5: {label: "Return pump 1 (proposal)"}
+      6: {label: "Return pump 2 (proposal)"}
+      7: {label: "Mains fill valve, main tank (proposal)"}
+      8: {label: "Mains fill valve, stock A (proposal)"}
+    di:
+      1: {label: "Drive running feedback (proposal)"}
+      2: {label: "Drive fault (proposal)"}
+      3: {label: "K1 auxiliary contact (proposal)"}
+      4: {label: "K2 auxiliary contact (proposal)"}
+      5: {label: "Sector 1 valve open limit (proposal)"}
+      6: {label: "Sector 2 valve open limit (proposal)"}
+      7: {label: "Return pump 1 running (proposal)"}
+      8: {label: "Return pump 2 running (proposal)"}
+  - device_uid: relay_B
+    bus_id: bus_sim_1
+    address: 2
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: "26517"
+    label: "Relay module B (virtual) — stock tanks and switches (proposal)"
+    do:
+      1: {label: "Transfer pump A (proposal)"}
+      2: {label: "Transfer pump B (proposal)"}
+      3: {label: "Transfer pump acid (proposal)"}
+      4: {label: "Stock A outlet valve (proposal)"}
+      5: {label: "Stock B outlet valve (proposal)"}
+      6: {label: "Acid outlet valve (proposal)"}
+      7: {label: "Mains fill valve, stock B (proposal)"}
+      8: {label: "Mains fill valve, acid tank (proposal)"}
+    di:
+      1: {label: "Transfer pump A running (proposal)"}
+      2: {label: "Transfer pump B running (proposal)"}
+      3: {label: "Transfer pump acid running (proposal)"}
+      4: {label: "Main tank high-high switch (proposal)"}
+      5: {label: "Main tank low-low switch (proposal)"}
+      6: {label: "Sump high switch (proposal)"}
+      7: {label: "Sump low switch, return dry-run (proposal)"}
+      8: {label: "Safety chain healthy (proposal)"}
+  - device_uid: analog_A
+    bus_id: bus_sim_1
+    address: 3
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: "25821"
+    hardware_variant: STANDARD
+    label: "Analog module A (virtual) — tanks and chemistry (proposal)"
+    ai:
+      1: {label: "Main tank level (proposal)", mode: "3", scaling: demo_level_main}
+      2: {label: "Sump level (proposal)", mode: "3", scaling: demo_level_sump}
+      3: {label: "Stock A level (proposal)", mode: "3", scaling: demo_level_stock}
+      4: {label: "Stock B level (proposal)", mode: "3", scaling: demo_level_stock}
+      5: {label: "Acid tank level (proposal)", mode: "3", scaling: demo_level_stock}
+      6: {label: "Main tank pH (proposal)", mode: "3", scaling: demo_ph}
+      7: {label: "Main tank EC (proposal)", mode: "3", scaling: demo_ec}
+      8: {label: "Mains water flow to main tank (proposal)", mode: "3", scaling: demo_flow_fill_main}
+  - device_uid: analog_B
+    bus_id: bus_sim_1
+    address: 4
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: "25821"
+    hardware_variant: STANDARD
+    label: "Analog module B (virtual) — flows and pressures (proposal)"
+    ai:
+      1: {label: "Sector 1 flow (proposal)", mode: "3", scaling: demo_flow_sector}
+      2: {label: "Sector 2 flow (proposal)", mode: "3", scaling: demo_flow_sector}
+      3: {label: "Sector 1 pressure (proposal)", mode: "3", scaling: demo_pressure}
+      4: {label: "Sector 2 pressure (proposal)", mode: "3", scaling: demo_pressure}
+      5: {label: "Return flow (proposal)", mode: "3", scaling: demo_flow_return}
+      6: {label: "Stock A transfer flow (proposal)", mode: "3", scaling: demo_flow_transfer_ab}
+      7: {label: "Stock B transfer flow (proposal)", mode: "3", scaling: demo_flow_transfer_ab}
+      8: {label: "Acid transfer flow (proposal)", mode: "3", scaling: demo_flow_transfer_acid}
+  # Two Waveshare Modbus RTU IO 8CH (SKU 26244): 8 DI + 8 open-drain sink DO each (500 mA max per
+  # output, not relay contacts). Channels unallocated until the owner confirms the proposal in
+  # docs/model/signal_budget.md; nothing in the process model reads or drives them.
+  - device_uid: digital_A
+    bus_id: bus_sim_1
+    address: 5
+    model: WAVESHARE_MODBUS_RTU_IO_8CH
+    sku: "26244"
+    label: "VIRTUAL digital_A — open-drain outputs, not relay contacts"
+    do:
+      1: {label: "digital_A DO1: unallocated/test transistor output"}
+      2: {label: "digital_A DO2: unallocated/test transistor output"}
+      3: {label: "digital_A DO3: unallocated/test transistor output"}
+      4: {label: "digital_A DO4: unallocated/test transistor output"}
+      5: {label: "digital_A DO5: unallocated/test transistor output"}
+      6: {label: "digital_A DO6: unallocated/test transistor output"}
+      7: {label: "digital_A DO7: unallocated/test transistor output"}
+      8: {label: "digital_A DO8: unallocated/test transistor output"}
+    di:
+      1: {label: "digital_A DI1: unallocated/test input"}
+      2: {label: "digital_A DI2: unallocated/test input"}
+      3: {label: "digital_A DI3: unallocated/test input"}
+      4: {label: "digital_A DI4: unallocated/test input"}
+      5: {label: "digital_A DI5: unallocated/test input"}
+      6: {label: "digital_A DI6: unallocated/test input"}
+      7: {label: "digital_A DI7: unallocated/test input"}
+      8: {label: "digital_A DI8: unallocated/test input"}
+  - device_uid: digital_B
+    bus_id: bus_sim_1
+    address: 6
+    model: WAVESHARE_MODBUS_RTU_IO_8CH
+    sku: "26244"
+    label: "VIRTUAL digital_B — open-drain outputs, not relay contacts"
+    do:
+      1: {label: "digital_B DO1: unallocated/test transistor output"}
+      2: {label: "digital_B DO2: unallocated/test transistor output"}
+      3: {label: "digital_B DO3: unallocated/test transistor output"}
+      4: {label: "digital_B DO4: unallocated/test transistor output"}
+      5: {label: "digital_B DO5: unallocated/test transistor output"}
+      6: {label: "digital_B DO6: unallocated/test transistor output"}
+      7: {label: "digital_B DO7: unallocated/test transistor output"}
+      8: {label: "digital_B DO8: unallocated/test transistor output"}
+    di:
+      1: {label: "digital_B DI1: unallocated/test input"}
+      2: {label: "digital_B DI2: unallocated/test input"}
+      3: {label: "digital_B DI3: unallocated/test input"}
+      4: {label: "digital_B DI4: unallocated/test input"}
+      5: {label: "digital_B DI5: unallocated/test input"}
+      6: {label: "digital_B DI6: unallocated/test input"}
+      7: {label: "digital_B DI7: unallocated/test input"}
+      8: {label: "digital_B DI8: unallocated/test input"}
+scaling_profiles:
+  - {profile_id: demo_level_main, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 20000, unit: L, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic span = nominal capacity; the real transmitter measures height (geometry TBD)"}
+  - {profile_id: demo_level_sump, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 5000, unit: L, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic span = approximate capacity"}
+  - {profile_id: demo_level_stock, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 5000, unit: L, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic span = nominal capacity"}
+  - {profile_id: demo_ph, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 14, unit: pH, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic 0-14 pH span; no probe or transmitter selected"}
+  - {profile_id: demo_ec, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 5, unit: mS/cm, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic 0-5 mS/cm span; no probe or transmitter selected"}
+  - {profile_id: demo_flow_fill_main, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 150, unit: L/min, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic meter span"}
+  - {profile_id: demo_flow_sector, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 200, unit: L/min, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic meter span"}
+  - {profile_id: demo_flow_return, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 300, unit: L/min, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic meter span"}
+  - {profile_id: demo_flow_transfer_ab, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 40, unit: L/min, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic meter span"}
+  - {profile_id: demo_flow_transfer_acid, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 16, unit: L/min, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic meter span"}
+  - {profile_id: demo_pressure, version: 1, status: DEMO, input_unit: uA, raw_low: 4000, raw_high: 20000,
+      eng_low: 0, eng_high: 6, unit: bar, valid_raw_min: 3800, valid_raw_max: 20500,
+      evidence: "synthetic transmitter span"}
+virtual_mapping:
+  # relay_A outputs
+  - {point: relay_A.DO1, signal: contactor.MP1.cmd}
+  - {point: relay_A.DO2, signal: contactor.MP2.cmd}
+  - {point: relay_A.DO3, signal: valve.S1.cmd}
+  - {point: relay_A.DO4, signal: valve.S2.cmd}
+  - {point: relay_A.DO5, signal: pump.RP1.cmd}
+  - {point: relay_A.DO6, signal: pump.RP2.cmd}
+  - {point: relay_A.DO7, signal: valve.FILL_MAIN.cmd}
+  - {point: relay_A.DO8, signal: valve.FILL_A.cmd}
+  # relay_B outputs
+  - {point: relay_B.DO1, signal: pump.TP_A.cmd}
+  - {point: relay_B.DO2, signal: pump.TP_B.cmd}
+  - {point: relay_B.DO3, signal: pump.TP_ACID.cmd}
+  - {point: relay_B.DO4, signal: valve.OUT_A.cmd}
+  - {point: relay_B.DO5, signal: valve.OUT_B.cmd}
+  - {point: relay_B.DO6, signal: valve.OUT_ACID.cmd}
+  - {point: relay_B.DO7, signal: valve.FILL_B.cmd}
+  - {point: relay_B.DO8, signal: valve.FILL_ACID.cmd}
+  # relay_A inputs
+  - {point: relay_A.DI1, signal: drive.MAIN.running}
+  - {point: relay_A.DI2, signal: drive.MAIN.fault}
+  - {point: relay_A.DI3, signal: contactor.MP1.closed}
+  - {point: relay_A.DI4, signal: contactor.MP2.closed}
+  - {point: relay_A.DI5, signal: valve.S1.open_limit}
+  - {point: relay_A.DI6, signal: valve.S2.open_limit}
+  - {point: relay_A.DI7, signal: pump.RP1.running}
+  - {point: relay_A.DI8, signal: pump.RP2.running}
+  # relay_B inputs
+  - {point: relay_B.DI1, signal: pump.TP_A.running}
+  - {point: relay_B.DI2, signal: pump.TP_B.running}
+  - {point: relay_B.DI3, signal: pump.TP_ACID.running}
+  - {point: relay_B.DI4, signal: tank.MAIN.high_high}
+  - {point: relay_B.DI5, signal: tank.MAIN.low_low}
+  - {point: relay_B.DI6, signal: tank.SUMP.high}
+  - {point: relay_B.DI7, signal: tank.SUMP.low}
+  - {point: relay_B.DI8, signal: safety.chain_ok}
+  # analog_A
+  - {point: analog_A.AI1, signal: tank.MAIN.level}
+  - {point: analog_A.AI2, signal: tank.SUMP.level}
+  - {point: analog_A.AI3, signal: tank.A.level}
+  - {point: analog_A.AI4, signal: tank.B.level}
+  - {point: analog_A.AI5, signal: tank.ACID.level}
+  - {point: analog_A.AI6, signal: main.ph}
+  - {point: analog_A.AI7, signal: main.ec}
+  - {point: analog_A.AI8, signal: flow.FILL_MAIN}
+  # analog_B
+  - {point: analog_B.AI1, signal: flow.S1}
+  - {point: analog_B.AI2, signal: flow.S2}
+  - {point: analog_B.AI3, signal: pressure.S1}
+  - {point: analog_B.AI4, signal: pressure.S2}
+  - {point: analog_B.AI5, signal: flow.RETURN}
+  - {point: analog_B.AI6, signal: flow.TP_A}
+  - {point: analog_B.AI7, signal: flow.TP_B}
+  - {point: analog_B.AI8, signal: flow.TP_ACID}
+# The shared VFD's run/stop goes over the drive's own Modbus interface (owner, 2026-10-13: all 16 DO stay
+# with the relays). Here it talks to the SIMULATED drive (twin/vfd.py) with a DEMO register map that
+# belongs to no real drive. A hardware profile keeps the adapter NOT_CONFIGURED until the real drive's map,
+# taken from its manual, is verified on the bench (CP-06, ADR-0015); a real profile refuses a DEMO map.
+drive_adapters:
+  - adapter_id: MAIN
+    kind: MODBUS_RTU
+    signals: [drive.MAIN.run]
+    modbus:
+      bus_id: bus_sim_1
+      address: 10
+      drive_model: "SIMULATED drive (no real make or model)"
+      manual_reference: "none: DEMO register map of the simulated drive (twin/vfd.py), not a vendor manual"
+      control_register: 100
+      run_sequence: [1, 3]          # DEMO: a two-step start, as some drive state machines need
+      stop_value: 0
+      status_register: 101
+      status_function: 3
+      running_mask: 4
+      fault_mask: 8
+      ready_mask: 1
+      frequency: {address: 102, scale: 0.1, unit: Hz}
+      current: {address: 103, scale: 0.1, unit: A}
+      fault_code: {address: 104}
+      comm_loss_timeout_s: 5
+      comm_loss_action: "stop and trip (simulated)"
+      provenance: DEMO
+    note: "simulated drive on the virtual bus; the real drive's register map is a commissioning item (CP-06)"
+physical_mapping: []
+alarm_rules:
+  - {rule_id: MAIN_LEVEL_LOW, kind: LOW, point: analog_A.AI1, threshold: 4000, hysteresis: 200, severity: WARNING}
+  - {rule_id: MAIN_LEVEL_HIGH, kind: HIGH, point: analog_A.AI1, threshold: 19000, hysteresis: 200, severity: WARNING}
+  - {rule_id: SUMP_LEVEL_HIGH, kind: HIGH, point: analog_A.AI2, threshold: 4200, hysteresis: 100, severity: WARNING}
+  - {rule_id: STOCK_A_LEVEL_LOW, kind: LOW, point: analog_A.AI3, threshold: 500, hysteresis: 50, severity: WARNING}
+  - {rule_id: STOCK_B_LEVEL_LOW, kind: LOW, point: analog_A.AI4, threshold: 500, hysteresis: 50, severity: WARNING}
+  - {rule_id: ACID_LEVEL_LOW, kind: LOW, point: analog_A.AI5, threshold: 300, hysteresis: 30, severity: WARNING}
+  - {rule_id: MAIN_HIGH_HIGH_SWITCH, kind: DI_ACTIVE, point: relay_B.DI4, severity: CRITICAL, latch: true, debounce_s: 1.0}
+  - {rule_id: MAIN_LOW_LOW_SWITCH, kind: DI_ACTIVE, point: relay_B.DI5, severity: CRITICAL, latch: true, debounce_s: 1.0}
+  - {rule_id: SUMP_HIGH_SWITCH, kind: DI_ACTIVE, point: relay_B.DI6, severity: WARNING, debounce_s: 1.0}
+  - {rule_id: SUMP_LOW_SWITCH, kind: DI_ACTIVE, point: relay_B.DI7, severity: INFO, debounce_s: 1.0}
+  - {rule_id: DRIVE_FAULT_INPUT, kind: DI_ACTIVE, point: relay_A.DI2, severity: CRITICAL, latch: true, debounce_s: 0.5}
+  - {rule_id: SAFETY_CHAIN_OPEN, kind: DI_INACTIVE, point: relay_B.DI8, severity: CRITICAL, latch: true, debounce_s: 0.2}
+twin:
+  topology: installation
+  provenance: DEMO
+  seed: 42
+historian:
+  db_path: var/installation-80.sqlite3
+  acquisition_interval_s: 0.5
+  # Owner requirements 2026-10-12 (ADR-0008): complete snapshot every 60 s of wall time (300 s only on the
+  # owner's request), rolling 365-day window.
+  recording_interval_s: 60
+  retention_days: 365
+  retention_provenance: APPROVED

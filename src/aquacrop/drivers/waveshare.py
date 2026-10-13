@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..config.catalog import AIMode, ModelId, RelayMode
+from ..config.catalog import AIMode, DIGITAL_IO_MODELS, ModelId, RelayMode
 from .rtu import (FC_READ_COILS, FC_READ_DISCRETE_INPUTS, FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS,
                   RtuBus, RtuRefused)
 
@@ -40,22 +40,26 @@ class WaveshareDevice:
     def __init__(self, bus: RtuBus, model: ModelId, address: int):
         self.bus, self.model, self.address = bus, model, address
 
-    # relay (D)
+    # Relay (D) and IO 8CH share V2 addresses, not their electrical load interfaces.
     def read_discrete_inputs(self) -> list[bool]:
-        self._need(ModelId.WAVESHARE_RELAY_D)
+        self._need(*DIGITAL_IO_MODELS)
         return self.bus.read_bits(FC_READ_DISCRETE_INPUTS, self.address, 0, CHANNELS)
 
     def read_coils(self) -> list[bool]:
-        self._need(ModelId.WAVESHARE_RELAY_D)
+        self._need(*DIGITAL_IO_MODELS)
         return self.bus.read_bits(FC_READ_COILS, self.address, 0, CHANNELS)
 
     def read_relay_modes(self) -> RelayModes:
-        self._need(ModelId.WAVESHARE_RELAY_D)
+        """Compatibility name; IO 8CH modes govern transistor outputs."""
+        return self.read_output_modes()
+
+    def read_output_modes(self) -> RelayModes:
+        self._need(*DIGITAL_IO_MODELS)
         return RelayModes(tuple(self.bus.read_registers(FC_READ_HOLDING_REGISTERS, self.address,
                                                         MODE_REGISTER_START, CHANNELS)))
 
     def write_coil(self, channel: int, value: bool, *, before_write=None) -> None:
-        self._need(ModelId.WAVESHARE_RELAY_D)
+        self._need(*DIGITAL_IO_MODELS)
         if not 1 <= channel <= CHANNELS:
             raise ValueError("channel must be 1..8")
         self.bus.write_single_coil(self.address, channel - 1, value, before_write=before_write)
@@ -80,6 +84,6 @@ class WaveshareDevice:
                 out[name] = f"unavailable ({getattr(e, 'kind', type(e).__name__)})"
         return out
 
-    def _need(self, model: ModelId) -> None:
-        if self.model != model:
+    def _need(self, *models: ModelId) -> None:
+        if self.model not in models:
             raise RtuRefused(f"operation not supported by {self.model.value}")

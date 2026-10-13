@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Callable
 
-from ..config.catalog import ModelId
+from ..config.catalog import DIGITAL_IO_MODELS
 from ..config.schema import InstallationConfig
 from ..domain.model import AccessPolicy, CommandOrigin, OutputCommand, PointId, PointKind, new_id, utcnow
 from ..security.auth import Perm, Principal
@@ -113,8 +113,8 @@ class BenchGate:
                 raise BenchRefused(str(e)) from e
             if t not in known or pid.kind != PointKind.DO:
                 raise BenchRefused(f"{t} is not a configured relay output")
-            if self.cfg.device(pid.device_uid).model != ModelId.WAVESHARE_RELAY_D:
-                raise BenchRefused(f"{t} is not on a relay module")
+            if self.cfg.device(pid.device_uid).model not in DIGITAL_IO_MODELS:
+                raise BenchRefused(f"{t} is not on a supported digital output module")
             devices.add(pid.device_uid)
         if (why := self.preflight(devices)) is not None:
             raise BenchRefused(f"preflight: {why}")

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 (2026-10-13): two IO 8CH modules, 80 points (ADR-0016)
+
+The owner's inventory update of 2026-10-13: two Waveshare Modbus RTU IO 8CH (SKU 26244) beside the
+two Relay (D) and two AI 8CH boards. Integrated from the owner-supplied `waveshare_io_80.patch` and
+reviewed. Software and simulation only: no module has been connected.
+
+### Added
+- Catalogue model `WAVESHARE_MODBUS_RTU_IO_8CH` (SKU 26244): 8 DI and 8 open-drain sink outputs,
+  500 mA per channel, with `output_type` (`RELAY_CONTACT` or `OPEN_DRAIN_SINK`) and the current limit
+  carried through the configuration, API, diagnostics and dashboard ("TRANSISTOR SINK, not relay
+  contacts"). Same V2 protocol as the Relay (D): FC01/FC02 reads, FC05 writes, FC03 output modes.
+- Both I/O pages (simulated and real) label each module's outputs: "relay contacts" or "TRANSISTOR
+  SINK, not relay contacts, max 500 mA"; the browser check covers both (`ui_check`, 60 checks).
+- `installation-80` (SIMULATED, launcher default): the installation model on six modules, the 32
+  added channels unallocated test points. `installation-48` and the 24/48-point demos are kept.
+- Six-module read-only and Malmö bench examples (proposed addresses 5 and 6, unverified).
+- `measure_storage.py --inventory 80`, ADR-0016, `docs/model/digital_io_8ch.md`, and a concrete
+  proposal for the 32 added channels in `docs/model/signal_budget.md` (owner to confirm).
+
+### Changed
+- The point count is the sum of the catalogue channels of every device, not a 24/48 formula.
+- Package version 0.3.1, so the Windows launcher prepares a fresh environment.
+
 ## 0.3.0 (2026-10-13): drive run over Modbus and site time zones (ADR-0015)
 
 The owner's answers of 2026-10-13, part of the 0.3.0 release. Software and simulation only: no drive,

@@ -31,6 +31,30 @@ devices:
     sku: "25821"
     hardware_variant: UNKNOWN               # TBD: STANDARD or B, verify on the unit
     # ai channel modes stay UNKNOWN (unscaled) until observed and jumpers physically verified
+# Added owner inventory; addresses are proposed, verify all six separately before connecting the bus.
+  - device_uid: relay_B
+    bus_id: rs485_a
+    address: 3
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: '26517'
+  - device_uid: analog_B
+    bus_id: rs485_a
+    address: 4
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: '25821'
+    hardware_variant: UNKNOWN
+  - device_uid: digital_A
+    bus_id: rs485_a
+    address: 5
+    model: WAVESHARE_MODBUS_RTU_IO_8CH
+    sku: '26244'
+    label: UNVERIFIED digital_A — open-drain outputs, not relay contacts
+  - device_uid: digital_B
+    bus_id: rs485_a
+    address: 6
+    model: WAVESHARE_MODBUS_RTU_IO_8CH
+    sku: '26244'
+    label: UNVERIFIED digital_B — open-drain outputs, not relay contacts
 scaling_profiles: []
 virtual_mapping: []
 physical_mapping: []
@@ -68,7 +92,7 @@ historian:
   recording_interval_s: 60               # 300 is allowed only when the owner explicitly asks for it
   retention_days: 365                    # rolling window; nothing inside it is deleted for space
   retention_provenance: APPROVED
-  db_budget_bytes: 10737418240           # 10 GiB: 365 days at 60 s (~7.8 GiB measured) plus events
+  db_budget_bytes: 10737418240           # provisional warning only: the older 48-point measurement does not size this 80-point inventory
   free_space_warning_bytes: 4294967296   # 4 GiB free: WARNING
   free_space_reserve_bytes: 2147483648   # 2 GiB free: CRITICAL, new starts and ON refused
   snapshot_floor_bytes: 536870912        # 512 MiB free: periodic snapshots pause, events still written

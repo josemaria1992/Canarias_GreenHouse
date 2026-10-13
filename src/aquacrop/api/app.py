@@ -479,6 +479,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         for d in cfg.devices:
             h = r.backend.health(d.device_uid)
             devs[d.device_uid] = {"bus_id": d.bus_id, "address": d.address, "model": d.model.value,
+                                  "output_type": CATALOG[d.model].output_type,
                                   "online": h.online, "consecutive_failures": h.consecutive_failures,
                                   "last_ok_utc": h.last_ok_utc.isoformat() if h.last_ok_utc else None,
                                   "last_error": h.last_error}
@@ -547,6 +548,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         meta = {"id": str(pid), "device_uid": dev.device_uid, "bus_id": dev.bus_id, "kind": pid.kind.value,
                 "channel": pid.channel, "register_address": pid.register_address,
                 "label": dev.label_for(pid), "model": dev.model.value,
+                "output_type": CATALOG[dev.model].output_type if pid.kind == PointKind.DO else None,
                 "mapping": ({"signal": m.signal, "provenance": "SIMULATED"} if m and is_sim else None)}
         if pid.kind == PointKind.AI:
             ch = dev.ai_channel(pid.channel)
@@ -569,6 +571,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             pts = [_point_meta(x) | {"sample": _sample(samples.get(str(x)))} for x in d.point_ids()]
             h = _health(d.device_uid)
             groups.append({"device_uid": d.device_uid, "label": d.label, "model": CATALOG[d.model].vendor_name,
+                           "output_type": CATALOG[d.model].output_type,
+                           "output_current_limit_ma": CATALOG[d.model].output_current_limit_ma,
                            "sku": d.sku, "bus_id": d.bus_id, "address": d.address, "online": h.online,
                            "last_error": h.last_error, "points": pts})
         return {"freshness": _freshness(), "source": rt().backend.source.value if is_sim else "REAL",

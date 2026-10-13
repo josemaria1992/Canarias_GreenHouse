@@ -35,12 +35,13 @@ def add_parser(sub) -> None:
 
 
 def read_device(dev_cfg, wd, *, metadata: bool) -> dict:
-    from ..config.catalog import ModelId
+    from ..config.catalog import CATALOG, DIGITAL_IO_MODELS
     out: dict = {"device_uid": dev_cfg.device_uid, "bus_id": dev_cfg.bus_id, "address": dev_cfg.address,
-                 "model": dev_cfg.model.value, "utc": _utc()}
+                 "model": dev_cfg.model.value, "utc": _utc(),
+                 "output_type": CATALOG[dev_cfg.model].output_type}
     steps = ([("discrete_inputs", wd.read_discrete_inputs), ("coils", wd.read_coils),
               ("relay_modes", lambda: wd.read_relay_modes().describe())]
-             if dev_cfg.model == ModelId.WAVESHARE_RELAY_D else
+             if dev_cfg.model in DIGITAL_IO_MODELS else
              [("ai_modes", lambda: [m.name for m in wd.read_ai_modes()]), ("ai_raw", wd.read_analog)])
     ok = True
     for name, fn in steps:
@@ -53,7 +54,7 @@ def read_device(dev_cfg, wd, *, metadata: bool) -> dict:
     if metadata:
         out["metadata_unverified"] = wd.read_metadata()
     out["ok"] = ok
-    if dev_cfg.model == ModelId.WAVESHARE_RELAY_D and out.get("relay_modes") is not None:
+    if dev_cfg.model in DIGITAL_IO_MODELS and out.get("relay_modes") is not None:
         out["bench_preflight"] = "PASS: all 8 NORMAL" if all(m == "NORMAL" for m in out["relay_modes"]) else \
             "BLOCKED: not all channels NORMAL"
     return out

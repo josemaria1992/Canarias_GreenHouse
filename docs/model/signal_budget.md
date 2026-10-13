@@ -1,10 +1,17 @@
-# Signal budget: 48 points for the installation (proposal)
+# Signal budget: 80 points for the installation (proposal)
 
-Configuration: `configs/installation-48.yaml` (SIMULATED). Hardware: two Waveshare Modbus RTU
-Relay (D) modules (8 DO + 8 DI each) and two AI 8CH modules (8 AI each): **16 DO, 16 DI, 16 AI**.
-The owner decided on 2026-10-13 to use all 16 DI and 16 DO with no third module; the per-channel
-assignment below is still a **proposal** for the owner to confirm or change, the physical wiring is
-TBD and nothing has been wired or commissioned (ADR-0013).
+**Inventory (owner, 2026-10-13):** two Waveshare Modbus RTU Relay (D) modules, SKU 26517 (8 relay
+DO + 8 DI each), two AI 8CH modules, SKU 25821 (8 AI each), and two Modbus RTU IO 8CH modules, SKU
+26244 (8 DI + 8 **open-drain transistor sink** DO each, 500 mA maximum per output, not relay
+contacts): **16 AI + 32 DI + 32 DO = 80 points** (ADR-0016, `digital_io_8ch.md`). The two Relay (D)
+boards stay; no further module is required.
+
+Configurations: `configs/installation-80.yaml` (SIMULATED, launcher default) and the earlier
+`configs/installation-48.yaml`. The 48 relay/analog channels carry the allocation below, decided in
+principle on 2026-10-13 (all 16 DI and 16 DO in use) but still a **per-channel proposal**. The 32
+IO 8CH channels are **unallocated test points**: the plant model reads and drives none of them, and
+the proposal for them (last section) needs the owner's answer before anything is bound. Physical
+wiring is TBD and nothing has been wired or commissioned (ADR-0013).
 
 ## What the processes need
 
@@ -20,8 +27,8 @@ TBD and nothing has been wired or commissioned (ADR-0013).
 | **Outputs** | **17** | 16 DO available |
 
 The drive run command is the 17th output. It is bound to a **drive adapter** (`drive_adapters`), a
-separate audited command path. **Owner decision, 2026-10-13: use all 16 DI and 16 DO as allocated, no
-third relay module, and send the drive's run command over its own Modbus interface** (ADR-0015,
+separate audited command path. **Owner decision, 2026-10-13: use all 16 DI and 16 DO as allocated and
+send the drive's run command over its own Modbus interface** (ADR-0015,
 `vfd_modbus.md`). In the twin the adapter is `MODBUS_RTU` against a simulated drive with a DEMO map;
 on hardware it stays `NOT_CONFIGURED` until the real drive's map, copied from its manual, passes CP-06
 on the Malmö bench. No real register map is assumed.
@@ -97,8 +104,9 @@ instruments' data sheets at commissioning.
 
 ## Options for the owner
 
-**Chosen 2026-10-13: option 1, with the drive's run command over Modbus.** The options are kept for
-the record.
+**Chosen 2026-10-13 (morning): option 1, with the drive's run command over Modbus.** Later the same day
+the owner reported two IO 8CH modules, which supply the extra inputs option 2 asked for without a
+third relay module; their use is the proposal below. The options are kept for the record.
 
 1. Keep 48 points and confirm the VFD interface (Modbus or terminal) so the drive adapter can be
    configured; accept the weaker evidence above.
@@ -106,3 +114,50 @@ the record.
    feedbacks fit, and one spare. This changes the configuration only, not the controllers.
 3. Change the allocation (for example trade the sector pressures for valve feedback). Every point
    is a configuration entry; the controllers use signal names.
+
+## Proposal for the 32 added channels (owner to confirm; nothing is bound)
+
+The IO 8CH inputs are dry-contact/voltage inputs and the outputs are DC open-drain sinks (500 mA
+per channel; the bank total, supply voltage and suppression are still to be verified on the
+received units). They must not switch mains voltage, AC contactor coils or motors directly.
+
+The plant model has **no** sensors beyond those listed above, and this proposal adds none. Each
+input row below names a device that may already exist on the confirmed equipment (for example a
+limit switch built into a motorised valve, or an auxiliary contact in a motor starter); it is used
+**only if the owner confirms that the device is fitted and wired**. The signal names in the third
+column already exist in the controllers and replace the weaker indirect evidence when they are
+bound; rows marked "needs a controller change" do not exist yet.
+
+| Point | Proposed use (only if fitted) | Signal | Effect on cause and effect when bound |
+|---|---|---|---|
+| `digital_A.DI1` | Sector 1 valve closed limit | `valve.S1.closed_limit` | Closure proven by the limit instead of "open limit released and flow below 0.5 L/min"; `VALVE_CLOSE_TIMEOUT` on the limit |
+| `digital_A.DI2` | Sector 2 valve closed limit | `valve.S2.closed_limit` | as above |
+| `digital_A.DI3` | Stock A outlet valve open limit | `valve.OUT_A.open_limit` | Path waits for the limit (else `VALVE_OPEN_TIMEOUT`) instead of a fixed 2 s |
+| `digital_A.DI4` | Stock B outlet valve open limit | `valve.OUT_B.open_limit` | as above |
+| `digital_A.DI5` | Acid outlet valve open limit | `valve.OUT_ACID.open_limit` | as above |
+| `digital_A.DI6` | Mains fill valve, main tank, open limit | `valve.FILL_MAIN.open_limit` | as above |
+| `digital_A.DI7` | Mains fill valve, stock A, open limit | `valve.FILL_A.open_limit` | as above |
+| `digital_A.DI8` | Mains fill valve, stock B, open limit | `valve.FILL_B.open_limit` | as above |
+| `digital_B.DI1` | Mains fill valve, acid tank, open limit | `valve.FILL_ACID.open_limit` | as above |
+| `digital_B.DI2` | Stock A low switch | `tank.A.low` (needs a controller change) | Second, independent stop for transfer A at reserve (today: level transmitter only) |
+| `digital_B.DI3` | Stock B low switch | `tank.B.low` (needs a controller change) | as above for B |
+| `digital_B.DI4` | Acid tank low switch | `tank.ACID.low` (needs a controller change) | as above for acid |
+| `digital_B.DI5` | Drive "ready" relay output | `drive.MAIN.ready` (needs a controller change) | Refuse RUN while not ready |
+| `digital_B.DI6` | Return pumps: motor protection tripped (common contact) | `pump.RP.protection_trip` (needs a controller change) | Return lockout with the cause shown |
+| `digital_B.DI7` | Transfer pumps: motor protection tripped (common contact) | `pump.TP.protection_trip` (needs a controller change) | Refill/acid/stock lockout with the cause shown |
+| `digital_B.DI8` | Spare (test only) | — | — |
+| `digital_A.DO1` | Drive run over a hardwired terminal, as a fallback to Modbus (through an interposing relay, or directly only if the drive's input accepts a sinking signal within the module's rating) | `drive.MAIN.run` | Only if CP-06 shows the drive's comm-loss timer is not reset by reads (ADR-0015 §Consequences) or the owner prefers a hardwired run; the Modbus adapter would then be removed, not run in parallel |
+| `digital_A.DO2`-`DO8`, `digital_B.DO1`-`DO8` | Spare (test only) | — | — |
+
+Questions for the owner (one answer per row is enough: "fitted" or "not fitted"):
+
+1. Do the two sector valves have closed limit switches, and the three stock outlet and four mains
+   fill valves open limit switches?
+2. Do the three stock tanks have low-level switches in addition to the level transmitters?
+3. Does the drive have a relay output that can be set to "ready", and do the return and transfer
+   pump starters have auxiliary trip contacts?
+4. Keep the drive run on Modbus (decided) with `digital_A.DO1` reserved as the hardwired fallback,
+   or leave all 16 transistor outputs as spares?
+
+Until answered, `installation-80` keeps the 32 channels unallocated and every controller uses the
+indirect evidence described above.

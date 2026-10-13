@@ -365,7 +365,7 @@
           h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad"),
             " ", storageText(st.storage)),
           h("dt", null, "Live control"), h("dd", null, st.live_control))),
-        h("div", { class: "card" }, h("h2", null, "Relay channel modes"),
+        h("div", { class: "card" }, h("h2", null, "Digital output modes (relay and transistor modules)"),
           h("table", null, h("tbody", null, Object.entries(st.relay_modes).map(([k, m]) => h("tr", null, h("td", null, k),
             h("td", { class: "mono" }, m ? m.join(" ") : "not read"),
             h("td", null, m && m.every(x => x === "NORMAL") ? pill("all NORMAL", "ok") : pill("bench writes blocked", "warn"))))))),
@@ -397,6 +397,13 @@
       h("p", { class: "muted" }, "The status word is read on every poll and never written. A PROPOSED map is checked on the bench (CP-06) before it is VERIFIED; the hardwired running and fault inputs stay the proof the processes use."));
   }
 
+  // Relay (D) outputs are relay contacts; IO 8CH outputs are open-drain transistor sinks (DC, current-limited)
+  function outputPill(g) {
+    if (g.output_type === "OPEN_DRAIN_SINK")
+      return pill(`TRANSISTOR SINK — not relay contacts${g.output_current_limit_ma ? `, max ${g.output_current_limit_ma} mA` : ""}`, "warn");
+    return g.output_type === "RELAY_CONTACT" ? pill("relay contacts") : null;
+  }
+
   async function hwIO() {
     const d = await api("GET", "/api/points"), b = await api("GET", "/api/bench"), lease = b.lease;
     const allowed = new Set(lease ? lease.allowlist : []);
@@ -405,7 +412,7 @@
       .then(r => r && toast(`REAL ${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, !OK_OUTCOMES.has(r.outcome)));
     const groups = d.devices.map(g => h("div", { class: "card" },
       h("div", { class: "row" }, h("h3", null, `${g.device_uid} — ${g.model} (SKU ${g.sku}) · ${g.bus_id} @ ${g.address}`),
-        g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad")),
+        g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad"), outputPill(g)),
       h("table", null, h("thead", null, h("tr", null, ["Point", "Label", "Zero-based addr", "Mode", "Raw", "Scaled", "Quality/origin", "Detail", "Age", "Bench"].map(x => h("th", null, x)))),
         h("tbody", null, g.points.map(p => {
           const s = p.sample || {};
@@ -705,6 +712,7 @@
       return h("div", { class: "card" },
         h("div", { class: "row" }, h("h3", null, `${g.device_uid} — ${g.model} (SKU ${g.sku}) · ${g.bus_id} @ ${g.address}`),
           g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad"),
+          outputPill(g),
           cbtn(g.online ? "Simulate timeout" : "Restore", () => act("POST", "/api/io/device-fault", { device_uid: g.device_uid, fault: g.online ? "TIMEOUT" : null }), "ghost")),
         h("table", null, h("thead", null, h("tr", null, ["Point", "Label", "Zero-based addr", "Mode", "Raw", "Scaled", "Quality/origin", "Detail", "Age", "VIRTUAL control"].map(x => h("th", null, x)))),
           h("tbody", null, rows)));

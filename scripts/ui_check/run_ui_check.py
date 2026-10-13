@@ -1,6 +1,6 @@
 """Browser evidence for the installation pages (UI-01 to UI-05), simulation only.
 
-Starts `python -m aquacrop serve --config installation-48` on 127.0.0.1 with a throwaway state directory
+Starts `python -m aquacrop serve --config installation-80` on 127.0.0.1 with a throwaway state directory
 and a random administrator password, runs ui_check.cjs in headless Chromium (Playwright), restarts the
 server, runs the after-restart phase, then serves the HARDWARE_READ_ONLY profile over the in-memory fake
 bus (tests/fakes) for the read-only pages, and writes screenshots, the exported CSV and checks.json to
@@ -56,7 +56,7 @@ def wait_healthy(base: str, proc: subprocess.Popen, timeout: float = 60.0) -> No
 
 
 def serve(state: Path, port: int, log: Path) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-m", "aquacrop", "serve", "--config", "installation-48",
+    return subprocess.Popen([sys.executable, "-m", "aquacrop", "serve", "--config", "installation-80",
                              "--state-dir", str(state), "--host", "127.0.0.1", "--port", str(port)],
                             stdout=log.open("ab"), stderr=subprocess.STDOUT)
 
@@ -86,7 +86,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     state = Path(tempfile.mkdtemp(prefix="aquacrop-ui-"))
     password = secrets.token_urlsafe(18)          # throwaway account in a throwaway state directory
-    subprocess.run([sys.executable, "-m", "aquacrop", "users", "bootstrap", "--config", "installation-48",
+    subprocess.run([sys.executable, "-m", "aquacrop", "users", "bootstrap", "--config", "installation-80",
                     "--state-dir", str(state), "--username", "admin", "--password-stdin"],
                    input=password + "\n", text=True, check=True, capture_output=True)
     port = 8000                                    # the default allowed origin of the installation profile
@@ -118,7 +118,7 @@ def main() -> int:
     finally:
         shutil.rmtree(state, ignore_errors=True)
         shutil.rmtree(hw_state, ignore_errors=True)
-    summary = {"profile": "SIMULATED", "config": "installation-48", "physical_verification": False,
+    summary = {"profile": "SIMULATED", "config": "installation-80", "physical_verification": False,
                "passed": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results),
                "checks": results}
     (out / "checks.json").write_text(json.dumps(summary, indent=1))

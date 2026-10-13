@@ -1,5 +1,11 @@
 # Handover: AquaCrop platform 0.3.0, the pre-hardware release (2026-10-13)
 
+**Owner inventory update (2026-10-13):** two IO 8CH (SKU 26244) added, for 80 points across six
+modules; the launcher default is `installation-80` and the added channels are testable but
+unallocated (`model/digital_io_8ch.md`, ADR-0016). The owner review findings R1-R4 of the same day
+are fixed (`ACCEPTANCE.md`, "Owner review of 13 October 2026"). 48-point sizing figures below are
+kept for the record; the 80-point measurement is in `operations/measurements/`.
+
 This release is software and simulation only. What is still needed before each physical step, item
 by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPTANCE.md`.
 
@@ -128,12 +134,14 @@ OpenVPN); the full list of physical configuration still open is section 3 of `RE
    register map (from its manual, CP-06), probes and calibration, production recipe values, mixing method, physical alarm
    severities, role assignments and remote rights, OS update policy. The installation's sizes and
    equipment are confirmed (2026-10-12).
-4. **48-point allocation (ADR-0013, `model/signal_budget.md`)**: decided 2026-10-13: all 16 DI and
-   16 DO in use, no third relay module, and the 17th output (the shared drive's run) over the drive's
+4. **Point allocation (ADR-0013, ADR-0016, `model/signal_budget.md`)**: decided 2026-10-13: all 16
+   relay-module DI and DO in use, no third relay module, and the 17th output (the shared drive's run) over the drive's
    Modbus interface (ADR-0015, `model/vfd_modbus.md`). Simulation and bench software are done; the
    real interface stays `NOT_CONFIGURED` until the drive's manual is supplied and CP-06 passes on the
-   Malmö bench. Still to confirm: the per-channel table and the cause-and-effect table
-   (`model/cause_and_effect.md`).
+   Malmö bench. Later that day the owner added two IO 8CH modules (80 points); their 16 DI and 16
+   transistor DO are unallocated, with a concrete proposal awaiting the owner's answer (which limit
+   switches, stock low switches, drive ready and starter trip contacts are fitted). Still to
+   confirm: both per-channel tables and the cause-and-effect table (`model/cause_and_effect.md`).
 5. **Site time zone**: decided 2026-10-13: `Atlantic/Canary` for the installation (and the twin and
    demos), `Europe/Stockholm` for the Malmö test bench (`configs/bench-malmo.example.yaml`).
 6. The original brief's `ACCEPTANCE_TEST_PLAN.md` was never supplied, so the milestone 1-4 IDs are

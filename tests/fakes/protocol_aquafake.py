@@ -78,7 +78,7 @@ class FakeBus:
         if fc in (0x01, 0x02):
             start, count = struct.unpack(">HH", body)
             src = d.coils if fc == 0x01 else d.di
-            if d.model != "relay" or start + count > 8 or count == 0:
+            if d.model not in ("relay", "digital_io") or start + count > 8 or count == 0:
                 return exc(2)
             bits = src[start:start + count]
             nbytes = (count + 7) // 8
@@ -122,7 +122,7 @@ class FakeBus:
             pdu = bytes([addr, fc, 2 * len(regs)]) + b"".join(struct.pack(">H", r) for r in regs)
         elif fc == 0x05:
             a, v = struct.unpack(">HH", body)
-            if d.model != "relay" or a >= 8 or v not in (0x0000, 0xFF00):
+            if d.model not in ("relay", "digital_io") or a >= 8 or v not in (0x0000, 0xFF00):
                 return exc(3)
             if f != "readback_mismatch":
                 d.coils[a] = v == 0xFF00
@@ -132,7 +132,7 @@ class FakeBus:
             pdu = bytes([addr, fc]) + body
         elif fc == 0x0F:
             a, n, nb = struct.unpack(">HHB", body[:5])
-            if d.model != "relay" or a + n > 8:
+            if d.model not in ("relay", "digital_io") or a + n > 8:
                 return exc(2)
             val = int.from_bytes(body[5:5 + nb], "little")
             for i in range(n):
