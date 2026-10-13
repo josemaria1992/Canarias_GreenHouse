@@ -14,6 +14,7 @@ endurance claim**; the CM4 figures belong to CP-00 (AT-STO-02).
 | `2026-10-13-stress-48pt-400d-process.json` | `stress_concurrency.py` on that database: marks, results, latencies, timeline every 5 s |
 | `2026-10-13-trend-cache-48pt-365d.json` | `measure_trend_cache.py` on that database: a 365-day chart of 16 points without the cache, filling it, and refreshed from it |
 | `2026-10-13-trend-cache-48pt-365d-by-run.json` | the same, repeated after the buckets were split by simulation run and recorder |
+| `2026-10-13-storage-80pt-60s-400d-process.json` | `measure_storage.py --inventory 80 --process-workload --skip-drill`, 80 points, 400 days, then the full restore drill of its backup (section "80 points") |
 
 ## Reproduce
 
@@ -30,7 +31,9 @@ python scripts/measure_trend_cache.py --db OUT/measure.sqlite3 --out OUT/trend-c
   `measure_storage.py` committed in this release), 2026-10-13T02:50:19+00:00 to
   2026-10-13T03:45:26+00:00. It ran on the stage 4 working tree before its first commit, so the
   report says `e7a60d9`, dirty, and version `0.2.0.dev0` (the version number was raised during the
-  run); the database is schema 3.
+  run); the database is schema 3. The script later gained one line (its measurement configuration names
+  the site time zone, which a real profile must do since 2026-10-13); nothing it measures changed, but
+  its SHA-256 now differs from the one above.
 - Stress run: on the same database right after the storage run, at commit `3221430` (clean),
   2026-10-13T03:45:45+00:00 for 642 s; script SHA-256
   `deaf0de55563d653d24df93c70a74bfd45ef67d02b3178fa82e8a4cef864ecee`.
@@ -166,3 +169,78 @@ the capacity levels and the free-space reserve refuse starts, ON commands and ba
 snapshots not written for low disk are not reported again as missed
 (`test_labels_not_written_for_low_disk_are_not_reported_again_as_missed`), and the restore drill
 refuses to start without scratch space (`test_restore_drill_needs_scratch_space_and_keeps_the_reserve`).
+
+## 80 points, 400 days, with the process workload (owner inventory of 2026-10-13)
+
+The same run as above with the six-module inventory (16 AI + 32 DI + 32 DO; the added IO 8CH
+module `digital_B` takes the weekly 30-minute fault with chatter). Everything else unchanged: 60 s
+complete snapshots, 365-day rolling retention, events immediate, SQLite schema 3, the same process
+workload file (every process in AUTO without a pause: a worst case). Desktop: Linux container,
+Python 3.13.16, commit `53c7f27` plus the uncommitted module patch (the code of `2c42775`),
+2026-10-13T13:08:11Z to 14:18:09Z. The disk could not hold the database and a restored copy at the
+same time, so the drill ran right after, on the same backup, with the measured database deleted.
+
+```text
+python scripts/measure_storage.py --days 400 --inventory 80 --process-workload \
+    docs/operations/measurements/2026-10-13-process-workload.json --skip-drill --out OUT
+# then, with OUT/measure.sqlite3 removed: aquacrop.historian.backup.verify_backup(OUT/backups, full=True,
+#     scratch_dir=OUT/drill-scratch, cfg=measure_storage.config(80))
+```
+
+| Quantity | 80 points | 48 points (above) |
+|---|---|---|
+| Growth while the window fills | 44.2 MB (42.2 MiB) per day | 28.6 MB per day |
+| Database file at day 365 / day 400 | **15.02 GiB / 15.04 GiB** | 9.71 / 9.72 GiB |
+| Rows at day 400: samples, events, commands, alarm occurrences | 42,048,000; 3,206,975; 546,960; 8,509 | 25,228,800; 3,090,185; 546,960; 8,509 |
+| WAL: largest at the hourly samples / after close | 6.4 MiB / 0 bytes | 5.4 MiB / 0 bytes |
+| Bytes the process wrote to storage | 356 GiB, about 0.89 GiB a day | 223 GiB |
+| Compressed backup | 0.82 GiB (18.4 times smaller), written and verified in 11.7 min | 0.55 GiB, 7.6 min |
+| Quick verification | 80 s | 66 s |
+| Restore drill | passed in 15.9 min (14.56 GiB restored; **18.05 GiB scratch required**; integrity ok, 0 foreign-key violations, schema 3, application start-up ok) | 11.1 min, 11.67 GiB |
+
+The owner's one-day measurement (13.2 GiB/year) had no process workload; with it the year is
+15.0 GiB. Both exceed the 10 GiB planning budget, which is a warning only and never deletes.
+
+| Day | Database file | Samples | Events | Commands | Alarm occurrences | WAL before checkpoint | Process bytes written |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.04 GiB | 115,200 | 8,745 | 1,498 | 24 | 4.8 MiB | 0.8 GiB |
+| 30 | 1.22 GiB | 3,456,000 | 263,499 | 44,955 | 699 | 5.5 MiB | 26.4 GiB |
+| 90 | 3.68 GiB | 10,368,000 | 790,401 | 134,865 | 2,100 | 5.1 MiB | 79.9 GiB |
+| 180 | 7.39 GiB | 20,736,000 | 1,581,294 | 269,735 | 4,191 | 5.3 MiB | 160.4 GiB |
+| 270 | 11.10 GiB | 31,104,000 | 2,371,659 | 404,599 | 6,289 | 5.2 MiB | 240.7 GiB |
+| 365 | 15.02 GiB | 42,048,000 | 3,205,992 | 546,957 | 8,508 | 5.2 MiB | 325.4 GiB |
+| 400 | 15.04 GiB | 42,048,000 | 3,206,975 | 546,960 | 8,509 | 6.4 MiB | 355.6 GiB |
+
+### Full-size space requirements derived from it (owner decision, 2026-10-13)
+
+The owner set **17 GiB** (`db_budget_bytes: 18253611008`) as the planning and warning budget for the
+database of the 80-point installation, with local backups and the monthly restore scratch on the SD
+card. Measured and planned figures are kept apart below: the measurement is the desktop run above;
+the budget is the planning figure the warning is checked against. The budget is a warning only: it
+never permits deleting anything inside the 365-day window.
+
+| Where | What | Measured (desktop) | Planned |
+|---|---|---|---|
+| CM4 eMMC (CM4004032: 32 GB nominal, about 29.8 GiB; usable capacity after partitioning not yet measured) | working database at day 365 | 15.0 GiB | **17 GiB** budget |
+| | WAL, transient allowance (ADR-0008 R1) | peak 6.4 MiB | 1 GiB |
+| | free-space warning threshold (`free_space_warning_bytes`) kept free | | 4 GiB |
+| | OS, application, logs, filesystem overhead | not measured | what is left: 29.8 - 17 - 1 - 4 = **about 7.8 GiB**; CP-00 measures it |
+| SD card (64 GB nominal, ext4; usable capacity measured at CP-00) | seven local daily backups plus one being written | 8 x 0.82 = 6.6 GiB | about 6.6 GiB |
+| | restore drill: downloaded cloud copy + restored database x 1.2 + 1 GiB headroom (the 10 GiB minimum is exceeded) | 0.82 + 18.05 + 1 = 19.9 GiB | about 19.9 GiB |
+| | total | about 26.5 GiB | about 26.5 GiB |
+| OneDrive folder | 30 daily + 12 monthly encrypted copies | 42 x 0.82 = 34.4 GiB (synthetic data) | about 34.4 GiB of the folder owner's quota |
+
+Nominal capacities are not usable capacities: CP-00 measures the eMMC after the OS image, the card
+after formatting, and the real growth, before the layout is relied on. The compression (0.82 GiB, 18.4
+times smaller) comes from synthetic data and may not hold for real plant data, so none of the
+figures above is used as a fixed limit: the backup preflight estimates each copy from the live
+database and refuses if the card would fall below its reserve, the drill preflight sizes its scratch
+from the backup's database size and refuses without it, and an upload the cloud refuses for quota is
+recorded as `CLOUD_FULL` and retried, never reported as copied. A restore is never run on the eMMC, and a backup or drill never
+falls back to an SD directory that is not the mounted, enrolled card.
+
+Applied in this release: `db_budget_bytes: 18253611008` in `installation-80`, the Malmö bench and the
+hardware read-only examples (and their packaged copies); legacy configurations keep their budgets.
+Retention (365 days), cadence (60 s complete snapshots, events immediate), the SQLite format and the
+copy counts (7 local daily, 30 cloud daily, 12 cloud monthly) are unchanged. All of this is desktop
+evidence: the eMMC, the card and the OneDrive copy are measured on the CM4 at CP-00.

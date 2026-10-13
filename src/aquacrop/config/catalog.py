@@ -12,6 +12,7 @@ from dataclasses import dataclass
 class ModelId(str, enum.Enum):
     WAVESHARE_RELAY_D = "WAVESHARE_MODBUS_RTU_RELAY_D"
     WAVESHARE_AI_8CH = "WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH"
+    WAVESHARE_IO_8CH = "WAVESHARE_MODBUS_RTU_IO_8CH"
 
 
 class Capability(str, enum.Enum):
@@ -33,6 +34,8 @@ class ModelSpec:
     do: int
     capabilities: frozenset[Capability]
     mode_register_start: int = 0x1000
+    output_type: str | None = None
+    output_current_limit_ma: int | None = None
 
 
 CATALOG: dict[ModelId, ModelSpec] = {
@@ -40,15 +43,24 @@ CATALOG: dict[ModelId, ModelSpec] = {
         ModelId.WAVESHARE_RELAY_D, "26517", "Waveshare Modbus RTU Relay (D)", ai=0, di=8, do=8,
         capabilities=frozenset({Capability.READ_COILS, Capability.READ_DISCRETE_INPUTS,
                                 Capability.READ_MODE_REGISTERS, Capability.WRITE_SINGLE_COIL,
-                                Capability.WRITE_MULTIPLE_COILS})),
+                                Capability.WRITE_MULTIPLE_COILS}), output_type="RELAY_CONTACT"),
     ModelId.WAVESHARE_AI_8CH: ModelSpec(
         ModelId.WAVESHARE_AI_8CH, "25821", "Waveshare Modbus RTU Analog Input 8CH", ai=8, di=0, do=0,
         capabilities=frozenset({Capability.READ_INPUT_REGISTERS, Capability.READ_MODE_REGISTERS})),
+    ModelId.WAVESHARE_IO_8CH: ModelSpec(
+        ModelId.WAVESHARE_IO_8CH, "26244", "Waveshare Modbus RTU IO 8CH (open-drain outputs)", ai=0, di=8, do=8,
+        capabilities=frozenset({Capability.READ_COILS, Capability.READ_DISCRETE_INPUTS,
+                                Capability.READ_MODE_REGISTERS, Capability.WRITE_SINGLE_COIL,
+                                Capability.WRITE_MULTIPLE_COILS}), output_type="OPEN_DRAIN_SINK",
+        output_current_limit_ma=500),
 }
+
+# Identical indexed V2 digital-channel protocol, different electrical output interfaces.
+DIGITAL_IO_MODELS = frozenset({ModelId.WAVESHARE_RELAY_D, ModelId.WAVESHARE_IO_8CH})
 
 
 class RelayMode(enum.IntEnum):
-    """Relay (D) per-channel control mode register (FC03 @0x1000)."""
+    """Relay (D) / IO 8CH output control modes (FC03 @0x1000)."""
     NORMAL = 0
     LINKAGE = 1
     TOGGLE = 2

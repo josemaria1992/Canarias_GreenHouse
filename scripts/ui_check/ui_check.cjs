@@ -94,6 +94,15 @@ async function main() {
     const stale = await p.locator("#stale").evaluate(e => !e.classList.contains("hidden"));
     await shot(p, "page-" + v);
     check("UI-01 page " + v, txt.length > 80 && !txt.includes("This page does not exist in this profile") && !stale, `${txt.length} chars, stale banner ${stale}`);
+    if (v === "io") {
+      const heads = await p.$$eval("#v-io .card h3", hs => hs.map(x => x.parentElement.textContent));
+      const sink = heads.filter(t => /TRANSISTOR SINK — not relay contacts, max 500 mA/.test(t)).map(t => t.split(" ")[0]);
+      const relay = heads.filter(t => /relay contacts/.test(t) && !/TRANSISTOR/.test(t)).map(t => t.split(" ")[0]);
+      const pts = (await get(p, "/api/points")).devices;
+      check("UI-01 six modules, 80 points", pts.length === 6 && pts.reduce((n, g) => n + g.points.length, 0) === 80 &&
+        sink.join() === "digital_A,digital_B" && relay.join() === "relay_A,relay_B",
+        `transistor sinks ${sink.join(", ")}; relay contacts ${relay.join(", ")}`);
+    }
   }
 
   // UI-01: each process page carries its part of the diagram, its controls, its alarms and its trend
@@ -109,6 +118,10 @@ async function main() {
     check("UI-01 process page " + v, parts.focus > 0 && parts.dim > 0 && parts.chart && parts.alarms && (parts.auto || (v.startsWith("sector") && parts.link)),
       `${parts.focus} highlighted parts, trend drawn ${parts.chart}, page alarms ${parts.alarms}, ${parts.auto ? "AUTO/MANUAL/STOP" : "link to the irrigation controls"}`);
   }
+  await show(p, "main-pumps");
+  const mpTxt = await until(p, async () => { const t = await visibleText(p); return /Status word\s+0x[0-9A-F]{4}/.test(t) && t; });
+  check("UI-01 drive interface (simulated)", !!mpTxt && /Drive interface\s+MODBUS_RTU\s+DEMO/.test(mpTxt) && /Control register/.test(mpTxt),
+    "Main pumps shows the simulated drive's Modbus interface: MODBUS_RTU with the DEMO map, its status word and control register");
   await show(p, "nutrients");
   await p.locator(".tabs button", { hasText: "Acid" }).click();
   await until(p, async () => /pH target \(adjustable\)/.test(await visibleText(p)));
@@ -335,6 +348,17 @@ async function hardware() {
     check("HW page " + v, t.includes("NOT AVAILABLE") && t.includes("not measured") && ctl.length === 0 && t.includes("REAL"),
       `read-only: reason shown, unmapped values "not measured", no control buttons ${JSON.stringify(ctl)}`);
   }
+  await show(p, "overview");
+  const drvTxt = await until(p, async () => { const t = await visibleText(p); return /Drive interface/.test(t) && /PROPOSED/.test(t) && /0x[0-9A-F]{4}/.test(t) && t; });
+  check("HW drive interface", !!drvTxt, "the overview lists drive:MAIN over Modbus with its PROPOSED map and the status word it reads");
+  await show(p, "io");
+  const ioDrv = await p.locator("#v-io tr", { hasText: "drive:MAIN" }).first();
+  const runBtns = await ioDrv.locator("button").count();
+  check("HW drive read-only without a lease", (await ioDrv.count()) > 0 && runBtns === 0, `drive row on the I/O page, ${runBtns} Run/Stop buttons without a lease`);
+  const hwIoHead = await p.$$eval("#v-io .card h3", hs => hs.map(x => x.parentElement.textContent));
+  const hwDig = hwIoHead.find(t => t.startsWith("digital_A")) || "", hwRel = hwIoHead.find(t => t.startsWith("relay_A")) || "";
+  check("HW output types", /TRANSISTOR SINK — not relay contacts, max 500 mA/.test(hwDig) && /relay contacts/.test(hwRel) && !/TRANSISTOR/.test(hwRel),
+    "I/O page: digital_A (SKU 26244) labelled transistor sink, relay_A labelled relay contacts");
   check("HW page errors", errs.length === 0, errs.join("; ") || "none");
   await b.close();
 }

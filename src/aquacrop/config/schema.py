@@ -9,6 +9,7 @@ import os
 
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
@@ -177,14 +178,84 @@ class AlarmRule(_Strict):
         return self
 
 
+class VfdRegister(_Strict):
+    """One read-only diagnostic register of a drive (output frequency, current, fault code)."""
+    address: int = Field(ge=0, le=0xFFFF)           # protocol (zero-based) address, as sent on the wire
+    function: Literal[3, 4] = 3
+    signed: bool = False                            # two's complement 16-bit
+    scale: float = 1.0                              # engineering value = raw x scale
+    unit: str | None = Field(default=None, max_length=16)
+
+
+class VfdModbusMap(_Strict):
+    """The Modbus RTU interface of one drive, copied from that drive's manual (ADR-0015,
+    `docs/model/vfd_modbus.md`). Every number comes from the manual: PROPOSED while CP-06 checks it on the
+    bench (reads by `diagnostics read`, writes only under a bench lease), VERIFIED with the CP-06 record
+    after it. DEMO is the simulated drive's map and a real profile refuses it. The software writes only
+    the control register (FC06, one frame per value, never retried) and reads only the status and
+    diagnostic registers; it writes no speed reference, no parameter and no fault reset."""
+    bus_id: str
+    address: int = Field(ge=UNICAST_MIN, le=UNICAST_MAX)
+    drive_model: str = Field(min_length=1, max_length=120)          # make, model and firmware
+    manual_reference: str = Field(min_length=1, max_length=200)     # document, edition, section or page
+    control_register: int = Field(ge=0, le=0xFFFF)
+    run_sequence: list[int] = Field(min_length=1, max_length=3)     # values written in order to start
+    stop_value: int = Field(ge=0, le=0xFFFF)
+    status_register: int = Field(ge=0, le=0xFFFF)
+    status_function: Literal[3, 4] = 3
+    running_mask: int = Field(ge=1, le=0xFFFF)                      # status AND mask != 0: running
+    fault_mask: int = Field(ge=1, le=0xFFFF)                        # status AND mask != 0: tripped
+    ready_mask: int | None = Field(default=None, ge=1, le=0xFFFF)
+    frequency: VfdRegister | None = None
+    current: VfdRegister | None = None
+    fault_code: VfdRegister | None = None
+    comm_loss_timeout_s: float = Field(gt=0, le=60)                 # as set in the drive: it stops without frames
+    comm_loss_action: str = Field(min_length=1, max_length=120)     # as set in the drive, e.g. "coast stop and trip"
+    provenance: Literal["DEMO", "PROPOSED", "VERIFIED"]
+    evidence: str | None = Field(default=None, max_length=300)      # CP-06 record: who, when, what was observed
+
+    @field_validator("run_sequence")
+    @classmethod
+    def _words(cls, v: list[int]) -> list[int]:
+        if any(not 0 <= x <= 0xFFFF for x in v):
+            raise ValueError("run_sequence values must be 0..65535")
+        return v
+
+    @model_validator(mode="after")
+    def _distinct(self) -> "VfdModbusMap":
+        if self.stop_value == self.run_sequence[-1]:
+            raise ValueError("stop_value equals the last run value")
+        if self.running_mask & self.fault_mask:
+            raise ValueError("running_mask and fault_mask share a bit")
+        if self.provenance == "VERIFIED" and not (self.evidence or "").strip():
+            raise ValueError("a VERIFIED register map needs its CP-06 evidence")
+        return self
+
+
 class DriveAdapterConfig(_Strict):
     """A logical actuator interface for the shared VFD (brief §2): its run/stop is not forced onto a
-    relay channel. SIMULATED adapters drive the twin; NOT_CONFIGURED is what a hardware profile has until
-    the real drive interface is verified (no register map is invented, ADR-0013)."""
+    relay channel. SIMULATED adapters drive the twin directly; MODBUS_RTU adapters talk to the drive's
+    own Modbus interface (`modbus`), the simulated drive in a SIMULATED profile; NOT_CONFIGURED is what the
+    installation keeps until the real register map has passed CP-06 on the bench (ADR-0013, ADR-0015)."""
     adapter_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,31}$")
-    kind: Literal["SIMULATED", "NOT_CONFIGURED"]
+    kind: Literal["SIMULATED", "NOT_CONFIGURED", "MODBUS_RTU"]
     signals: list[str] = Field(min_length=1)
+    modbus: VfdModbusMap | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _map(self) -> "DriveAdapterConfig":
+        if (self.kind == "MODBUS_RTU") != (self.modbus is not None):
+            raise ValueError(f"drive adapter {self.adapter_id}: a register map (modbus) belongs to MODBUS_RTU "
+                             "adapters only, and every MODBUS_RTU adapter needs one")
+        if self.kind == "MODBUS_RTU" and len(self.signals) != 1:
+            raise ValueError(f"drive adapter {self.adapter_id}: a MODBUS_RTU adapter carries one run signal")
+        return self
+
+    @property
+    def target(self) -> str:
+        """Command target of this adapter on the bench and in the audit (`drive:<id>`)."""
+        return f"drive:{self.adapter_id}"
 
 
 RECORDING_INTERVALS_S = (60, 300)
@@ -319,10 +390,26 @@ class SecuritySettings(_Strict):
     max_request_bytes: int = Field(default=64 * 1024, ge=1024)
 
 
+SITE_TIMEZONES = {"Atlantic/Canary": "the installation in the Canary Islands",
+                  "Europe/Stockholm": "the test bench in Malmö"}     # owner, 2026-10-13
+
+
 class Site(_Strict):
-    name: str = "AquaCrop greenhouse (Malmö)"
+    """Where the controller runs. Stored times are UTC; the time zone only decides what the pages, exports
+    and daily boundaries show. A real profile names it explicitly (`SITE_TIMEZONES`)."""
+    name: str = "AquaCrop greenhouse"
     timezone: str = "Europe/Stockholm"
     facts: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_zone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"unknown time zone {v!r}: use an IANA name such as Atlantic/Canary or "
+                             "Europe/Stockholm") from e
+        return v
 
 
 class InstallationConfig(_Strict):
@@ -397,6 +484,9 @@ class InstallationConfig(_Strict):
                 errs.append(f"duplicate scaling profile {s.profile_id}")
             scal[s.profile_id] = s
         real = self.profile != AccessPolicy.SIMULATED
+        if real and "timezone" not in self.site.model_fields_set:
+            errs.append("site.timezone must be set on a real profile: "
+                        + "; ".join(f"{z} for {where}" for z, where in SITE_TIMEZONES.items()))
         for d in self.devices:
             for ch, a in d.ai.items():
                 if a.scaling is None:
@@ -442,8 +532,6 @@ class InstallationConfig(_Strict):
             if len(ids) != len(set(ids)):
                 errs.append("duplicate drive adapter id")
             for a in self.drive_adapters:
-                if a.kind == "SIMULATED" and real:
-                    errs.append(f"drive adapter {a.adapter_id}: SIMULATED adapters exist only in a SIMULATED profile")
                 for sig in a.signals:
                     if sig not in act:
                         errs.append(f"drive adapter {a.adapter_id}: {sig} is not an actuator signal of this twin")
@@ -453,6 +541,7 @@ class InstallationConfig(_Strict):
             if real and self.twin.provenance == "DEMO":
                 # HYBRID_SHADOW may carry a predictive model, but never DEMO parameters as production config
                 errs.append("real profile may not carry DEMO twin parameters")
+        errs += self._drive_errors(buses, seen, real)
         for r in self.alarm_rules:
             p = points.get(r.point)
             if p is None:
@@ -464,6 +553,36 @@ class InstallationConfig(_Strict):
         if errs:
             raise ValueError("; ".join(errs))
         return self
+
+    def _drive_errors(self, buses: dict, used: dict[tuple[str, int], str], real: bool) -> list[str]:
+        errs = []
+        ids = [a.adapter_id for a in self.drive_adapters]
+        if self.twin is None and len(ids) != len(set(ids)):
+            errs.append("duplicate drive adapter id")
+        for a in self.drive_adapters:
+            if a.kind == "SIMULATED" and real:
+                errs.append(f"drive adapter {a.adapter_id}: SIMULATED adapters exist only in a SIMULATED profile")
+            m = a.modbus
+            if m is None:
+                continue
+            b = buses.get(m.bus_id)
+            if b is None:
+                errs.append(f"drive adapter {a.adapter_id}: unknown bus {m.bus_id}")
+                continue
+            key = (m.bus_id, m.address)
+            if key in used:
+                errs.append(f"drive adapter {a.adapter_id}: address {m.address} on {m.bus_id} already used by "
+                            f"{used[key]}")
+            used[key] = a.target
+            if m.comm_loss_timeout_s < 2 * b.poll_interval_s:      # a healthy link must not trip the drive
+                errs.append(f"drive adapter {a.adapter_id}: comm_loss_timeout_s {m.comm_loss_timeout_s:g} is less "
+                            f"than twice the poll interval of {m.bus_id} ({b.poll_interval_s:g} s); the status "
+                            "reads are what keep the drive's comm-loss timer from expiring")
+            if real and m.provenance == "DEMO":
+                errs.append(f"drive adapter {a.adapter_id}: a real profile may not use the DEMO register map of "
+                            "the simulated drive; copy the real drive's map from its manual (PROPOSED for "
+                            "CP-06 on the bench, VERIFIED after it) or leave the adapter NOT_CONFIGURED")
+        return errs
 
     # ---------------------------------------------------------------------------------------
     def _index(self, name: str, items: list, key) -> dict:
@@ -511,14 +630,27 @@ class InstallationConfig(_Strict):
                 return a
         return None
 
+    def drive_of_adapter(self, adapter_id: str) -> str | None:
+        """The drive identifier (`MAIN` in `drive.MAIN.run`) an adapter's run signal names."""
+        for a in self.drive_adapters:
+            if a.adapter_id == adapter_id:
+                parts = a.signals[0].split(".")
+                return parts[1] if len(parts) == 3 and parts[0] == "drive" else None
+        return None
+
+    def drive_target(self, target: str) -> DriveAdapterConfig | None:
+        """The MODBUS_RTU adapter a command target `drive:<id>` names, or None."""
+        for a in self.drive_adapters:
+            if a.kind == "MODBUS_RTU" and a.target == target:
+                return a
+        return None
+
     @property
     def topology(self) -> str | None:
         return None if self.twin is None else getattr(self.twin, "topology", "demo_small")
 
     def expected_point_count(self) -> int:
-        n_ai = sum(1 for d in self.devices if d.model == ModelId.WAVESHARE_AI_8CH)
-        n_rd = sum(1 for d in self.devices if d.model == ModelId.WAVESHARE_RELAY_D)
-        return 8 * n_ai + 16 * n_rd
+        return sum(CATALOG[d.model].ai + CATALOG[d.model].di + CATALOG[d.model].do for d in self.devices)
 
 
 def load_config(path: str | Path) -> InstallationConfig:

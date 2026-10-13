@@ -2,7 +2,8 @@
 
 Test infrastructure, run from the repository root: it uses `tests/fakes` (relay module at address 1,
 analog module at address 2) and `tests/fixtures/hw-fake.yaml`, so no serial port or real module is
-involved. On exit it prints how many write frames reached the fake bus; the browser checks expect 0.
+involved. A register-level drive stand-in answers at address 9 with a PROPOSED map, as on the Malmö bench
+before CP-06. On exit it prints how many write frames reached the fake bus; the browser checks expect 0.
 
     AQ_PASS=... python scripts/ui_check/serve_fake_hardware.py --state-dir DIR
 """
@@ -36,8 +37,18 @@ def main() -> int:
     bus = pf.bus("uicheck")
     bus.add("relay", 1)
     bus.add("ai", 2)
+    bus.add("digital_io", 5)          # an IO 8CH (SKU 26244) beside the Relay (D): transistor outputs
+    vfd = bus.add("vfd", 9)
+    vfd.holding = {100: 0, 101: 1, 102: 0, 103: 0, 104: 0}
     data = yaml.safe_load((ROOT / "tests" / "fixtures" / "hw-fake.yaml").read_text(encoding="utf-8"))
     data["buses"][0]["port"] = "aquafake://uicheck"
+    data["devices"].append({"device_uid": "digital_A", "bus_id": "rs485_a", "address": 5,
+                            "model": "WAVESHARE_MODBUS_RTU_IO_8CH", "sku": "26244"})
+    data["drive_adapters"] = [{"adapter_id": "MAIN", "kind": "MODBUS_RTU", "signals": ["drive.MAIN.run"], "modbus": {
+        "bus_id": "rs485_a", "address": 9, "drive_model": "test double", "manual_reference": "tests/fakes",
+        "control_register": 100, "run_sequence": [1, 3], "stop_value": 0, "status_register": 101,
+        "running_mask": 4, "fault_mask": 8, "ready_mask": 1, "frequency": {"address": 102, "scale": 0.1, "unit": "Hz"},
+        "comm_loss_timeout_s": 5, "comm_loss_action": "test double", "provenance": "PROPOSED"}}]
     cfg = InstallationConfig.model_validate(data)
     app = create_app(cfg, state_dir=args.state_dir, bind_host="127.0.0.1")
     app.state.accounts.create_user("admin", os.environ["AQ_PASS"], Role.ADMIN)

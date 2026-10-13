@@ -2,12 +2,12 @@
 # not an engineering fact. Physical mapping is intentionally empty.
 schema_version: 1
 config_id: demo-24
-config_version: "2026-10-12.1"
+config_version: "2026-10-13.1"
 profile: SIMULATED
 label: "SIMULATION — DEMO MODEL (24 virtual points)"
 site:
-  name: "AquaCrop greenhouse (Malmö) — DEMO"
-  timezone: Europe/Stockholm
+  name: "AquaCrop greenhouse, Canary Islands — DEMO"
+  timezone: Atlantic/Canary       # owner, 2026-10-13 (the Malmö test bench uses Europe/Stockholm)
   facts:
     footprint: "approx. 90 x 45 m (owner brief 2026-10-11)"
     channels: "13 hydroponic channels, two sectors (owner brief)"

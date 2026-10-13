@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.3.1 (2026-10-13): two IO 8CH modules, 80 points (ADR-0016)
+
+The owner's inventory update of 2026-10-13: two Waveshare Modbus RTU IO 8CH (SKU 26244) beside the
+two Relay (D) and two AI 8CH boards. Integrated from the owner-supplied `waveshare_io_80.patch` and
+reviewed. Software and simulation only: no module has been connected.
+
+### Added
+- Catalogue model `WAVESHARE_MODBUS_RTU_IO_8CH` (SKU 26244): 8 DI and 8 open-drain sink outputs,
+  500 mA per channel, with `output_type` (`RELAY_CONTACT` or `OPEN_DRAIN_SINK`) and the current limit
+  carried through the configuration, API, diagnostics and dashboard ("TRANSISTOR SINK, not relay
+  contacts"). Same V2 protocol as the Relay (D): FC01/FC02 reads, FC05 writes, FC03 output modes.
+- Both I/O pages (simulated and real) label each module's outputs: "relay contacts" or "TRANSISTOR
+  SINK, not relay contacts, max 500 mA"; the browser check covers both (`ui_check`, 60 checks).
+- `installation-80` (SIMULATED, launcher default): the installation model on six modules, the 32
+  added channels unallocated test points. `installation-48` and the 24/48-point demos are kept.
+- Six-module read-only and Malmö bench examples (proposed addresses 5 and 6, unverified).
+- `measure_storage.py --inventory 80`, ADR-0016 and `docs/model/digital_io_8ch.md`. Owner decision:
+  all 32 added channels stay unassigned and all 16 added outputs (DO1 included) are spare/test-only;
+  the table in `docs/model/signal_budget.md` stays a proposal, not fitted devices.
+
+### Changed
+- Database budget 17 GiB (`db_budget_bytes: 18253611008`, owner 2026-10-13) in `installation-80`
+  (version `2026-10-13.80.1`) and the Malmö bench and read-only examples (version `UNVERIFIED-1`),
+  packaged copies identical; a planning/warning budget only, never pruning inside the 365-day
+  window. Legacy configurations keep 10 GiB. The measurement note separates measured (15.0 GiB) from
+  planned (17 GiB), leaves about 7.8 GiB of the eMMC for OS, application, logs and filesystem
+  overhead, and the off-device backup runbook carries the 80-point sizing (card about 6.6 GiB of
+  copies and 19.9 GiB of drill scratch, cloud about 34.4 GiB for 42 copies).
+- The point count is the sum of the catalogue channels of every device, not a 24/48 formula.
+- Package version 0.3.1, so the Windows launcher prepares a fresh environment.
+
+## 0.3.0 (2026-10-13): drive run over Modbus and site time zones (ADR-0015)
+
+The owner's answers of 2026-10-13, part of the 0.3.0 release. Software and simulation only: no drive,
+manual or register map has been seen, and the installation's drive interface stays `NOT_CONFIGURED`.
+
+### Added
+- `MODBUS_RTU` drive adapters with a register map from the drive's manual (`VfdModbusMap`: unit,
+  control register, run sequence of 1 to 3 values, stop value, status word and masks, optional
+  frequency/current/fault code, the drive's comm-loss timeout and action, provenance, evidence).
+  `DEMO` is refused on a real profile, `VERIFIED` needs CP-06 evidence, `PROPOSED` is for the bench.
+- FC06 to the configured control register only: `RtuBus` refuses every other unit and register
+  before sending, one frame per value, never retried or repeated. New outcome `ECHO_CONFIRMED`
+  (not actuator proof).
+- Simulated drive answering a DEMO map in `installation-48`, with its own comm-loss stop and the
+  faults `NO_RESPONSE`, `EXCEPTION` and `IGNORES_WRITES` (twin page). Scenarios
+  `drive_modbus_comm_loss` (PC-12), `drive_modbus_refused` and `drive_modbus_ignores_writes` (PC-02);
+  alarms `DRIVE_COMM` and `DRIVE_STATUS_MISMATCH` (status word against the hardwired inputs).
+- Real profiles: the drive's status word is polled with the modules (reads only), shown on the
+  Overview and I/O pages, `DRIVE_STATUS_EDGE` and `OBSERVATION_GAP` events, `diagnostics read
+  --device drive:<id>`. A bench lease may allowlist `drive:<id>`: Run/Stop buttons, a fresh status
+  read before arming and before each run, refused while the drive reports a fault or not-ready.
+- `configs/bench-malmo.example.yaml` (Europe/Stockholm), the CP-06 procedure and template,
+  `docs/model/vfd_modbus.md` (wiring, drive settings, reading the manual, open points), ADR-0015.
+
+### Changed
+- Site time zones: `Atlantic/Canary` for the installation, the twin and the demos; a real profile
+  must name its zone and an unknown zone is refused.
+- All 16 DI and 16 DO stay allocated, no third relay module (ADR-0013 addendum, signal budget,
+  release readiness items 1, 2, 9, 10 and 20).
+- The Modbus error types live in `drivers/rtu_errors.py` so the simulation never imports pymodbus.
+
+### Fixed (owner review of 2026-10-13)
+- R1: the bench authorization (lease, allowlist, configuration version, command expiry) is checked
+  again inside the bus lock immediately before every FC05 and FC06 frame, after the preflight reads
+  and any wait for the bus. Expiry or revocation stops the remaining frames: nothing is sent, a run
+  sequence cut after its first value is `OUTCOME_UNKNOWN` with the echoed count audited, and nothing
+  is retried or compensated.
+
 ## 0.3.0 (2026-10-13): pre-hardware release
 
 Stage 4 of the pre-hardware release, and the release itself: it contains the three 0.3.0 sections

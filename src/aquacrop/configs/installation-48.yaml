@@ -6,12 +6,12 @@
 # stays empty. Nothing here is copied into a hardware profile.
 schema_version: 1
 config_id: installation-48
-config_version: "2026-10-12.2"
+config_version: "2026-10-13.1"
 profile: SIMULATED
 label: "SIMULATION — FULL INSTALLATION MODEL (48 virtual points, DEMO dynamics)"
 site:
-  name: "AquaCrop greenhouse — SIMULATION"
-  timezone: Europe/Stockholm
+  name: "AquaCrop greenhouse, Canary Islands — SIMULATION"
+  timezone: Atlantic/Canary       # owner, 2026-10-13 (the Malmö test bench uses Europe/Stockholm)
   facts:
     main_tank: "20,000 L nominal (owner 2026-10-12)"
     stock_tanks: "A, B, acid: 5,000 L each (owner 2026-10-12)"
@@ -195,13 +195,34 @@ virtual_mapping:
   - {point: analog_B.AI6, signal: flow.TP_A}
   - {point: analog_B.AI7, signal: flow.TP_B}
   - {point: analog_B.AI8, signal: flow.TP_ACID}
-# The shared VFD's run/stop is a logical actuator behind a drive adapter (no register map is invented).
-# SIMULATED here; a hardware profile has NOT_CONFIGURED until the drive interface is verified.
+# The shared VFD's run/stop goes over the drive's own Modbus interface (owner, 2026-10-13: all 16 DO stay
+# with the relays). Here it talks to the SIMULATED drive (twin/vfd.py) with a DEMO register map that
+# belongs to no real drive. A hardware profile keeps the adapter NOT_CONFIGURED until the real drive's map,
+# taken from its manual, is verified on the bench (CP-06, ADR-0015); a real profile refuses a DEMO map.
 drive_adapters:
   - adapter_id: MAIN
-    kind: SIMULATED
+    kind: MODBUS_RTU
     signals: [drive.MAIN.run]
-    note: "simulated drive adapter; the real VFD interface (terminal, fieldbus or relay) is a commissioning decision"
+    modbus:
+      bus_id: bus_sim_1
+      address: 10
+      drive_model: "SIMULATED drive (no real make or model)"
+      manual_reference: "none: DEMO register map of the simulated drive (twin/vfd.py), not a vendor manual"
+      control_register: 100
+      run_sequence: [1, 3]          # DEMO: a two-step start, as some drive state machines need
+      stop_value: 0
+      status_register: 101
+      status_function: 3
+      running_mask: 4
+      fault_mask: 8
+      ready_mask: 1
+      frequency: {address: 102, scale: 0.1, unit: Hz}
+      current: {address: 103, scale: 0.1, unit: A}
+      fault_code: {address: 104}
+      comm_loss_timeout_s: 5
+      comm_loss_action: "stop and trip (simulated)"
+      provenance: DEMO
+    note: "simulated drive on the virtual bus; the real drive's register map is a commissioning item (CP-06)"
 physical_mapping: []
 alarm_rules:
   - {rule_id: MAIN_LEVEL_LOW, kind: LOW, point: analog_A.AI1, threshold: 4000, hysteresis: 200, severity: WARNING}

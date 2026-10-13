@@ -12,6 +12,12 @@ substitute for emergency stops, motor protection, dry-run trips or independent o
 
 ## Quick start (desktop simulation)
 
+The owner's updated inventory is **80 points**: two Relay (D) 26517, two AI 8CH 25821 and two
+Modbus RTU IO 8CH 26244. The added boards have transistor sink outputs, distinct from relay contacts.
+Run `python -m aquacrop launch` for the complete `installation-80` desktop fixture. Legacy 24/48-point
+fixtures remain regression examples. Physical profiles include all six modules and start read-only.
+See `docs/model/digital_io_8ch.md` for protocol, commissioning and capacity follow-up.
+
 Python 3.11–3.13. No PowerShell activation is needed on Windows.
 
 | OS | Commands |

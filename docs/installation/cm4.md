@@ -25,7 +25,8 @@ Security updates: `apt` on a schedule the owner approves (TBD); never during a b
 3. On the workstation run `rpiboot` (Raspberry Pi `usbboot`; Windows installer "RPiboot_Setup").
    The eMMC appears as a USB mass-storage device.
 4. Write the image with Raspberry Pi Imager. In Imager's settings create the admin user, set an SSH
-   key (no password login), hostname and locale `Europe/Stockholm`. Do not enable Wi-Fi (the module
+   key (no password login), hostname and time zone (`Atlantic/Canary` for the installation, `Europe/Stockholm`
+   for the Malmö bench; the application uses the configuration's `site.timezone` either way). Do not enable Wi-Fi (the module
    has none).
 5. Power off, set **BOOT** to **OFF**, power from the DC terminal (vendor: 7–36 V DC). The vendor
    warns the CM4 needs a stable 5 V 2 A internally; an unstable supply causes throttling.

@@ -1,4 +1,6 @@
-"""pyserial URL handler `aquafake://<bus>`: an in-memory RS485 bus with simulated Waveshare devices.
+"""pyserial URL handler `aquafake://<bus>`: an in-memory RS485 bus with simulated Waveshare devices
+and a register-level stand-in for a drive's Modbus interface (model "vfd": holding and input registers,
+FC06 only to the registers in `writable`; `on_write` lets a test move the status word).
 
 It plugs in *below* pymodbus (at the pyserial layer), so the real ModbusSerialClient, RTU framer,
 CRC handling and transaction manager are exercised. Every frame written is logged so tests can
@@ -30,6 +32,10 @@ class FakeDevice:
         self.meta = {0x2000: 0x0003, 0x4000: address, 0x8000: 0x0100}  # unverified V2 metadata stand-ins
         self.fault: str | None = None  # see FakeBus.respond
         self.writes_applied = 0
+        self.holding: dict[int, int] = {}   # vfd only
+        self.inputs: dict[int, int] = {}
+        self.writable: set[int] = set()
+        self.on_write = None                # vfd: callable(address, value)
 
 
 class FakeBus:
@@ -72,13 +78,31 @@ class FakeBus:
         if fc in (0x01, 0x02):
             start, count = struct.unpack(">HH", body)
             src = d.coils if fc == 0x01 else d.di
-            if d.model != "relay" or start + count > 8 or count == 0:
+            if d.model not in ("relay", "digital_io") or start + count > 8 or count == 0:
                 return exc(2)
             bits = src[start:start + count]
             nbytes = (count + 7) // 8
             val = sum(1 << i for i, b in enumerate(bits) if b)
             data = val.to_bytes(nbytes, "little")
             pdu = bytes([addr, fc, nbytes]) + data
+        elif fc in (0x03, 0x04) and d.model == "vfd":
+            start, count = struct.unpack(">HH", body)
+            src = d.holding if fc == 0x03 else d.inputs
+            if count == 0 or any(a not in src for a in range(start, start + count)):
+                return exc(2)
+            pdu = bytes([addr, fc, 2 * count]) + b"".join(struct.pack(">H", src[a]) for a in range(start, start + count))
+        elif fc == 0x06 and d.model == "vfd":
+            a, v = struct.unpack(">HH", body)
+            if a not in d.writable:
+                return exc(2)
+            if f != "readback_mismatch":
+                d.holding[a] = v
+                d.writes_applied += 1
+                if d.on_write is not None:
+                    d.on_write(a, v)
+            if f == "apply_then_timeout":
+                return b""
+            pdu = bytes([addr, fc]) + (body if f != "readback_mismatch" else struct.pack(">HH", a, v ^ 1))
         elif fc in (0x03, 0x04):
             start, count = struct.unpack(">HH", body)
             if fc == 0x04:
@@ -98,7 +122,7 @@ class FakeBus:
             pdu = bytes([addr, fc, 2 * len(regs)]) + b"".join(struct.pack(">H", r) for r in regs)
         elif fc == 0x05:
             a, v = struct.unpack(">HH", body)
-            if d.model != "relay" or a >= 8 or v not in (0x0000, 0xFF00):
+            if d.model not in ("relay", "digital_io") or a >= 8 or v not in (0x0000, 0xFF00):
                 return exc(3)
             if f != "readback_mismatch":
                 d.coils[a] = v == 0xFF00
@@ -108,7 +132,7 @@ class FakeBus:
             pdu = bytes([addr, fc]) + body
         elif fc == 0x0F:
             a, n, nb = struct.unpack(">HHB", body[:5])
-            if d.model != "relay" or a + n > 8:
+            if d.model not in ("relay", "digital_io") or a + n > 8:
                 return exc(2)
             val = int.from_bytes(body[5:5 + nb], "little")
             for i in range(n):

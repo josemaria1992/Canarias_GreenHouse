@@ -294,7 +294,9 @@ a staging root (no systemd there); they have not run on a CM4.
 
 ## Clock
 
-All stored times are UTC; the UI shows `Europe/Stockholm` with CET/CEST. Timing uses the
+All stored times are UTC; the UI shows them in the configuration's `site.timezone`: `Atlantic/Canary`
+(WET/WEST) at the installation and in the twin, `Europe/Stockholm` (CET/CEST) on the Malmö bench (owner,
+2026-10-13). A real profile must name its zone. Timing uses the
 monotonic clock. Wall-clock steps larger than 2 s are recorded as `WALL_CLOCK_STEP`. See the CM4
 guide for the RTC.
 

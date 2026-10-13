@@ -484,6 +484,16 @@
       PR ? refillBatchCard(PR) : null);
     await page(P, PR, PAGE_DEF["main-tank"], cards, PR ? procPanel("REFILL", PR, P.layout) : null);
   }
+  /** The drive's Modbus interface as the plant view reports it (simulated drive, DEMO map, in the twin). */
+  function driveIfaceRows(P, drv) {
+    const s = P.signals[`drive.${drv}.run`], a = s && s.adapter;
+    if (!a) return [["Drive interface", h("span", { class: "muted" }, P.read_only ? "unbound on a real profile (the drive's status word is on the Overview page)" : "NOT_CONFIGURED")]];
+    const mb = a.modbus, st = mb && mb.status;
+    return [["Drive interface", h("span", null, a.kind, " ", a.provenance ? pill(a.provenance, a.provenance === "VERIFIED" ? "ok" : "warn") : null)],
+      mb ? ["Status word", mb.ok === false ? pill("UNREADABLE: " + (mb.error || ""), "bad")
+        : st ? h("span", { class: "mono" }, `${st.status_word} · running ${st.running ? "yes" : "no"} · fault ${st.fault ? "YES" : "no"}${st.frequency != null ? " · " + num(st.frequency, 1) + " Hz" : ""}`) : "not read"] : null,
+      mb && mb.interface ? ["Control register", h("span", { class: "mono" }, `${mb.interface.control_value} (comm-loss stop after ${mb.interface.comm_loss_timeout_s} s)`)] : null].filter(Boolean);
+  }
   async function mainPumps() {
     const [P, PR] = await load();
     const ir = PR ? PR.processes.IRRIGATION : null, drv = P.layout.shared_drive;
@@ -491,8 +501,9 @@
       h("div", { class: "card" }, h("h2", null, "Shared drive and pump selection"), kvRows([
         ["Drive run", obs(P, `drive.${drv}.run`, 0)], ["Drive running", obs(P, `drive.${drv}.running`, 0, ["running", "stopped"])],
         ["Drive fault", obs(P, `drive.${drv}.fault`, 0, ["FAULT", "none"])], ["Safety chain", obs(P, "safety.chain_ok", 0, ["healthy", "OPEN"])],
-        ...P.layout.main_pumps.map((mp, i) => [`K${i + 1} (${mp})`, reqObs(P, `contactor.${mp}.cmd`, `contactor.${mp}.closed`, ["closed", "open"])])]),
-        h("p", { class: "muted" }, "One drive feeds one motor at a time; K1/K2 select it. The drive's run command is a drive adapter, not a relay point, until the VFD interface is confirmed (no register map is assumed).")),
+        ...P.layout.main_pumps.map((mp, i) => [`K${i + 1} (${mp})`, reqObs(P, `contactor.${mp}.cmd`, `contactor.${mp}.closed`, ["closed", "open"])]),
+        ...driveIfaceRows(P, drv)]),
+        h("p", { class: "muted" }, "One drive feeds one motor at a time; K1/K2 select it, never under load. The run command goes over the drive's Modbus interface (ADR-0015); the hardwired running and fault inputs stay the proof. The real drive's interface stays NOT_CONFIGURED until its register map passes CP-06 on the bench.")),
       ir ? h("div", { class: "card" }, h("h2", null, "Current step"), ir.sector ? kvRows([["Sector / pump", `${ir.sector} / ${ir.pump || "—"}`],
         ["Step", ir.duration_s ? `${num(ir.irrigated_s, 0)} of ${num(ir.duration_s, 0)} s with verified flow` : "—"],
         ["Delivered (measured)", num(ir.delivered_L_measured, 1) + " L"], ["Cycle", String(ir.cycle)], ir.stop_stage ? ["Stopping", ir.stop_stage] : null])

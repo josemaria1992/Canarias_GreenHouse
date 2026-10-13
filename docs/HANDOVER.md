@@ -1,5 +1,14 @@
 # Handover: AquaCrop platform 0.3.0, the pre-hardware release (2026-10-13)
 
+**Owner inventory update (2026-10-13):** two IO 8CH (SKU 26244) added, for 80 points across six
+modules; the launcher default is `installation-80` and the 32 added channels are testable but stay
+unassigned by owner decision (`model/digital_io_8ch.md`, ADR-0016). The owner review findings R1-R4 of the same day
+are fixed (`ACCEPTANCE.md`, "Owner review of 13 October 2026"). 48-point sizing figures below are
+kept for the record. 80 points measured on the desktop: 15.0 GiB for a year with every process in
+AUTO. The owner set a 17 GiB planning/warning database budget for 80 points, with backups and
+restore drills on the SD card (warning only, never deletes inside the 365-day window;
+`operations/measurements/2026-10-13-measurements.md`, RELEASE_READINESS item 24).
+
 This release is software and simulation only. What is still needed before each physical step, item
 by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPTANCE.md`.
 
@@ -77,10 +86,10 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-375 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
+410 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
 local encrypted remote: the round trip and the replacement-controller recovery; they are skipped where
 rclone is not installed and required on CI's Linux jobs. `demo verify` gives 21/21 on both demo
-fixtures and 42/42 on `installation-48`. The browser check (`scripts/ui_check/`) passes 55/55 in
+fixtures and 45/45 on `installation-48`. The browser check (`scripts/ui_check/`) passes 58/58 in
 headless Chromium, and the wheel from the built release ZIP passes 16/16 from outside the
 repository. A simulated 400-day history at 60 s with the event and command rates of every process
 running in AUTO measured the one-year size, the WAL, the bytes written, the compressed backup and
@@ -125,16 +134,20 @@ OpenVPN); the full list of physical configuration still open is section 3 of `RE
 2. **Backward clock policy**: snapshots are still held while the clock is behind trusted labels;
    future-dated records are now resolved by the administrator's quarantine (ADR-0011).
 3. Production facts still `TBD`: wiring/physical mapping (also unblocks shadow mode), VFD
-   interface, probes and calibration, production recipe values, mixing method, physical alarm
+   register map (from its manual, CP-06), probes and calibration, production recipe values, mixing method, physical alarm
    severities, role assignments and remote rights, OS update policy. The installation's sizes and
    equipment are confirmed (2026-10-12).
-4. **48-point allocation (ADR-0013, `model/signal_budget.md`)**: the processes need 17 outputs and
-   the modules have 16. Choose one: confirm VFD control over Modbus or a drive terminal (the drive
-   run command then goes through the drive adapter), or add a third relay module (drive run, sector
-   valve closed limits and stock valve feedback). Confirm or change the proposed allocation and the
-   cause-and-effect table (`model/cause_and_effect.md`).
-5. **Site time zone**: the configurations say `Europe/Stockholm` (the company office in Malmö). If the
-   controller sits in the Canary Islands it should be `Atlantic/Canary`. Not changed; please confirm.
+4. **Point allocation (ADR-0013, ADR-0016, `model/signal_budget.md`)**: decided 2026-10-13: all 16
+   relay-module DI and DO in use, no third relay module, and the 17th output (the shared drive's run) over the drive's
+   Modbus interface (ADR-0015, `model/vfd_modbus.md`). Simulation and bench software are done; the
+   real interface stays `NOT_CONFIGURED` until the drive's manual is supplied and CP-06 passes on the
+   Malmö bench. Later that day the owner added two IO 8CH modules (80 points) and decided that their
+   16 DI and 16 transistor DO all stay unassigned test points (DO1 included) until hardware and
+   wiring are verified; the table in `model/signal_budget.md` is a proposal for later, not fitted
+   devices. Still to confirm: the relay/analog per-channel table and the cause-and-effect table
+   (`model/cause_and_effect.md`).
+5. **Site time zone**: decided 2026-10-13: `Atlantic/Canary` for the installation (and the twin and
+   demos), `Europe/Stockholm` for the Malmö test bench (`configs/bench-malmo.example.yaml`).
 6. The original brief's `ACCEPTANCE_TEST_PLAN.md` was never supplied, so the milestone 1-4 IDs are
    this project's own. The pre-hardware gates (PH, PC and the later UI, OP, BK, DL) come from the
    owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` of 12 Oct 2026.
@@ -146,7 +159,8 @@ behaviour, backup time and free space on the eMMC, the SD card in its USB reader
 OneDrive upload and drill, the recovery-key escrow test); CP-01 read-only
 identification of each module; CP-02 AI stimulus; CP-03 DI stimulus; CP-04 DO on dummy loads under
 a bench lease with teardown; CP-05 disconnect/restart/power-loss with a passive bus monitor proving
-zero write frames. Each needs the hardware on an isolated bench and your written authorization of
+zero write frames; CP-06 the drive's Modbus interface (status bits, run/stop under a lease, comm loss,
+power cycle) with the motor disconnected. Each needs the hardware on an isolated bench and your written authorization of
 that setup. Procedures and unsigned templates: `commissioning/`.
 
 Nothing in this release is a safety function, and passing these tests does not make the system

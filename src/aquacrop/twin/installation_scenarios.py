@@ -271,6 +271,28 @@ def presets() -> dict[str, Scenario]:
         Scenario("drive_no_run", "Drive never reports running.", 30,
                  [(0, "ACTUATOR_FAULT", {"kind": "drive", "ident": "MAIN", "fault": "NO_RUN"}), IRR],
                  checks=[proc("IRRIGATION", "FAULT_LOCKOUT", "DRIVE_START_TIMEOUT"), outputs_off, idle("IRRIGATION")]),
+        # -------------------------------------------------------------- the drive's Modbus interface (ADR-0015)
+        Scenario("drive_modbus_comm_loss", "The drive stops answering Modbus mid-step: its own comm-loss timer "
+                 "stops and trips it, the hardwired fault input locks the process out, DRIVE_COMM is raised; "
+                 "nothing is switched under load.", 90,
+                 [IRR, (60, "ACTUATOR_FAULT", {"kind": "drive_comm", "ident": "MAIN", "fault": "NO_RESPONSE"})],
+                 checks=[proc("IRRIGATION", "FAULT_LOCKOUT", "DRIVE_FAULT"), alarm("DRIVE_COMM", "MAIN"),
+                         lambda rt: [] if "COMM_LOSS" in (rt.plant.drive.tripped or "") else
+                         [f"drive trip {rt.plant.drive.tripped!r}, expected COMM_LOSS"],
+                         lambda rt: [] if rt.plant.drive.speed == 0.0 else [f"drive speed {rt.plant.drive.speed}"],
+                         lambda rt: [f"plant hazard {h['kind']}: {h['detail']}" for h in rt.plant.hazards
+                                     if not (h["kind"] == "DRIVE_TRIP" and h["detail"].startswith("COMM_LOSS"))]]),
+        Scenario("drive_modbus_refused", "The drive answers every request with an exception: the start is FAILED "
+                 "before anything runs and the process locks out.", 20,
+                 [(0, "ACTUATOR_FAULT", {"kind": "drive_comm", "ident": "MAIN", "fault": "EXCEPTION"}), IRR],
+                 checks=[proc("IRRIGATION", "FAULT_LOCKOUT", "COMMAND_REJECTED"), outputs_off,
+                         event("DRIVE_ADAPTER_COMMAND", desired=True, outcome="FAILED"),
+                         lambda rt: [] if rt.plant.drive.speed == 0.0 else ["the drive ran"]]),
+        Scenario("drive_modbus_ignores_writes", "The drive echoes the run sequence but does not start: the echo is "
+                 "not taken as running; DRIVE_START_TIMEOUT from the running feedback.", 30,
+                 [(0, "ACTUATOR_FAULT", {"kind": "drive_comm", "ident": "MAIN", "fault": "IGNORES_WRITES"}), IRR],
+                 checks=[proc("IRRIGATION", "FAULT_LOCKOUT", "DRIVE_START_TIMEOUT"), outputs_off,
+                         event("DRIVE_ADAPTER_COMMAND", desired=True, outcome="ECHO_CONFIRMED")]),
         Scenario("main_pump_no_flow", "P1 runs but delivers no flow.", 60,
                  [(0, "ACTUATOR_FAULT", {"kind": "pump", "ident": "MP1", "fault": "NO_FLOW"}), IRR],
                  checks=[proc("IRRIGATION", "FAULT_LOCKOUT", "NO_FLOW"), outputs_off, idle("IRRIGATION"), no_hazards]),

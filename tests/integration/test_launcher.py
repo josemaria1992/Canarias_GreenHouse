@@ -89,7 +89,7 @@ def test_cold_start_first_admin_sign_in_clean_stop_and_persistence(tmp_path):
     assert rc == 0, out
     assert "Administrator 'admin' created" in out and "stopped cleanly" in out and "[FAIL]" not in out
     log = (state / "logs" / "aquacrop-launch.log").read_text(encoding="utf-8")
-    assert "starting installation-48" in log and "stopped cleanly" in log
+    assert "starting installation-80" in log and "stopped cleanly" in log
     # second start: the account persists and nothing is asked
     p = _start(state, port)
     try:

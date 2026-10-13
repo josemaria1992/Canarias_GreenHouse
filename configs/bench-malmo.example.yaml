@@ -1,0 +1,102 @@
+# EXAMPLE ONLY — the isolated test bench in Malmö (owner, 2026-10-13), where CP-01 to CP-06 run before the
+# hardware goes to the installation. Every field that is not an owner-supplied fact is a placeholder that
+# must be replaced with verified commissioning evidence before use. Starts HARDWARE_READ_ONLY: no writes;
+# bench writes need a bench lease (ADR-0003). Its own config_id and database: never the installation's.
+# Copy to configs/bench-malmo.yaml and edit. Do not copy DEMO scaling or twin values here.
+schema_version: 1
+config_id: bench-malmo-example
+config_version: "UNVERIFIED-1"            # 1: 17 GiB database budget (owner, 2026-10-13)
+profile: HARDWARE_READ_ONLY
+label: "REAL — READ ONLY — MALMÖ TEST BENCH (example, unverified)"
+site:
+  name: "AquaCrop test bench, Malmö"
+  timezone: Europe/Stockholm              # owner, 2026-10-13; the installation: Atlantic/Canary
+buses:
+  - bus_id: rs485_a
+    kind: rtu
+    port: "/dev/TBD-verify-on-CM4"          # TBD: map carrier terminal -> tty on the actual Pi
+    port_evidence: null                     # TBD: record how the mapping was verified
+    serial: {baudrate: 9600, parity: N, bytesize: 8, stopbits: 1, timeout_s: 0.5, read_retries: 1}
+    poll_interval_s: 3.0
+devices:
+  - device_uid: relay_A
+    bus_id: rs485_a
+    address: 1                              # TBD: prove uniqueness with the device isolated
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: "26517"
+    revision_evidence: null                 # TBD: label/photo evidence
+    firmware_evidence: null                 # TBD: diagnostics read of 0x8000 with date
+  - device_uid: analog_A
+    bus_id: rs485_a
+    address: 2
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: "25821"
+    hardware_variant: UNKNOWN               # TBD: STANDARD or B, verify on the unit
+    # ai channel modes stay UNKNOWN (unscaled) until observed and jumpers physically verified
+# Added owner inventory; addresses are proposed, verify all six separately before connecting the bus.
+  - device_uid: relay_B
+    bus_id: rs485_a
+    address: 3
+    model: WAVESHARE_MODBUS_RTU_RELAY_D
+    sku: '26517'
+  - device_uid: analog_B
+    bus_id: rs485_a
+    address: 4
+    model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+    sku: '25821'
+    hardware_variant: UNKNOWN
+  - device_uid: digital_A
+    bus_id: rs485_a
+    address: 5
+    model: WAVESHARE_MODBUS_RTU_IO_8CH
+    sku: '26244'
+    label: UNVERIFIED digital_A — open-drain outputs, not relay contacts
+  - device_uid: digital_B
+    bus_id: rs485_a
+    address: 6
+    model: WAVESHARE_MODBUS_RTU_IO_8CH
+    sku: '26244'
+    label: UNVERIFIED digital_B — open-drain outputs, not relay contacts
+scaling_profiles: []
+virtual_mapping: []
+physical_mapping: []
+alarm_rules: []
+# The shared drive's run command goes over the drive's Modbus interface (owner, 2026-10-13). It stays
+# NOT_CONFIGURED until the real drive and its manual are on the bench (ADR-0015, docs/model/vfd_modbus.md).
+# For CP-06, replace kind and add the map copied from the manual with provenance PROPOSED: `diagnostics
+# read` decodes the status word, and run/stop is written only under a bench lease, motor disconnected.
+# When CP-06 passes, set VERIFIED with the record and copy the map to the installation's configuration.
+# A real profile refuses the DEMO map of the simulated drive.
+#   kind: MODBUS_RTU
+#   modbus:
+#     bus_id: rs485_b                 # TBD: the drive's own RS485 port is recommended (vfd_modbus.md 3)
+#     address: TBD
+#     drive_model: TBD                # make, model, firmware
+#     manual_reference: TBD           # document, edition, section or page
+#     control_register: TBD
+#     run_sequence: [TBD]             # one to three values, in order
+#     stop_value: TBD
+#     status_register: TBD
+#     status_function: 3              # TBD: 3 or 4, from the manual
+#     running_mask: TBD
+#     fault_mask: TBD
+#     comm_loss_timeout_s: TBD        # as set in the drive
+#     comm_loss_action: TBD           # as set in the drive
+#     provenance: PROPOSED            # VERIFIED, with evidence, after CP-06
+#     evidence: null                  # CP-06 record: who, when, what was observed
+drive_adapters:
+  - adapter_id: MAIN
+    kind: NOT_CONFIGURED
+    signals: [drive.MAIN.run]
+    note: "the drive on the bench, motor disconnected; register map pending CP-06"
+historian:
+  db_path: aquacrop-bench.sqlite3        # never share a database with the installation or a simulation
+  # Owner requirements 2026-10-12 (ADR-0008). Bus polling, alarms and the dashboard keep poll_interval_s;
+  # the historian writes a complete snapshot of every point on each 60 s wall-clock boundary.
+  recording_interval_s: 60               # 300 is allowed only when the owner explicitly asks for it
+  retention_days: 365                    # rolling window; nothing inside it is deleted for space
+  retention_provenance: APPROVED
+  db_budget_bytes: 18253611008           # 17 GiB: owner's planning/warning budget for 80 points (2026-10-13); measured 15.0 GiB/year on the desktop; a warning only, never prunes inside the 365-day window
+  free_space_warning_bytes: 4294967296   # 4 GiB free: WARNING
+  free_space_reserve_bytes: 2147483648   # 2 GiB free: CRITICAL, new starts and ON refused
+  snapshot_floor_bytes: 536870912        # 512 MiB free: periodic snapshots pause, events still written

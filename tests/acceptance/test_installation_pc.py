@@ -17,7 +17,8 @@ CS = ControllerState
 GATES = {
     "PC-01": ["irrigation_alternation", "recipe_edit_next_cycle"],
     "PC-02": ["irrigation_alternation", "manual_irrigation_operator_pump", "sector_valve_stuck_closed",
-              "vfd_stop_feedback_missing", "contactor_welded", "contactor_no_close", "drive_no_run"],
+              "vfd_stop_feedback_missing", "contactor_welded", "contactor_no_close", "drive_no_run",
+              "drive_modbus_refused", "drive_modbus_ignores_writes"],
     "PC-03": ["manual_irrigation_operator_pump"],
     "PC-04": ["refill_ec_target"],
     "PC-05": ["refill_concurrency"],
@@ -28,7 +29,7 @@ GATES = {
               "stock_fill_invalidates"],
     "PC-10": ["return_alternation", "return_pump_no_flow"],
     "PC-11": ["sump_high_main_full"],
-    "PC-12": ["vfd_trip_recovery", "safety_chain_open", "main_pump_no_flow", "sector_valve_stuck_open",
+    "PC-12": ["vfd_trip_recovery", "drive_modbus_comm_loss", "safety_chain_open", "main_pump_no_flow", "sector_valve_stuck_open",
               "main_level_open_loop", "stale_acquisition", "module_timeout", "main_source_empty", "main_low_low"],
     "PC-13": ["manual_bounds_rejected", "raw_command_refused"],
 }

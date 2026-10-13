@@ -242,7 +242,7 @@ def cmd_launch(args) -> int:
 
 def add_parser(sub) -> None:
     la = sub.add_parser("launch", help="desktop demo: checks, first administrator, serve on 127.0.0.1, open browser")
-    la.add_argument("--config", default="installation-48", help="a SIMULATED configuration (default installation-48)")
+    la.add_argument("--config", default="installation-80", help="a SIMULATED configuration (default installation-80)")
     la.add_argument("--state-dir", default=None, help=f"default: {default_state_dir()}")
     la.add_argument("--port", type=int, default=8000)
     la.add_argument("--username", default="admin", help="first administrator's name (asked when interactive)")

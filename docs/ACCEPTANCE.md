@@ -3,11 +3,12 @@
 **Environment:** Linux x86_64 container, Python 3.13.16 (also 3.11.15 and 3.12.13), pymodbus
 3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-13, software 0.3.0 (the
 pre-hardware release). Earlier runs: 2026-10-11 at `0ce4842` (183 tests), ADR-0008 at `f0b18e2` (252
-tests), quarantine and off-device backups (271 tests), pre-hardware stages 1 to 3 (352 tests).
-**Results:** `python -m pytest`: 375 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
-`demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`, 42/42 for `installation-48`.
+tests), quarantine and off-device backups (271 tests), pre-hardware stages 1 to 3 (352 tests), stage 4
+(375 tests).
+**Results:** `python -m pytest`: 410 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
+`demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`, 45/45 for `installation-48`.
 Installed-wheel check (`scripts/check_installed_wheel.py`) on the wheel from the built release ZIP:
-16/16 PASS. Browser check (`scripts/ui_check/`, headless Chromium): 55/55 PASS. Storage measurements and
+16/16 PASS. Browser check (`scripts/ui_check/`, headless Chromium): 58/58 PASS. Storage measurements and
 concurrency stress: `operations/measurements/2026-10-12-measurements.md` and
 `operations/measurements/2026-10-13-measurements.md`. GitHub CI repeats the suite on Ubuntu,
 Windows and macOS (3.11 to 3.13) and Ubuntu ARM64 for every pull request.
@@ -72,6 +73,7 @@ physical verification.
 | AT-MB-05 shadow profile | BLOCKED | shadow not served until a physical mapping is approved (ADR-0002) |
 | AT-MB-06 lease expiry/revocation/allowlist/config/session; uncertain write | PASS | `test_at_mb_06_*` (19 cases), restart never restores a lease, STOP priority |
 | AT-MB-07 per-device health, backoff | PASS | `test_at_mb_07_*` |
+| AT-MB-08 drive Modbus interface (ADR-0015): FC06 vector and echo, refusal of any unconfigured unit or register before sending, status decode, run sequence and failure midway, no write on polling, preflight refusals, lease run/stop, diagnostics read-only | PASS (fake bus) | `hardware/test_vfd_modbus.py` (8 tests, a register-level drive stand-in), `test_at_mb_03_*` (no register write on a bus without a drive), `unit/test_drive_config.py` |
 | Real hardware for any AT-MB item | BLOCKED | no hardware; see milestone 5 |
 
 ## Milestone 4: packaging, security, operations
@@ -180,7 +182,7 @@ Gates from the owner's `PRE_HARDWARE_ACCEPTANCE_PLAN.md` (12 Oct 2026). Configur
 with DEMO dynamics and a synthetic chemistry fixture. None of it is physical verification.** Scenario
 names refer to `src/aquacrop/twin/installation_scenarios.py`; each runs as
 `tests/acceptance/test_installation_pc.py::test_scenario[<name>]` and in `demo verify --config
-installation-48` (42/42 PASS: 40 scenarios plus determinism and replay, 48-point I/O round trip,
+installation-48` (45/45 PASS: 43 scenarios plus determinism and replay, 48-point I/O round trip,
 isolation and inventory checks). The UI gates are in the next section; OP, BK and DL follow in a
 later pull request.
 
@@ -195,7 +197,7 @@ later pull request.
 | PH-07 recipe validation (units, ordered thresholds, usable capacity, finite values, positive maxima, incompatible endpoints); draft, activate, version and rollback persisted and audited; active recipe immutable, changes apply next cycle | PASS | `test_ph07_validation_catches_missing_fields_and_ranges`, `test_ph07_validation_catches_unsafe_orderings`, `test_ph07_lifecycle_audited_immutable_rollback`, `test_ph07_recipe_change_applies_next_cycle`, `integration/test_api_installation.py::test_recipe_roles_validation_and_persistence` |
 | PH-08 missing calibration, mixing or mapping never inherits DEMO values; a profile or recipe change never enables hardware writes | PASS | `test_ph08_demo_preset_only_in_simulation_and_not_the_owner_example`, `test_ph08_real_profile_cannot_carry_simulated_drive_adapter_or_twin`, `test_ph08_installation_labels_are_demo`, `test_pc08_mixing_readiness_is_not_verified_on_a_physical_profile` |
 | PC-01 two full alternating cycles P1/S1 then P2/S2, 300 s each; edited durations apply next cycle; never both pumps selected | PASS | scenarios `irrigation_alternation`, `recipe_edit_next_cycle` |
-| PC-02 stop, verified stopped, old valve closed, new pump selected, new valve open, at least 1 s lead, start, run and flow verified; missing stop feedback forbids selection | PASS | scenarios `irrigation_alternation` (event order checked), `manual_irrigation_operator_pump`, `vfd_stop_feedback_missing`, `sector_valve_stuck_closed`, `contactor_welded`, `contactor_no_close`, `drive_no_run` |
+| PC-02 stop, verified stopped, old valve closed, new pump selected, new valve open, at least 1 s lead, start, run and flow verified; missing stop feedback forbids selection | PASS | scenarios `irrigation_alternation` (event order checked), `manual_irrigation_operator_pump`, `vfd_stop_feedback_missing`, `sector_valve_stuck_closed`, `contactor_welded`, `contactor_no_close`, `drive_no_run`, `drive_modbus_refused`, `drive_modbus_ignores_writes` (run command over the simulated drive's Modbus interface, ADR-0015) |
 | PC-03 MANUAL selects either main pump under the same interlocks; AUTO rejects leftover manual ownership; restart begins stopped without actuation | PASS | scenario `manual_irrigation_operator_pump`; `test_pc03_restart_begins_stopped_and_auto_rejects_leftover_outputs` |
 | PC-04 low main level latches one refill batch; A, B and water overlap and stop independently; chatter makes no duplicate batch | PASS | scenario `refill_ec_target`; `test_pc04_level_chatter_and_repeated_samples_latch_one_batch` (chatter shorter than the debounce, chatter during a batch, no new batch until the level passes trigger + hysteresis) |
 | PC-05 refill runs while irrigation and return stay enabled; flows coordinated without unaccounted overflow | PASS | scenario `refill_concurrency`; `test_pc05_a_process_cannot_command_another_process_equipment`, `test_pc05_unrelated_mode_change_does_not_touch_other_processes` |
@@ -205,19 +207,35 @@ later pull request.
 | PC-09 stock empty, stock not prepared, no flow and transfer timeout stop the affected paths; water filling never asserts readiness; acknowledgement audited and invalidated by a defined stock change | PASS | scenarios `refill_stock_not_prepared`, `refill_stock_empty`, `refill_transfer_no_flow`, `refill_transfer_timeout`, `stock_fill_invalidates`; `test_pc09_stock_acknowledgement_is_audited_and_invalidated_by_level_rise`, `test_pc09_readiness_survives_restart_through_its_store` |
 | PC-10 return on sump thresholds, respects main high level and sump low level, shows the duty policy; both pumps exercised; no inferred failover or rotation | PASS | scenarios `return_alternation`, `return_pump_no_flow` |
 | PC-11 sump high with the main tank full alarms and holds the transfer; pump and valve faults propagate as defined; safe responses logged | PASS | scenario `sump_high_main_full`; the fault scenarios under PC-12 |
-| PC-12 a fault stops and locks out; ack alone cannot reset; reset while the fault is active fails; a healthy reset does not restart; a deliberate restart succeeds under the same role rules locally and remotely | PASS | scenarios `vfd_trip_recovery`, `safety_chain_open`, `main_pump_no_flow`, `sector_valve_stuck_open`, `main_level_open_loop`, `stale_acquisition`, `module_timeout`, `main_source_empty`, `main_low_low`; `test_pc12_ack_reset_restart_are_distinct`, `test_pc12_storage_fault_inhibits_new_starts`, `test_pc12_stop_all_brings_every_output_off`; roles: `integration/test_api_installation.py` (one API for local and remote) |
+| PC-12 a fault stops and locks out; ack alone cannot reset; reset while the fault is active fails; a healthy reset does not restart; a deliberate restart succeeds under the same role rules locally and remotely | PASS | scenarios `vfd_trip_recovery`, `drive_modbus_comm_loss`, `safety_chain_open`, `main_pump_no_flow`, `sector_valve_stuck_open`, `main_level_open_loop`, `stale_acquisition`, `module_timeout`, `main_source_empty`, `main_low_low`; `test_pc12_ack_reset_restart_are_distinct`, `test_pc12_storage_fault_inhibits_new_starts`, `test_pc12_stop_all_brings_every_output_off`; drive status word against the hardwired inputs, comm loss and replay: `acceptance/test_installation_vfd.py`; roles: `integration/test_api_installation.py` (one API for local and remote) |
 | PC-13 bounded MANUAL fills, transfers and doses honour quantity, time, capacity and arbitration; a stale required sensor disables the operation with an actionable reason | PASS | scenarios `manual_bounds_rejected`, `raw_command_refused`, `stale_acquisition` |
 
-### Owner review of 13 October 2026 (findings R2-R4, process controllers)
+### Owner review of 13 October 2026 (findings R1-R4)
 
-Regression cases from `REVIEW_AND_REQUIRED_FIXES.md`, in
-`tests/acceptance/test_installation_review_r2_r4.py`, on the synthetic twin (not physical verification).
+Regression cases from `REVIEW_AND_REQUIRED_FIXES.md`: R2-R4 in
+`tests/acceptance/test_installation_review_r2_r4.py` on the synthetic twin, R1 on the in-memory fake
+bus (not physical verification).
 
 | ID | Status | Evidence |
 |---|---|---|
 | RV-R3 main level and start permissives checked again during the valve lead and in the scan that requests drive RUN; a loss prevents RUN rather than stopping the drive afterwards | PASS | `test_r3_permissive_lost_during_lead_never_starts_the_drive[analog_below_guard,low_low_switch]` (no RUN command, lockout, no restart when the level returns), `test_r3_storage_inhibit_during_lead_never_starts_the_drive`, `test_r3_healthy_alternation_still_starts`; the existing valve-loss, drive-fault, sensor-unavailable and stop/switch scenarios unchanged |
 | RV-R4 EC batch maxima enforced on measured delivery (start-up and stopping coast included), next step shortened by the measured coast, commanded kept separately, overrun detected and reported | PASS | `test_r4_batch_maxima_hold_on_measured_delivery` (several small steps; the twin's stock loss matches the measured total within 0.05 L), `test_r4_unequal_ratio_and_several_small_steps`, `test_r4_overrun_is_reported_not_hidden` (alarm, `MAX_EXCEEDED`, batch `OUT_OF_SPEC`), `test_r4_partner_failure_records_both_deliveries` |
 | RV-R2 an unusable EC probe during an active EC-controlled A/B step stops both nutrient paths in the same scan, before any pump ON (also on the last scan of the valve opening), records the measured delivery and reason, and allows no further step when the probe returns | PASS | `test_r2_unusable_ec_never_lets_a_nutrient_pump_start[invalid,stale,unavailable x OPENING_LAST_SCAN,STARTING,RUNNING]` (zero accepted A/B pump ON commands in the command audit in any scan with unusable EC; no ON and no new step after the probe returns), `test_r2_unusable_ec_during_a_step_stops_both_nutrient_paths[invalid,stale,unavailable]` (pumps off within the scan, stock volumes constant afterwards, no new `REFILL_EC_STEP`), `test_r2_no_new_nutrient_step_when_the_probe_returns`; FIXED_VOLUMES scenarios unchanged. "stale" uses an acquisition stall: the twin has no per-point staleness |
+| RV-R1 bench authorization re-checked immediately before every physical write frame; expiry or revocation stops the remaining frames; partial sequences audited as uncertain; no retry or compensating write | PASS (fake bus) | `hardware/test_vfd_modbus.py::test_drive_lease_is_rechecked_at_every_write_frame[expiry_in_preflight,revoke_after_first_frame]` (zero frames after expiry during the status read; one frame and `OUTCOME_UNKNOWN` "1 of 2" after revocation), `hardware/test_modbus.py::test_r1_relay_lease_expiring_during_preflight_sends_no_frame`; zero-write startup, reconnect, shutdown and lease end: `test_at_mb_05_*`, `test_at_mb_06_expiry_sends_no_off_sequence` |
+
+### Added digital I/O modules (owner inventory of 13 October 2026, ADR-0016)
+
+In-memory fake bus and simulation only; no IO 8CH module has been connected.
+
+| ID | Status | Evidence |
+|---|---|---|
+| IO80-01 six modules, 16 AI + 32 DI + 32 DO = 80 points; relay contacts and open-drain sinks distinguished in catalogue, configuration and API | PASS | `hardware/test_digital_io_8ch.py::test_owner_inventory_and_electrical_types`, `test_api_reports_six_modules_and_transistor_outputs`; `unit/test_inventory.py`; `ui_check` "UI-01 six modules, 80 points" and "HW output types"; `check_installed_wheel.py` (inventory, SKUs, API output types) |
+| IO80-02 all 80 points independent on the I/O test source; loss of one added module isolated | PASS | `test_all_80_virtual_points_independent_and_new_module_loss_isolated`; `demo verify --config installation-80` |
+| IO80-03 read-only acquisition, diagnostics and history use the digital protocol with zero writes | PASS | `test_read_only_diagnostics_and_backend_use_digital_protocol`, `test_hardware_recorder_persists_all_80_without_writes` |
+| IO80-04 added outputs only under an isolated bench lease, one channel at a time; non-NORMAL, short, empty or unreadable modes refuse the write; expiry in preflight sends nothing | PASS | `test_bench_lease_supports_new_outputs_and_channel_isolation`, `test_new_output_refuses_unsafe_or_unreadable_modes[*]`, `test_expiry_during_new_module_preflight_sends_no_write` |
+| IO80-05 legacy 24/48-point configurations and the installed wheel still work | PASS | `integration/test_launcher.py`, `scripts/check_installed_wheel.py` (CI job installed-wheel) |
+| IO80-06 field assignment of the 32 added channels | DECIDED (owner, 2026-10-13): all 32 unassigned, all 16 added DO spare/test-only incl. DO1 | `configs/installation-80.yaml` binds none of them; the table in `model/signal_budget.md` stays a proposal for a later decision, not fitted devices |
+| IO80-07 storage re-measured for 80 points: 60 s snapshots, 365 days, SQLite unchanged; full-size backup and restore drill | PASS (desktop); budget DECIDED (owner, 2026-10-13) | `operations/measurements/2026-10-13-storage-80pt-60s-400d-process.json`: 15.02 GiB at day 365, backup 0.82 GiB, drill passed with 18.05 GiB scratch; 17 GiB planning/warning budget set in `installation-80` and the bench and read-only examples (`unit/test_inventory.py::test_80_point_profiles_carry_the_owner_storage_budget`); CP-00 measures on the CM4 |
 
 ## Pre-hardware release: process pages and installation diagram (UI)
 
@@ -269,8 +287,9 @@ proves part of a gate it is named (AT-...). **Fakes only for hardware, card, clo
 
 | ID | Status | Evidence |
 |---|---|---|
-| CP-00 … CP-05 procedures and unsigned templates | PASS (documents) | `docs/commissioning/` |
-| CP-00 … CP-05 execution | BLOCKED | needs hardware on an isolated bench and the owner's written authorization of the setup |
+| CP-00 … CP-06 procedures and unsigned templates | PASS (documents) | `docs/commissioning/` |
+| CP-00 … CP-05 execution | BLOCKED | needs hardware on the isolated Malmö bench and the owner's written authorization of the setup |
+| CP-06 execution (drive Modbus map) | BLOCKED | needs the drive, its Modbus manual and the drive settings of `model/vfd_modbus.md` §4 |
 
 ## Production limitation matrix
 

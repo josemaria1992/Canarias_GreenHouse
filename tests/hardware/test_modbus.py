@@ -146,11 +146,18 @@ def test_at_mb_03_broadcast_and_out_of_range_units_never_sent(fake_bus):
     rb.close()
 
 
-def test_at_mb_03_adapter_has_no_generic_write_surface():
+def test_at_mb_03_adapter_has_no_generic_write_surface(fake_bus):
     names = {n for n in dir(RtuBus) if not n.startswith("_")} | {n for n in dir(WaveshareDevice) if not n.startswith("_")}
-    assert not {n for n in names if "register" in n and "write" in n}
     assert "write_coils" not in names and "write_registers" not in names
-    assert {n for n in names if "write" in n} == {"write_single_coil", "write_coil"}
+    assert {n for n in names if "write" in n} == {"write_single_coil", "write_coil", "write_single_register"}
+    # the one register write (FC06) reaches only a drive control register the bus was built with (ADR-0015)
+    cfg, bus, *_ = fake_bus
+    plain, drive = RtuBus(cfg.buses[0]), RtuBus(cfg.buses[0], register_writes=frozenset({(9, 100)}))
+    for rb, unit, reg in ((plain, 9, 100), (drive, 9, 101), (drive, 1, 100), (drive, 2, 0x1000)):
+        with pytest.raises(RtuRefused, match="not a configured drive control register"):
+            rb.write_single_register(unit, reg, 1)
+    assert bus.frames_in == []
+    plain.close(), drive.close()
 
 
 def test_pymodbus_version_pinned():
@@ -404,6 +411,27 @@ def test_at_mb_06_expiry_sends_no_off_sequence(fake_bus):
     clock.t += 10_000
     assert gate.active() is None
     assert len(bus.write_frames()) == n and relay.coils[0] is True   # stays as it was; nothing sent
+
+
+def test_r1_relay_lease_expiring_during_preflight_sends_no_frame(fake_bus):
+    """Owner review R1: the lease is checked again inside the bus lock, after the mode preflight read."""
+    cfg, bus, relay, ai = fake_bus
+    be = ModbusBackend(cfg, context=ctx)
+    clock = Clock()
+    gate, *_ = make_gate(cfg, be, clock)
+    lease = arm(gate, duration_s=60)
+    read = be.devices["relay_A"].read_relay_modes
+
+    def expire_during_read():
+        result = read()
+        clock.t = lease.expires_monotonic + 0.01
+        return result
+    be.devices["relay_A"].read_relay_modes = expire_during_read
+    cs, _ = bench_cs(cfg, be, gate)
+    rec = cs.submit(cs.build(actor="bench1", target="relay_A.DO1", desired=True, origin=CommandOrigin.BENCH,
+                             reason="t", lease_id=lease.lease_id))
+    assert rec.outcome == Outcome.REJECTED and "no bench lease" in rec.detail
+    assert bus.write_frames() == [] and relay.coils[0] is False and gate.active() is None
 
 
 @pytest.mark.parametrize("fault,outcome", [

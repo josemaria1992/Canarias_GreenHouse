@@ -6,6 +6,7 @@
               cfgVersion: null, tz: "Europe/Stockholm", trendSel: ["analog_A.AI1", "analog_A.AI2", "relay_A.DI1"],
               trendMin: 10, settingsLoaded: false };
   const STALE_AFTER_MS = 4000;
+  const OK_OUTCOMES = new Set(["READBACK_CONFIRMED", "ECHO_CONFIRMED"]);   // an echo is not actuator proof either
 
   // ---------------------------------------------------------------- DOM helpers
   function h(tag, attrs, ...kids) {
@@ -78,7 +79,7 @@
   function rid() { return "ui_" + crypto.getRandomValues(new Uint32Array(4)).join("").slice(0, 24); }
   function cmd(target, desired) {
     return act("POST", "/api/commands", { backend: "SIMULATED", config_version: S.cfgVersion, target, desired,
-      request_id: rid(), reason: "operator via I/O bench" }).then(r => r && toast(`${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, r.outcome !== "READBACK_CONFIRMED"));
+      request_id: rid(), reason: "operator via I/O bench" }).then(r => r && toast(`${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, !OK_OUTCOMES.has(r.outcome)));
   }
   function cbtn(label, onclick, cls) { return h("button", { class: "cmd small " + (cls || ""), onclick, disabled: !can("sim_command") }, label); }
 
@@ -364,14 +365,43 @@
           h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad"),
             " ", storageText(st.storage)),
           h("dt", null, "Live control"), h("dd", null, st.live_control))),
-        h("div", { class: "card" }, h("h2", null, "Relay channel modes"),
+        h("div", { class: "card" }, h("h2", null, "Digital output modes (relay and transistor modules)"),
           h("table", null, h("tbody", null, Object.entries(st.relay_modes).map(([k, m]) => h("tr", null, h("td", null, k),
             h("td", { class: "mono" }, m ? m.join(" ") : "not read"),
             h("td", null, m && m.every(x => x === "NORMAL") ? pill("all NORMAL", "ok") : pill("bench writes blocked", "warn"))))))),
         h("div", { class: "card" }, h("h2", null, `Active alarms (${al.open.length})`),
           al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
             h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"))))) : h("p", { class: "muted" }, "None"))),
-      h("div", { class: "card" }, h("h2", null, "Devices (each polled and reported independently)"), devTable(st)));
+      h("div", { class: "card" }, h("h2", null, "Devices (each polled and reported independently)"), devTable(st)),
+      driveCard(st.drives));
+  }
+
+  // The shared drive's Modbus interface (ADR-0015): read every poll; written only under a bench lease.
+  function driveCard(drives) {
+    const rows = Object.entries(drives || {});
+    if (!rows.length) return null;
+    return h("div", { class: "card" }, h("h2", null, "Drive interface"),
+      h("table", null, h("thead", null, h("tr", null, ["Drive", "Interface", "Register map", "Status word", "Running", "Fault", "Ready", "Frequency", "Link"].map(x => h("th", null, x)))),
+        h("tbody", null, rows.map(([t, d]) => {
+          const s = d.status || {};
+          return h("tr", null, h("td", { class: "mono" }, t),
+            h("td", null, d.kind === "MODBUS_RTU" ? `Modbus RTU ${d.bus_id} @ ${d.address}` : pill(d.kind, "warn")),
+            h("td", null, d.provenance ? pill(d.provenance, d.provenance === "VERIFIED" ? "ok" : "warn") : "none"),
+            h("td", { class: "mono" }, s.status_word || "—"),
+            h("td", null, s.running == null ? "—" : s.running ? "yes" : "no"),
+            h("td", null, s.fault == null ? "—" : s.fault ? pill("FAULT", "bad") : "no"),
+            h("td", null, s.ready == null ? "—" : s.ready ? "yes" : "no"),
+            h("td", { class: "mono" }, s.frequency == null ? "—" : num(s.frequency) + " Hz"),
+            h("td", null, d.kind !== "MODBUS_RTU" ? "not configured" : d.online ? pill("online", "ok") : pill("FAILED: " + (d.last_error || "not read"), "bad")));
+        }))),
+      h("p", { class: "muted" }, "The status word is read on every poll and never written. A PROPOSED map is checked on the bench (CP-06) before it is VERIFIED; the hardwired running and fault inputs stay the proof the processes use."));
+  }
+
+  // Relay (D) outputs are relay contacts; IO 8CH outputs are open-drain transistor sinks (DC, current-limited)
+  function outputPill(g) {
+    if (g.output_type === "OPEN_DRAIN_SINK")
+      return pill(`TRANSISTOR SINK — not relay contacts${g.output_current_limit_ma ? `, max ${g.output_current_limit_ma} mA` : ""}`, "warn");
+    return g.output_type === "RELAY_CONTACT" ? pill("relay contacts") : null;
   }
 
   async function hwIO() {
@@ -379,10 +409,10 @@
     const allowed = new Set(lease ? lease.allowlist : []);
     const bench = (target, desired) => act("POST", "/api/bench/command", { backend: "REAL_BENCH", config_version: S.cfgVersion,
       lease_id: lease.lease_id, target, desired, request_id: rid(), reason: "bench test" })
-      .then(r => r && toast(`REAL ${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, r.outcome !== "READBACK_CONFIRMED"));
+      .then(r => r && toast(`REAL ${target} → ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, !OK_OUTCOMES.has(r.outcome)));
     const groups = d.devices.map(g => h("div", { class: "card" },
       h("div", { class: "row" }, h("h3", null, `${g.device_uid} — ${g.model} (SKU ${g.sku}) · ${g.bus_id} @ ${g.address}`),
-        g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad")),
+        g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad"), outputPill(g)),
       h("table", null, h("thead", null, h("tr", null, ["Point", "Label", "Zero-based addr", "Mode", "Raw", "Scaled", "Quality/origin", "Detail", "Age", "Bench"].map(x => h("th", null, x)))),
         h("tbody", null, g.points.map(p => {
           const s = p.sample || {};
@@ -396,12 +426,26 @@
             h("td", null, qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
             h("td", { class: "muted" }, s.reason || ""), h("td", null, age(s.acquired_utc)), h("td", null, ctl));
         })))));
+    const drives = (b.drive_targets || []).map(t => {
+      const d = (b.drives || {})[t] || {}, s = d.status || {};
+      const ctl = allowed.has(t) && b.can_arm ? h("span", null,
+        h("button", { class: "cmd small danger", onclick: () => bench(t, true) }, "Run"), " ",
+        h("button", { class: "cmd small ghost", onclick: () => bench(t, false) }, "Stop")) : null;
+      return h("tr", null, h("td", { class: "mono" }, t), h("td", null, `${d.bus_id} @ ${d.address}`),
+        h("td", null, pill(d.provenance || "?", d.provenance === "VERIFIED" ? "ok" : "warn")),
+        h("td", { class: "mono" }, s.status_word || "—"),
+        h("td", null, s.running == null ? "—" : s.running ? "running" : "stopped", s.fault ? [" ", pill("FAULT", "bad")] : null),
+        h("td", null, d.online ? pill("online", "ok") : pill("FAILED: " + (d.last_error || "not read"), "bad")), h("td", null, ctl));
+    });
+    if (drives.length) groups.push(h("div", { class: "card" }, h("h3", null, "Drives (Modbus control register; status word read every poll)"),
+      h("table", null, h("thead", null, h("tr", null, ["Target", "Bus", "Register map", "Status word", "State", "Link", "Bench"].map(x => h("th", null, x)))), h("tbody", null, drives)),
+      h("p", { class: "muted" }, "Run writes the configured run sequence, Stop the stop value, each frame once. The echo proves the drive received it, not that the motor turns. Test with the motor disconnected.")));
     let panel;
     if (lease) {
       panel = h("div", { class: "card armed" }, h("h2", null, "BENCH WRITES ARMED"),
         h("p", null, `Lease for ${lease.username}, ${Math.round(lease.remaining_s)} s left. Allowlist: ${lease.allowlist.join(", ")}.`),
         h("p", null, `Setup: ${lease.setup_description}`),
-        h("p", { class: "muted" }, "Coil readback is not actuator proof. Ending the lease sends nothing; outputs stay as they are."),
+        h("p", { class: "muted" }, "Coil readback and drive echo are not actuator proof. Ending the lease sends nothing; outputs and drives stay as they are."),
         h("button", { class: "cmd danger", onclick: () => act("POST", "/api/bench/lease/revoke", {}, "lease ended") }, "End lease now"));
     } else if (b.can_arm && S.armPanel) {
       panel = S.armPanel;                  // keep typed values and ticked boxes across polls
@@ -409,9 +453,9 @@
       const conf = h("input", { placeholder: b.confirmation_phrase, autocomplete: "off", style: "width:320px" });
       const setup = h("input", { placeholder: "describe the isolated bench setup", style: "width:420px" });
       const dur = h("input", { type: "number", min: b.duration_range_s[0], max: b.duration_range_s[1], value: 600, style: "width:90px" });
-      const boxes = b.relay_outputs.map(id => ({ id, el: h("input", { type: "checkbox" }) }));
+      const boxes = b.relay_outputs.concat(b.drive_targets || []).map(id => ({ id, el: h("input", { type: "checkbox" }) }));
       panel = h("div", { class: "card" }, h("h2", null, "Arm a bench lease (commissioning)"),
-        h("p", null, "Only on an isolated bench with every production load disconnected. Writes go to real relays."),
+        h("p", null, "Only on an isolated bench with every production load disconnected. Writes go to real relays and drives."),
         h("div", { class: "row" }, ...boxes.map(x => h("label", { class: "mono" }, x.el, " ", x.id))),
         h("div", { class: "row" }, h("label", null, "Type: ", h("strong", null, b.confirmation_phrase), " ", conf)),
         h("div", { class: "row" }, setup, h("label", null, "Duration (s) ", dur)),
@@ -467,11 +511,12 @@
             .flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: "mono" }, k === "residual" ? v.toExponential(3) : v.toFixed(1))]))),
         h("div", { class: "card" }, h("h3", null, "Actuator faults (change plant dynamics)"),
           fsel("drive", ["MAIN"], ["TRIP", "NO_RUN", "STUCK_ON"]),
+          (sn.drive_adapters || []).some(a => a.kind === "MODBUS_RTU") ? fsel("drive_comm", sn.drive_adapters.filter(a => a.kind === "MODBUS_RTU").map(a => a.adapter_id), ["NO_RESPONSE", "EXCEPTION", "IGNORES_WRITES"]) : null,
           fsel("contactor", Object.keys(pl.contactors), ["WELDED", "NO_CLOSE"]),
           fsel("pump", Object.keys(pl.main_pumps).concat(Object.keys(pl.pumps)), ["NO_RUN", "NO_FLOW", "STUCK_ON"]),
           fsel("valve", Object.keys(pl.valves), ["STUCK_CLOSED", "STUCK_OPEN"]),
           fsel("mains", ["MAINS"], ["NO_SUPPLY"]), fsel("safety", ["CHAIN"], ["CHAIN_OPEN"]),
-          h("p", { class: "muted" }, "Main pumps accept NO_RUN and NO_FLOW only. Sensor overrides are on the I/O test bench."))));
+          h("p", { class: "muted" }, "Main pumps accept NO_RUN and NO_FLOW only. drive_comm faults act on the simulated drive's Modbus interface. Sensor overrides are on the I/O test bench."))));
   }
   async function instControl() {
     const pr = await api("GET", "/api/processes");
@@ -667,6 +712,7 @@
       return h("div", { class: "card" },
         h("div", { class: "row" }, h("h3", null, `${g.device_uid} — ${g.model} (SKU ${g.sku}) · ${g.bus_id} @ ${g.address}`),
           g.online ? pill("online", "ok") : pill("FAILED: " + (g.last_error || ""), "bad"),
+          outputPill(g),
           cbtn(g.online ? "Simulate timeout" : "Restore", () => act("POST", "/api/io/device-fault", { device_uid: g.device_uid, fault: g.online ? "TIMEOUT" : null }), "ghost")),
         h("table", null, h("thead", null, h("tr", null, ["Point", "Label", "Zero-based addr", "Mode", "Raw", "Scaled", "Quality/origin", "Detail", "Age", "VIRTUAL control"].map(x => h("th", null, x)))),
           h("tbody", null, rows)));
@@ -813,7 +859,7 @@
       h("div", { class: "card" }, h("h2", null, "Commands (incl. rejected / uncertain)"),
         h("table", null, h("thead", null, h("tr", null, ["Time", "Actor", "Target", "Desired", "Origin", "Outcome", "Detail"].map(x => h("th", null, x)))),
           h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc), susPill(c)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
-            h("td", null, c.origin), h("td", null, pill(c.outcome, c.outcome === "READBACK_CONFIRMED" ? "ok" : c.outcome === "REJECTED" ? "warn" : "bad")), h("td", { class: "muted" }, c.detail || "")))))),
+            h("td", null, c.origin), h("td", null, pill(c.outcome, OK_OUTCOMES.has(c.outcome) ? "ok" : c.outcome === "REJECTED" ? "warn" : "bad")), h("td", { class: "muted" }, c.detail || "")))))),
       h("div", { class: "card" }, h("h2", null, "Events"),
         h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc), susPill(e)), h("td", null, e.kind), h("td", null, e.actor || ""),
           h("td", { class: "mono" }, JSON.stringify(e.payload).slice(0, 200))))))),

@@ -13,7 +13,7 @@ from . import __version__
 from .domain.model import new_id
 
 
-BUILTIN_CONFIGS = ("installation-48", "demo-48", "demo-24", "hardware-read-only.example")
+BUILTIN_CONFIGS = ("installation-80", "installation-48", "demo-48", "demo-24", "hardware-read-only.example", "bench-malmo.example")
 
 
 def resolve_config_path(path: str) -> Path:
@@ -50,7 +50,7 @@ def cmd_config_validate(args) -> int:
         return 2
     print(json.dumps({"valid": True, "config_id": cfg.config_id, "config_version": cfg.config_version,
                       "profile": cfg.profile.value, "devices": len(cfg.devices), "points": len(cfg.all_points()),
-                      "expected_points_formula": "8 x AI_modules + 16 x RelayD_modules",
+                      "expected_points_formula": "sum of catalog AI + DI + DO channels for every device",
                       "expected_points": cfg.expected_point_count()}, indent=2))
     return 0
 
@@ -219,7 +219,7 @@ def _verify_installation(cfg, args, record) -> None:
             rt.inject("verify", p, True if pid.kind.value == "DI" else 12000)
             if rt.samples[p].quality.value != "GOOD":
                 errs.append(f"{p}: {rt.samples[p].quality.value}")
-    record("io:all-48-points-round-trip", errs, f"{len(cfg.all_points())} points on the I/O test source")
+    record(f"io:all-{len(cfg.all_points())}-points-round-trip", errs, f"{len(cfg.all_points())} points on the I/O test source")
     bad = [m for m in sys.modules if m.split(".")[0] in ("serial", "pymodbus")]
     record("isolation:no-serial-imports", [f"imported {bad}"] if bad else [])
     n = len(cfg.all_points())

@@ -463,6 +463,11 @@ class InstallationPlant:
         for k in SPECIES:
             self.ledger.spilled_species[k] += sp[k]
 
+    def trip_drive(self, reason: str) -> None:
+        """A trip raised by the drive itself (the simulated drive's comm-loss timer); reset like any other
+        drive fault (`set_fault("drive", ..., None)`)."""
+        self._trip(reason)
+
     def _trip(self, reason: str) -> None:
         if self.drive.tripped is None:
             self.drive.tripped = reason

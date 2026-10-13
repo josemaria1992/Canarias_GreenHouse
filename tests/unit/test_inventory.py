@@ -124,3 +124,20 @@ def test_zero_denominator_scaling_rejected(cfg_data):
     d["scaling_profiles"][0]["raw_high"] = d["scaling_profiles"][0]["raw_low"]
     with pytest.raises(ValidationError, match="zero denominator"):
         InstallationConfig.model_validate(d)
+
+
+def test_80_point_profiles_carry_the_owner_storage_budget():
+    """Owner 2026-10-13: 17 GiB planning/warning budget for the 80-point installation and its bench and
+    read-only examples, packaged copies identical; legacy configurations keep the 10 GiB default."""
+    budget = 17 * 2**30
+    assert budget == 18253611008
+    for name in ("installation-80.yaml", "bench-malmo.example.yaml", "hardware-read-only.example.yaml"):
+        src, pkg = ROOT / "configs" / name, ROOT / "src" / "aquacrop" / "configs" / name
+        assert src.read_bytes() == pkg.read_bytes(), name
+        c = load_config(src)
+        assert len(c.all_points()) == 80 == c.expected_point_count(), name
+        h = c.historian
+        assert h.db_budget_bytes == budget, name
+        assert (h.recording_interval_s, h.retention_days) == (60, 365), name
+    for name in ("installation-48.yaml", "demo-48.yaml", "demo-24.yaml"):
+        assert load_config(ROOT / "configs" / name).historian.db_budget_bytes == 10 * 2**30, name

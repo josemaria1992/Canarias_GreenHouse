@@ -65,13 +65,16 @@ def config(inventory: int) -> InstallationConfig:
     devices = [dev("relay_A", 1, "WAVESHARE_MODBUS_RTU_RELAY_D", "26517"),
                dev("analog_A", 2, "WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH", "25821", hardware_variant="STANDARD",
                    ai=ai)]
-    if inventory == 48:
+    if inventory in (48, 80):
         devices += [dev("relay_B", 3, "WAVESHARE_MODBUS_RTU_RELAY_D", "26517"),
                     dev("analog_B", 4, "WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH", "25821",
                         hardware_variant="STANDARD", ai=ai)]
+    if inventory == 80:
+        devices += [dev("digital_A", 5, "WAVESHARE_MODBUS_RTU_IO_8CH", "26244"),
+                    dev("digital_B", 6, "WAVESHARE_MODBUS_RTU_IO_8CH", "26244")]
     return InstallationConfig.model_validate({
         "schema_version": 1, "config_id": "canarias-greenhouse", "config_version": "2026-10-12.1",
-        "profile": "HARDWARE_READ_ONLY", "label": "measurement only",
+        "profile": "HARDWARE_READ_ONLY", "label": "measurement only", "site": {"timezone": "Atlantic/Canary"},
         "buses": [{"bus_id": "rs485_a", "kind": "rtu", "port": "/dev/null", "port_evidence": "measurement",
                    "poll_interval_s": 3.0}],
         "devices": devices,
@@ -295,7 +298,7 @@ class Workload:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=float, default=400)
-    ap.add_argument("--inventory", type=int, choices=(24, 48), default=48)
+    ap.add_argument("--inventory", type=int, choices=(24, 48, 80), default=48)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--edges-per-digital-point-per-day", type=float, default=20.0)
     ap.add_argument("--commands-per-day", type=float, default=200.0)

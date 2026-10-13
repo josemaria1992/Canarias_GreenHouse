@@ -26,9 +26,12 @@ Ground rules for every procedure:
 | CP-03 | DI stimulus | no | `templates/CP-03_di_stimulus.md` |
 | CP-04 | DO on dummy loads under a bench lease, with teardown | **yes** | `templates/CP-04_do_dummy_load.md` |
 | CP-05 | Fault and zero-write checks (disconnect, restart, power loss) | no | `templates/CP-05_faults_zero_writes.md` |
+| CP-06 | Drive Modbus interface: status bits, run/stop, comm loss (motor disconnected) | reads no; run/stop **yes** | `templates/CP-06_drive_modbus.md` |
 
 Order: CP-00 → CP-01 (each module) → CP-05 read-only parts → CP-02 / CP-03 → CP-04 → CP-05 lease
-parts. Stop at the first unexpected result and record it.
+parts → CP-06. Stop at the first unexpected result and record it. CP-01 to CP-06 run on the Malmö
+bench (`configs/bench-malmo.example.yaml`, Europe/Stockholm) before the hardware goes to the
+installation (Atlantic/Canary).
 
 ## CP-00 Platform record
 Flash and configure per `docs/installation/cm4.md`. Fill the UART table by reading one known module
@@ -73,3 +76,17 @@ Read-only profile, passive monitor on the bus. Record frames while: starting the
 unplugging one module's RS485 pair (only its points go UNAVAILABLE, `DEVICE_COMM` alarm for it
 alone, backoff visible), reconnecting it, restarting the service, stopping it, and cutting CM4 power.
 Expected: zero FC05/FC06/FC0F/FC10 frames throughout; relays keep their state across all of it.
+
+## CP-06 Drive Modbus interface (bench, motor disconnected)
+Only with the drive's manual at hand and the drive parameters of `docs/model/vfd_modbus.md` §4 set
+by a qualified person: command source fieldbus, speed reference not fieldbus, comm-loss timeout and
+action, no auto-restart. Enter the map from the manual in the bench configuration as `PROPOSED`, with
+every field referenced to a page. Then: read the status word with `diagnostics read --device
+drive:MAIN` and compare each bit with the keypad (stopped, ready, and a harmless fault provoked and
+reset at the keypad); arm a lease with only `drive:MAIN`; run and stop twice, comparing the
+`ECHO_CONFIRMED` outcome and status word with the keypad and output frequency; confirm a run is
+refused while a fault is active; unplug the drive's RS485 pair while it runs and time the stop;
+power-cycle the drive and confirm it comes up stopped; and check that status reads alone keep a
+running drive's comm-loss timer from expiring. Resolve any `OUTCOME_UNKNOWN` by reading, never by
+resending. Only a signed CP-06 lets the map become `VERIFIED` and move to the installation's
+configuration.

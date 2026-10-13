@@ -1,5 +1,11 @@
 # Release readiness: AquaCrop 0.3.0 (pre-hardware release)
 
+**Inventory supplement, 2026-10-13:** two IO 8CH modules (SKU 26244) were added: 80 points over six
+modules, 16 AI + 32 DI + 32 DO, of which 16 DO are open-drain transistor sinks, not relay contacts
+(ADR-0016, `model/digital_io_8ch.md`). The added channels are configured and testable but carry no
+field assignment (item 2). Storage is re-measured for 80 points (item 24). The owner review findings
+R1-R4 of the same day are fixed and await re-review (`ACCEPTANCE.md`).
+
 **This release is software and simulation only.** Nothing in it has run on the CM4, the I/O
 modules, the drive, a probe, the SD card or the owner's OneDrive account. Physical AUTO does not
 exist and no setting, profile or flag enables it. A real installation starts and stays
@@ -34,7 +40,8 @@ NOT RUN (could run, has not) · NOT CONFIGURED (needs the owner's account or set
 | BK-04 the cloud | NOT CONFIGURED | the colleague shares `AQUACROP_DATOS_CANARIAS` by name with edit rights; rclone authorized on the controller with the owner's personal Microsoft account (`offsite-backups.md` 3.1); crypt password and salt generated, printed and sealed; `offsite check` PASS | `offsite-backups.md` section 5 |
 | BK-06 monthly cloud drill | NOT RUN | BK-02 and BK-04 done; first upload verified (receipt in the folder); `aquacrop-offsite-drill.service` PASS | Settings, Off-device backups |
 | BK-07 real key and account recovery | NOT RUN | the escrow test of `offsite-backups.md` section 4 with the sealed envelope, on a computer that is not the controller; a new Microsoft sign-in; one copy downloaded and `backup verify --full` PASS. Rehearsed only with test keys and a local folder | `offsite-backups.md` 8.1 |
-| CP-00..CP-05 | BLOCKED | the hardware on an isolated bench, a qualified operator, and the owner's written authorization of that setup | `commissioning/templates/` |
+| CP-00..CP-05 | BLOCKED | the hardware on the isolated Malmö bench, a qualified operator, and the owner's written authorization of that setup | `commissioning/templates/` |
+| CP-06 drive Modbus interface | BLOCKED | the drive, its make, model and Modbus manual; the drive parameters of `model/vfd_modbus.md` §4 set by a qualified person; the map entered as `PROPOSED`; status bits, run/stop under a lease, comm loss and power cycle with the motor disconnected | `templates/CP-06_drive_modbus.md` |
 
 ## 3. Physical configuration the owner still has to supply
 
@@ -43,16 +50,16 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 
 | # | Item | Today | Needed to close it |
 |---|---|---|---|
-| 1 | 17th output: drive run (the modules give 16 DO) | drive adapter `NOT_CONFIGURED` on hardware | choose: VFD over Modbus (register map from the drive's manual), a drive terminal driven by an extra relay, or a third relay module (`model/signal_budget.md`, options 1 to 3) |
-| 2 | Point allocation of the 48 channels | proposal (ADR-0013) | owner confirms or changes the table; wiring drawings that match it |
+| 1 | 17th output: drive run (the modules give 16 DO) | decided 2026-10-13: over the drive's Modbus interface (ADR-0015); software and simulation done; adapter `NOT_CONFIGURED` on hardware | drive make, model and Modbus manual; the register map entered as `PROPOSED` on the bench and `VERIFIED` by CP-06 (`model/vfd_modbus.md`) |
+| 2 | Point allocation of the 80 channels | relay/analog modules: all 16 DI and 16 DO in use (owner, 2026-10-13), per-channel table still the ADR-0013 proposal; IO 8CH modules: all 16 DI and 16 transistor DO unassigned by owner decision (2026-10-13), DO1 included; the table in `model/signal_budget.md` (last section) is a proposal for later, not fitted devices | owner confirms or changes the relay/analog table; any later IO 8CH binding needs a new owner decision once devices and wiring are verified; wiring drawings that match them |
 | 3 | Cause-and-effect table | proposal (`model/cause_and_effect.md`) | owner confirms each row, especially fault propagation through the shared drive |
 | 4 | Safe-state matrix: what each output does on fault, power loss and restart | relays keep state; software sends no write at start or reconnect | owner and electrician decide per output; hardwired where it matters |
 | 5 | Independent protections: E-stop, motor protection, dry-run, overfill, K1/K2 mutual exclusion | outside the software | electrician's design and test record; the software only reads the safety chain |
 | 6 | Module addresses, serial ports, baud and parity | example values in `hardware-read-only.example.yaml` | CP-01 with each module alone on the bus; CP-00 port table |
 | 7 | AI channel data types, jumpers and hardware variant | `UNKNOWN`, values unscaled | CP-01 (photos) and CP-02 per channel |
 | 8 | Probes: main, sump and stock levels, pH, EC, flows, pressures | proposed tags; DEMO scaling in simulation; a real profile refuses unverified scaling and shows raw values | sensor model, span and calibration certificate per probe; scaling profile set to `VERIFIED` with that evidence |
-| 9 | Drive stop and run proof | twin feedback only | which drive output proves stopped and running, wired to which DI |
-| 10 | Valve feedback (sector closed limits, stock outlet and fill valves) | indirect (flow or level rise), shown as weaker evidence | accept the indirect proof or add inputs (third relay module) |
+| 9 | Drive stop and run proof | hardwired DI in the proposal (relay_A DI1/DI2); the Modbus status word is a second opinion | which drive outputs prove running and fault, wired to which DI; status bits checked in CP-06 |
+| 10 | Valve feedback (sector closed limits, stock outlet and fill valves) | indirect (flow or level rise), shown as weaker evidence; the IO 8CH inputs stay unassigned (owner, 2026-10-13), so no limit switch is assumed fitted | measured during commissioning that the indirect proof detects a stuck valve; limit switches only by a later owner decision once fitted and wired |
 | 11 | Hydraulics: pump flows and curves, channel hold-up (about 16,575 L from the stated sizes), main and sump usable headroom, transit times | DEMO parameters with provenance | measured flows and levels during commissioning |
 | 12 | Refill recipe: trigger, endpoint, fixed A/B volumes or EC target with A:B ratio, tolerances, transfer limits | user recipe; DEMO preset in simulation only; the owner's 5,000 + 1,000 + 1,000 + 12,500 + 500 L example is not seeded | production values entered and validated as a recipe |
 | 13 | Acid: concentration, dose step, settling window, batch maximum; pH target (owner preference about 6) | synthetic fixture `synthetic-carbonate-ec-v1` | acid stock data sheet and a measured response on the real tank |
@@ -62,15 +69,16 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 | 17 | Sector durations | 300 s each (owner preference), editable | confirm or change in the production recipe |
 | 18 | Alarm severities for physical equipment | DEMO rules only | owner list per alarm |
 | 19 | Accounts: who is viewer, operator and administrator (1 to 4 people); remote rights | roles enforced; no accounts shipped | names and roles; bench commissioning flag only for the qualified operator |
-| 20 | Site time zone | `Europe/Stockholm` in every configuration | confirm, or change to `Atlantic/Canary` if the controller is in the Canary Islands |
+| 20 | Site time zone | done (owner, 2026-10-13): `Atlantic/Canary` for the installation, twin and demos; `Europe/Stockholm` for the Malmö bench; a real profile must name its zone | — |
 | 21 | Network time and OS updates | not set | NTP source on the LAN or the RTC only; `apt` update schedule (never during a bench session) |
 | 22 | Remote access site values | examples only in `remote-access.md` | VPN server location, LAN and VPN subnets, controller address and name, one VPN profile per person |
 | 23 | Off-device backup activation | disabled; card, folder, key escrow and copy counts chosen 2026-10-12 | `offsite-backups.md` sections 2, 3 and 5 on the controller |
+| 24 | Storage for 80 points: database budget, WAL, backups and restore scratch | 60 s complete snapshots, 365 days, SQLite unchanged. Measured on the desktop (400 days, every process in AUTO): 15.0 GiB database, 0.82 GiB backup, restore drill needs 18.05 GiB scratch (19.9 GiB on the card). Owner decision (2026-10-13): 17 GiB planning/warning budget (`db_budget_bytes: 18253611008` in `installation-80` and the bench and read-only examples), leaving about 7.8 GiB of the 32 GB eMMC (about 29.8 GiB) for OS, application, logs and filesystem overhead after the 1 GiB WAL allowance and 4 GiB free-space warning; backups (about 6.6 GiB) and drill scratch (about 19.9 GiB) on the 64 GB card; about 34.4 GiB in OneDrive for 42 copies (`operations/measurements/2026-10-13-measurements.md`) | CP-00 measures OS footprint, usable eMMC and card capacity and real growth on the CM4; the real SD and OneDrive workflow, including a cloud-sourced restore drill, is activated and tested at commissioning; retention, cadence and format are not changed to fit |
 
 ## 4. Not part of this release
 
 Live process control with real equipment needs its own reviewed commissioning stage, the owner's
-written authorization and physical evidence for items 1 to 16 above. Passing CP-00 to CP-05 does not
+written authorization and physical evidence for items 1 to 16 above. Passing CP-00 to CP-06 does not
 release it. Shadow mode (predictions beside real readings) stays blocked until a physical mapping is
 approved (ADR-0002).
 
@@ -80,6 +88,7 @@ approved (ADR-0002).
 |---|---|---|
 | The greenhouse | the deterministic installation twin with synthetic chemistry | `twin/`, PH and PC gates |
 | RS485 modules | the real pymodbus client over an in-memory serial port, and a protocol fake | `tests/fakes`, `tests/hardware` |
+| The drive's Modbus interface | a simulated drive answering a DEMO map in the twin; a register-level drive stand-in on the in-memory serial port | `twin/vfd.py`, `tests/hardware/test_vfd_modbus.py` |
 | The SD card and USB reader | a replaceable kernel volume probe | `test_offsite.py` |
 | OneDrive | a local folder behind the real rclone crypt remote (rclone 1.60) | `test_offsite.py` |
 | The sealed key envelope | test-only password and salt | `test_bk07_replacement_controller_recovers_with_only_the_escrowed_keys` |
