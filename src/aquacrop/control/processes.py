@@ -660,6 +660,7 @@ class Refill(_PathProcess):
 
     def _ec_tick(self, ctx: Ctx) -> None:
         b, ec_r = self.batch, self.recipe.body.refill.ec
+        self._record_step_delivery(ctx)
         if b["nutrients"].startswith(("STOPPED", "EC_", "MAX", "ABOVE")) or b["nutrients"] == "DONE":
             return
         steps = b["ec_steps"]
@@ -695,15 +696,19 @@ class Refill(_PathProcess):
             else:
                 self.next_step = f"EC {ec:.2f} mS/cm in band; re-evaluated while water dilutes"
             return
-        used_a = sum(x["a_L"] for x in steps)
-        used_b = sum(x["b_L"] for x in steps)
+        # The maxima apply to what the meters measured, stopping delivery included, not to what was asked for.
+        # Each next step is shortened by the largest coast (delivered beyond the commanded amount) measured so
+        # far in this batch for that stock, so the measured total stays within the maximum.
+        used_a, used_b = self._delivered(steps, "a"), self._delivered(steps, "b")
+        margin_a, margin_b = self._coast(steps, "a"), self._coast(steps, "b")
         r = ec_r.ratio_a_to_b
-        a = min(ec_r.step_total_L * r / (1 + r), ec_r.max_a_L - used_a)
-        bb = min(ec_r.step_total_L / (1 + r), ec_r.max_b_L - used_b)
-        scale = min(a / (ec_r.step_total_L * r / (1 + r)), bb / (ec_r.step_total_L / (1 + r)))  # keep the ratio
-        a, bb = ec_r.step_total_L * r / (1 + r) * scale, ec_r.step_total_L / (1 + r) * scale
+        nom_a, nom_b = ec_r.step_total_L * r / (1 + r), ec_r.step_total_L / (1 + r)
+        a = min(nom_a, ec_r.max_a_L - used_a - margin_a)
+        bb = min(nom_b, ec_r.max_b_L - used_b - margin_b)
+        scale = max(0.0, min(a / nom_a, bb / nom_b))      # keep the ratio
+        a, bb = nom_a * scale, nom_b * scale
         if scale <= 1e-6:
-            b["nutrients"] = f"MAX_REACHED ({used_a:.1f} L A, {used_b:.1f} L B; EC {ec:.2f} mS/cm)"
+            b["nutrients"] = f"MAX_REACHED ({used_a:.2f} L A, {used_b:.2f} L B measured; EC {ec:.2f} mS/cm)"
             self.sup.alarms.raise_or_update("REFILL_EC_LIMIT_REACHED", "process.REFILL", severity="WARNING",
                                             sim_s=ctx.now, value=ec, message=f"Refill: batch nutrient maxima reached "
                                             f"with EC {ec:.2f} mS/cm below target")
@@ -728,6 +733,41 @@ class Refill(_PathProcess):
             return
         b["nutrients"] = "DOSING"
 
+    @staticmethod
+    def _delivered(steps: list[dict], k: str) -> float:
+        return sum(x.get(f"{k}_delivered_L", x[f"{k}_L"]) for x in steps)
+
+    @staticmethod
+    def _coast(steps: list[dict], k: str) -> float:
+        return max([0.0] + [x[f"{k}_delivered_L"] - x[f"{k}_L"] for x in steps if f"{k}_delivered_L" in x])
+
+    def _record_step_delivery(self, ctx: Ctx) -> None:
+        """Once both paths of the last EC step have finished, keep what the meters measured beside what was
+        commanded, and report a measured total above a batch maximum as an overrun (tolerance 0 L)."""
+        b = self.batch
+        steps = b["ec_steps"]
+        if not steps or "a_delivered_L" in steps[-1]:
+            return
+        pa, pb = self.paths.get("A"), self.paths.get("B")
+        if any(p is not None and not p.finished for p in (pa, pb)):
+            return
+        s, ec_r = steps[-1], self.recipe.body.refill.ec
+        s["a_delivered_L"], s["b_delivered_L"] = (pa.delivered_L if pa else 0.0), (pb.delivered_L if pb else 0.0)
+        s["a_result"], s["b_result"] = (pa.result if pa else None), (pb.result if pb else None)
+        used_a, used_b = self._delivered(steps, "a"), self._delivered(steps, "b")
+        b["delivered_a_L"], b["delivered_b_L"] = used_a, used_b
+        self.sup.emit("REFILL_EC_STEP_DELIVERED", {"batch": b["batch_id"], "recipe": self.recipe_ref} | s |
+                      {"total_a_L": used_a, "total_b_L": used_b}, "controller")
+        over = [f"{k} {u:.2f} L > max {mx:g} L" for k, u, mx in (("A", used_a, ec_r.max_a_L), ("B", used_b, ec_r.max_b_L))
+                if u > mx + 1e-9]
+        if over:
+            b["overrun"] = over
+            if not b["nutrients"].startswith("STOPPED"):
+                b["nutrients"] = f"MAX_EXCEEDED ({'; '.join(over)}, measured)"
+            self.sup.alarms.raise_or_update("REFILL_EC_LIMIT_EXCEEDED", "process.REFILL", severity="WARNING",
+                                            sim_s=ctx.now, message=f"Refill {b['batch_id']}: measured nutrient "
+                                            f"delivery above the batch maximum: {'; '.join(over)}")
+
     def _end_batch(self, ctx: Ctx) -> None:
         b = self.batch
         b["end_s"] = ctx.now
@@ -738,10 +778,12 @@ class Refill(_PathProcess):
         nut = b["nutrients"]
         if failed:
             b["result"] = "FAILED"
+        elif b.get("overrun"):
+            b["result"] = "OUT_OF_SPEC"
         elif nut.startswith("STOPPED") or any((p.result or "").startswith(("STOCK_", "NOT_STARTED"))
                                               for p in self.paths.values()):
             b["result"] = "INCOMPLETE"
-        elif nut.startswith(("EC_OUT_OF_BAND", "EC_UNVERIFIED", "ABOVE_TARGET", "MAX_REACHED")):
+        elif nut.startswith(("EC_OUT_OF_BAND", "EC_UNVERIFIED", "ABOVE_TARGET", "MAX_REACHED", "MAX_EXCEEDED")):
             b["result"] = "OUT_OF_SPEC"
         else:
             b["result"] = "COMPLETED"

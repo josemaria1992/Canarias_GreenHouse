@@ -73,7 +73,9 @@ sector valves, verify, deselect pumps, verify.
 | Any path: valve not open, pump not running, flow below minimum after grace, meter unusable, maximum time | Path fails (`PROC_PATH_FAULT` on `process.REFILL.<path>`); in EC_TARGET the partner stops; water continues; at batch end lockout `PATH_FAILED`. |
 | FIXED_VOLUMES: EC outside the band after the settling window | Alarm `REFILL_EC_VALIDATION_FAILED`, batch `OUT_OF_SPEC`; no automatic correction. |
 | EC_TARGET: EC above target + tolerance after water ends | Alarm `REFILL_EC_ABOVE_TARGET` (nutrients are never removed). |
-| EC_TARGET: batch maxima reached below target | Alarm `REFILL_EC_LIMIT_REACHED`. |
+| EC_TARGET: batch maxima reached below target (on measured delivery) | Alarm `REFILL_EC_LIMIT_REACHED`. |
+| EC_TARGET: each step | `max_a_L`/`max_b_L` apply to the **measured** delivery: the flow meter integrated from valve open until the stop is verified, start-up and stopping coast included. The next step is shortened by the largest coast (measured minus commanded) seen in this batch for that stock (the stopping margin). Commanded and measured quantities are both recorded per step (`REFILL_EC_STEP_DELIVERED`). |
+| EC_TARGET: measured total above a maximum (tolerance 0 L; possible on the first step, before any coast has been measured) | Dosing stops (`MAX_EXCEEDED`, measured totals shown), alarm `REFILL_EC_LIMIT_EXCEEDED`, batch `OUT_OF_SPEC`. |
 | EC_TARGET: EC unavailable | Nutrient dosing stops; alarm `REFILL_EC_UNAVAILABLE`. |
 
 ## ACID (lowering pH only; no base dosing exists)

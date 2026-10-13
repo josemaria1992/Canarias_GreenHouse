@@ -84,3 +84,68 @@ def test_r3_healthy_alternation_still_starts(icfg):
     irr = rt.sup.by_id["IRRIGATION"]
     until(rt, lambda: irr.phase == "IRRIGATE", 60)
     assert irr.state == CS.AUTO and drive_runs(rt, 0)
+
+
+# ------------------------------------------------------------------------------------------ R4
+def _max_run(icfg, changes, **plant):
+    rt = refill_rt(icfg, changes, **plant)
+    assert rt.process_request("t", "REFILL", CS.AUTO)[0]
+    rf = rt.sup.by_id["REFILL"]
+    sc = next(s for s in rt.cfg.scaling_profiles if s.profile_id == rt.cfg.device(ec_point(rt).split(".")[0])
+              .ai[int(ec_point(rt).rsplit("AI", 1)[1])].scaling)
+    rt.set_override("t", ec_point(rt), int(sc.raw_low), "valid low EC forces every bounded step")
+    a0, b0 = rt.plant.tanks["A"].volume, rt.plant.tanks["B"].volume
+    until(rt, lambda: (rf.batch or {}).get("nutrients", "").startswith(("MAX_REACHED", "MAX_EXCEEDED", "STOPPED"))
+          or (rf.batch is None and rf.batches))
+    rt.run_for(10)
+    b = rf.batch if rf.batch is not None else rf.batches[-1]
+    return rt, b, a0 - rt.plant.tanks["A"].volume, b0 - rt.plant.tanks["B"].volume
+
+
+def test_r4_batch_maxima_hold_on_measured_delivery(icfg):
+    rt, b, taken_a, taken_b = _max_run(icfg, {"refill": {"ec": {"step_total_L": 20, "max_a_L": 50, "max_b_L": 50,
+                                                                 "settle_s": 1}}})
+    steps = b["ec_steps"]
+    da, db = sum(x["a_delivered_L"] for x in steps), sum(x["b_delivered_L"] for x in steps)
+    assert b["nutrients"].startswith("MAX_REACHED") and "measured" in b["nutrients"]
+    assert da <= 50 + 1e-9 and db <= 50 + 1e-9                       # the maximum holds on what was measured
+    assert any(x["a_delivered_L"] > x["a_L"] for x in steps)          # the coast is real and counted
+    assert sum(x["a_L"] for x in steps) < da                          # commanded kept separately for audit
+    assert taken_a == pytest.approx(da, abs=0.5) and taken_b == pytest.approx(db, abs=0.5)
+    assert not rt.alarms.is_active("REFILL_EC_LIMIT_EXCEEDED", "process.REFILL")
+
+
+def test_r4_unequal_ratio_and_several_small_steps(icfg):
+    rt, b, taken_a, taken_b = _max_run(icfg, {"refill": {"ec": {"step_total_L": 9, "ratio_a_to_b": 2.0,
+                                                                 "max_a_L": 30, "max_b_L": 30, "settle_s": 1}}})
+    steps = b["ec_steps"]
+    da, db = sum(x["a_delivered_L"] for x in steps), sum(x["b_delivered_L"] for x in steps)
+    assert len(steps) >= 4 and da <= 30 + 1e-9 and db <= 30 + 1e-9
+    assert all(x["a_L"] == pytest.approx(2.0 * x["b_L"]) for x in steps)
+
+
+def test_r4_overrun_is_reported_not_hidden(icfg):
+    """A maximum smaller than one step's coast cannot be kept: the measured excess is reported as an
+    overrun (alarm, OUT_OF_SPEC), never as a maximum enforced."""
+    rt, b, taken_a, taken_b = _max_run(icfg, {"refill": {"ec": {"step_total_L": 20, "max_a_L": 10, "max_b_L": 10,
+                                                                 "settle_s": 1}}})
+    rf = rt.sup.by_id["REFILL"]
+    assert len(b["ec_steps"]) == 1 and b["ec_steps"][0]["a_L"] == pytest.approx(10.0)   # clipped to the maximum
+    assert b["overrun"] and b["nutrients"].startswith("MAX_EXCEEDED") and "measured" in b["nutrients"]
+    assert rt.alarms.is_active("REFILL_EC_LIMIT_EXCEEDED", "process.REFILL")
+    assert taken_a > 10 and taken_a == pytest.approx(b["ec_steps"][0]["a_delivered_L"], abs=0.05)
+    until(rt, lambda: rf.batch is None, 7200)
+    assert rf.batches[-1]["result"].startswith("OUT_OF_SPEC")
+
+
+def test_r4_partner_failure_records_both_deliveries(icfg):
+    rt = refill_rt(icfg, {"refill": {"ec": {"step_total_L": 200}}})
+    assert rt.process_request("t", "REFILL", CS.AUTO)[0]
+    rf = rt.sup.by_id["REFILL"]
+    until(rt, lambda: "B" in rf.paths and rf.paths["B"].state == "RUNNING")
+    rt.set_actuator_fault("t", "pump", "TP_B", "NO_FLOW")
+    until(rt, lambda: rf.batch is None or rf.batch["nutrients"].startswith("STOPPED"), 120)
+    rt.run_for(20)
+    b = rf.batch if rf.batch is not None else rf.batches[-1]
+    s = b["ec_steps"][-1]
+    assert "a_delivered_L" in s and "b_delivered_L" in s and s["a_delivered_L"] < s["a_L"]

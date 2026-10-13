@@ -424,8 +424,8 @@ class Path:
         if self.state in ("DONE", "FAILED", "PENDING"):
             return
         q = self._flow(obs)
-        if self.state in ("RUNNING", "STOPPING") and q is not None:
-            self.delivered_L += q * ctx.dt / 60.0
+        if q is not None:      # whatever the meter reports while the path holds its valve counts as delivered,
+            self.delivered_L += q * ctx.dt / 60.0      # including the pump's start-up and stopping coast
         if self.state == "OPENING":
             if self.open_feedback and obs.bound(self.open_feedback):
                 v = obs.get(self.open_feedback)
