@@ -32,10 +32,10 @@ unassigned.
   are labelled legacy test fixtures.
 
 ### Fixed (delivery and usability, `docs/operator/owner-tour/issues.md`)
-- DEL-01 to DEL-15: among them form choices reset by the refresh, collapsing recipe sections, lost
+- DEL-01 to DEL-16: among them form choices reset by the refresh, collapsing recipe sections, lost
   clicks during a redraw, the tank interior not clickable, unassigned channels looking like faults, a
   stale acid "Next" line beside its waiting reason, developer-style result text, and the main pump
-  label showing the contactor as "run".
+  label showing the contactor as "run", and list items split apart in the illustrated guide.
 
 ## 0.3.1 (2026-10-13): two IO 8CH modules, 80 points (ADR-0016)
 

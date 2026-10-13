@@ -118,7 +118,7 @@ def markdown(md: str, figures) -> str:
             flush()
             # one list block, nested items indented by three spaces
             html_list, stack = [], []
-            while i < len(lines) and (re.match(r"\s*(\d+\.|-) ", lines[i]) or (lines[i].startswith("   ") and lines[i].strip())):
+            while i < len(lines) and (re.match(r"\s*(\d+\.|-) ", lines[i]) or (lines[i].startswith("  ") and lines[i].strip())):
                 l2 = lines[i]
                 m2 = re.match(r"(\s*)(\d+\.|-) (.*)", l2)
                 if not m2:                                 # continuation of the previous item
@@ -182,6 +182,9 @@ def main() -> int:
     args = ap.parse_args()
     ev, out = args.evidence.resolve(), args.out.resolve()
     reh = json.loads((ev / "rehearsal.json").read_text(encoding="utf-8"))
+    # the launcher by its name in the release folder, not the rehearsal machine's path
+    launcher = reh.get("launcher", "")
+    reh["launcher"] = f"{Path(launcher).name} of this release folder" if "/" in launcher or "\\" in launcher else launcher
     shutil.rmtree(out, ignore_errors=True)
     (out / "img").mkdir(parents=True)
     shots = sorted(p for p in (*ev.glob("UAT-*.png"), *ev.glob("UAT-*.jpg")) if not p.stem.endswith("-error"))
@@ -222,7 +225,7 @@ Physical verification: {"yes" if reh.get("physical_verification") else "no"}.</p
 </main></body></html>
 """
     (out / "index.html").write_text(page, encoding="utf-8")
-    shutil.copy2(ev / "rehearsal.json", out / "claude-rehearsal.json")
+    (out / "claude-rehearsal.json").write_text(json.dumps(reh, indent=1), encoding="utf-8")
     print(json.dumps({"out": str(out), "screenshots": len(shots), "cases": len(cases), "rehearsal_failed": reh["failed"]}))
     return 0
 

@@ -24,6 +24,7 @@ repeating yet; the column says what a later fix to the same area would affect.
 | DEL-13 | UAT-08 | With the pH probe invalid, the Acid pH dosing card still showed the last "Next: pH 6.19 within target…" line beside the reason it was waiting | The plan line is cleared while the process waits; the in-band line now reads "pH 6.19 at or below 6.2 (target 6 + 0.2): no dose" | UAT-08 |
 | DEL-14 | UAT-08, UAT-09 | "Last result" and the batch/run tables were printed as `key=value` developer text | Readable labels (for example "pH start 6.80 · total (L) 16.79 · pH end 6.20") | UAT-08, UAT-09 |
 | DEL-15 | UAT-03, UAT-10 | In the diagram, main pump MP1 read "req ON · run" while the drive was stopped after a trip: the feedback shown is the selection contactor K1, not the motor | The label reads "req ON · K1 closed"; whether the motor runs is shown on the drive symbol | UAT-03, UAT-10 |
+| DEL-16 | illustrated guide | In `owner-tour/index.html`, 21 list items that wrap onto a second line were split into a stray paragraph, and the header showed the rehearsal machine's folder path | Wrapped items stay one item (`tests/unit/test_tour_guide.py`); the header names the release launcher only | none (reading only) |
 
 Not changed, by design: no control algorithm, production mapping, recipe value, retention, cadence or
 storage budget was changed to make the demo look successful.
