@@ -237,7 +237,7 @@ def test_missing_card_writes_nothing_and_never_falls_back(env):
 def test_backup_verified_queued_offline_then_uploaded_when_back(env):
     """AT-OFF-03/04/05: daily backup with checksum and manifest; upload fails offline and is queued with
     backoff while recording continues; after connectivity returns the whole queue is uploaded and
-    verified with cryptcheck; the queue survives a restart."""
+    verified with cryptcheck, and a completion receipt goes up last; the queue survives a restart."""
     env.remote.offline = True
     r1 = env.off.backup()
     b1 = r1["backup"]["file"]
@@ -268,12 +268,20 @@ def test_backup_verified_queued_offline_then_uploaded_when_back(env):
     assert all(r["verified"] == "cryptcheck" for r in fresh.store.ledger())
     assert (env.remote.root / b1).read_bytes() == (env.bdir / b1).read_bytes()
     assert not any(c[0] in ("sync", "move", "delete", "purge") for c in env.remote.calls)
+    for b in (b1, b2):                                          # the receipt is the last file of a copy
+        rec = json.loads((env.remote.root / offsite_mod.receipt_name(b)).read_text())
+        assert rec["file"] == b and rec["sha256"] == hashlib.sha256((env.bdir / b).read_bytes()).hexdigest()
+        assert rec["verified"] == "cryptcheck" and rec["manifest"] == backup_mod.manifest_path(env.bdir / b).name
+    assert [r["receipt"] for r in fresh.store.ledger()] == [offsite_mod.receipt_name(b) for b in (b1, b2)]
+    assert not list((env.state / "offsite" / "receipts").iterdir())
     # an upload that does not verify is not recorded as a cloud copy and stays queued
     env.remote.corrupt_upload = True
     env.clock.t += 86400
     r3 = env.off.backup()
     assert r3["upload"]["failed"] == [r3["backup"]["file"]]
     assert r3["backup"]["file"] not in {r["name"] for r in env.off.store.ledger()}
+    assert not (env.remote.root / offsite_mod.receipt_name(r3["backup"]["file"])).exists()   # incomplete
+    assert env.off.plan(None, env.remote.listing())["cloud"]["without_receipt"] == [r3["backup"]["file"]]
     # a non-crypt remote is refused before anything is uploaded
     env.remote.corrupt_upload, env.remote.crypt = False, False
     env.clock.t += 86400
@@ -344,8 +352,11 @@ def test_pruning_waits_for_confirmation_and_never_deletes_unuploaded(env):
         backup_mod.manifest_path(env.bdir / n).write_text("{}")
         (env.remote.root / n).write_bytes(b"x")
         (env.remote.root / backup_mod.manifest_path(Path(n)).name).write_text("{}")
+        if n != names[-1]:
+            (env.remote.root / offsite_mod.receipt_name(n)).write_text("{}")
     env.off.store.save_ledger([{"name": n, "manifest": backup_mod.manifest_path(Path(n)).name, "sha256": "0",
-                                "bytes": 1, "created_utc": "x"} for n in names[:-1]])   # newest not uploaded yet
+                                "bytes": 1, "created_utc": "x", "receipt": offsite_mod.receipt_name(n)}
+                               for n in names[:-1]])   # newest not uploaded yet
     env.off.store.put_queue({"name": names[-1], "manifest": "m", "sha256": "0", "bytes": 1, "created_utc": "x",
                              "attempts": 0, "next_attempt_utc": "2999-01-01T00:00:00+00:00"})
     (env.remote.root / "aquacrop-2026-01-01T000000.000000Z.sql.gz").write_bytes(b"not ours")
@@ -363,6 +374,10 @@ def test_pruning_waits_for_confirmation_and_never_deletes_unuploaded(env):
     assert set(names[-31:-1]) <= kept_cloud and len(kept_cloud) <= 30 + 12
     assert "aquacrop-2026-01-01T000000.000000Z.sql.gz" in os.listdir(env.remote.root)   # never in the ledger
     assert set(p["cloud"]["not_in_ledger"]) == {"aquacrop-2026-01-01T000000.000000Z.sql.gz", names[-1]}
+    in_cloud = set(os.listdir(env.remote.root))
+    for n in p["deleted_cloud"]:                                   # the copy, its manifest and its receipt
+        assert not {n, backup_mod.manifest_path(Path(n)).name, offsite_mod.receipt_name(n)} & in_cloud
+    assert all(offsite_mod.receipt_name(n) in in_cloud for n in kept_cloud)
     assert "OFFSITE_PRUNED" in _journal_kinds(env)
     # a changed policy needs a new confirmation
     cfg2 = env.cfg.model_copy(update={"offsite_backup": env.cfg.offsite_backup.model_copy(
@@ -500,6 +515,117 @@ def test_real_rclone_crypt_round_trip(env, tmp_path):
     assert {e["name"] for e in rc.listing()} >= {name}
     rep = off.drill()
     assert rep["ok"] and rep["checksum_ok"], rep
+
+
+@pytest.mark.skipif(shutil.which("rclone") is None and not os.environ.get("AQUACROP_REQUIRE_RCLONE"),
+                    reason="rclone not installed (CI installs it on Linux and requires this test)")
+def test_bk07_replacement_controller_recovers_with_only_the_escrowed_keys(env, tmp_path):
+    """BK-07: the controller, its card and its rclone.conf are lost. A replacement that has only the
+    cloud folder and the two escrowed values (typed in again) lists, picks the newest copy with a
+    completion receipt (a later upload that was cut off has none), downloads, decrypts, verifies and
+    restores it with the commands of offsite-backups.md section 8.1, and the restored database records
+    again. A mistyped value reads nothing.
+
+    Rehearsal only: test-only keys and a local folder standing in for OneDrive (real rclone crypt). The
+    owner's sealed envelope, Microsoft account recovery and re-authorization were NOT demonstrated."""
+    import sqlite3
+    import subprocess
+
+    import aquacrop
+    envelope = {"password": "bk07-test-only-password", "salt": "bk07-test-only-salt"}
+    cloud = tmp_path / "onedrive-stand-in"
+    cloud.mkdir()
+
+    def rclone_conf(path, password, salt):
+        ob = lambda s: subprocess.run(["rclone", "obscure", s], capture_output=True, text=True,  # noqa: E731
+                                      check=True).stdout.strip()
+        path.write_text(f"[aquacrop-onedrive]\ntype = local\n\n[aquacrop-crypt]\ntype = crypt\n"
+                        f"remote = aquacrop-onedrive:{cloud}\npassword = {ob(password)}\n"
+                        f"password2 = {ob(salt)}\n")
+        path.chmod(0o600)
+        return path
+
+    # the old controller: daily backup, uploaded and cryptchecked
+    old_conf = rclone_conf(tmp_path / "old-rclone.conf", envelope["password"], envelope["salt"])
+    off = Offsite(env.cfg, env.state, env.db, probe=env.probe, rclone=Rclone("rclone", str(old_conf), "aquacrop-crypt:"),
+                  now=env.clock)
+    r = off.backup()
+    name = r["backup"]["file"]
+    assert r["upload"]["uploaded"] == [name], r
+    sha = off.store.ledger()[-1]["sha256"]
+
+    class CutOff(Rclone):                     # the next day's upload loses the connection before its receipt
+        def cryptcheck(self, local_dir, names):
+            raise RcloneError("connection lost", code="OFFLINE")
+    env.clock.t += 86400
+    cut = Offsite(env.cfg, env.state, env.db, probe=env.probe, rclone=CutOff("rclone", str(old_conf), "aquacrop-crypt:"),
+                  now=env.clock).backup()
+    interrupted = cut["backup"]["file"]
+    assert cut["upload"]["failed"] == [interrupted] and interrupted > name
+    in_cloud = sorted((p.relative_to(cloud).as_posix(), p.stat().st_size) for p in cloud.rglob("*") if p.is_file())
+    events = env.hist.query("SELECT count(*) FROM events WHERE kind='TEST_EVENT'")[0][0]
+    assert events == 20
+    # lost: database, card and rclone.conf
+    env.hist.close()
+    for gone in (env.state, env.sd):
+        shutil.rmtree(gone)
+    old_conf.unlink()
+
+    new = tmp_path / "replacement"
+    new.mkdir()
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("RCLONE_")} | {
+        "HOME": str(new), "PYTHONUTF8": "1", "PYTHONPATH": str(Path(aquacrop.__file__).resolve().parents[1])}
+
+    def run(*cmd):
+        return subprocess.run(list(cmd), cwd=new, env=environ, capture_output=True, text=True, timeout=300)
+
+    # a mistyped envelope: nothing can be listed or downloaded
+    bad = rclone_conf(new / "mistyped.conf", envelope["password"], envelope["salt"] + "x")
+    assert run("rclone", "--config", str(bad), "lsjson", "aquacrop-crypt:backups").returncode != 0
+    assert run("rclone", "--config", str(bad), "copyto", f"aquacrop-crypt:backups/{name}", "x.gz").returncode != 0
+    assert not (new / "x.gz").exists()
+    # the envelope as printed: list, download backup and manifest
+    conf = str(rclone_conf(new / "rclone.conf", envelope["password"], envelope["salt"]))
+    ls = run("rclone", "--config", conf, "lsjson", "aquacrop-crypt:backups")
+    assert ls.returncode == 0, ls.stderr
+    listed = {e["Name"] for e in json.loads(ls.stdout)}
+    assert {interrupted, backup_mod.manifest_path(Path(interrupted)).name} <= listed     # there, but incomplete
+    complete = [n for n in listed if n.endswith(".sql.gz") and offsite_mod.receipt_name(n) in listed]
+    assert max(complete) == name
+    man, rcpt = backup_mod.manifest_path(Path(name)).name, offsite_mod.receipt_name(name)
+    (new / "dl").mkdir()
+    for f in (name, man, rcpt):
+        cp = run("rclone", "--config", conf, "copyto", f"aquacrop-crypt:backups/{f}", f"dl/{f}")
+        assert cp.returncode == 0, cp.stderr
+    receipt = json.loads((new / "dl" / rcpt).read_text())
+    assert hashlib.sha256((new / "dl" / name).read_bytes()).hexdigest() == receipt["sha256"] == sha
+    py = [sys.executable, "-m", "aquacrop"]
+    v = run(*py, "backup", "verify", "--backup", f"dl/{name}", "--full", "--scratch-dir", "scratch")
+    assert v.returncode == 0 and json.loads(v.stdout)["ok"] is True, v.stdout + v.stderr
+    restored = new / "var" / env.db.name
+    fresh = Historian(restored, env.cfg, "s-fresh-install")          # step 1: the installed, now stopped, instance
+    fresh.close()
+    rs = run(*py, "backup", "restore", "--backup", f"dl/{name}", "--target", str(restored), "--maintenance",
+             "--config", "demo-24", "--state-dir", "var")
+    assert rs.returncode == 0, rs.stdout + rs.stderr
+    con = sqlite3.connect(f"file:{restored}?mode=ro", uri=True)
+    try:
+        assert con.execute("SELECT count(*) FROM events WHERE kind='TEST_EVENT'").fetchone()[0] == events
+        assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        con.close()
+    h2 = Historian(restored, env.cfg, "s-replacement")               # the new instance records again
+    try:
+        h2.event("TEST_EVENT", {"i": "after-recovery"}, actor="t")
+        h2.wait_idle()
+        assert h2.query("SELECT count(*) FROM events WHERE kind='TEST_EVENT'")[0][0] == events + 1
+    finally:
+        h2.close()
+    # the replacement built nothing from the old controller and wrote nothing into the cloud folder
+    assert not env.state.exists() and not env.sd.exists() and not old_conf.exists()
+    assert sorted((p.relative_to(cloud).as_posix(), p.stat().st_size) for p in cloud.rglob("*")
+                  if p.is_file()) == in_cloud
+    assert not any("aquacrop" in p.name for p in cloud.rglob("*"))           # names encrypted at rest
 
 
 def test_api_shows_state_and_policy_confirmation_is_admin_only(tmp_path, cfg48):

@@ -4,8 +4,10 @@
   deleted in small batches through the single writer, every `retention_check_interval_s` while the
   server runs (and with `retention apply --confirm-cutoff` while it is stopped). Each run that deletes
   anything is recorded as a RETENTION_PRUNED event. Nothing inside the window is ever deleted, for a
-  size limit or any other reason. Open alarms, users and the schema/migration/archive registers are
-  never pruned; process-session and simulation-run records are pruned only once no remaining row can
+  size limit or any other reason. Open alarms, unfinished commands, users, recipes, recipe
+  activations, stock readiness, the schema/migration/archive/quarantine registers and the newest
+  CONFIG_LOADED of each distinct configuration (the definitions retained samples refer to) are never
+  pruned; process-session and simulation-run records are pruned only once no remaining row can
   refer to them. The database therefore stops growing only approximately once the window is full:
   the registers keep growing slowly and capacity monitoring stays on after the first year.
 * Retention deletes only while the wall clock is trusted, and it never assumes internet time. The
@@ -29,6 +31,7 @@ import csv
 import gzip
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -36,7 +39,7 @@ from pathlib import Path
 
 from .. import __version__
 from .backup import _sha256
-from .quarantine import QUARANTINE_EVENT, REGISTER_KINDS, RETIRED_EVENT, QuarantineRegister
+from .quarantine import QUARANTINE_EVENT, REGISTER_KINDS, RETIRED_EVENT, QuarantineRegister, review_due
 from .schema import utc_iso
 
 SAMPLE_COLS = ["id", "point_id", "acquired_utc", "persisted_utc", "sequence", "quality", "reason", "raw_value",
@@ -175,16 +178,22 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     xs, xs_a = reg.exclude("samples")
     xc, xc_a = reg.exclude("cycles")
     xe, xe_a = reg.exclude("events")
+    kc, kc_a = _config_definitions(hist)
+    xe, xe_a = xe + kc, xe_a + kc_a
     xm, xm_a = reg.exclude("commands")
-    # Quarantined records (ADR-0011) are not judged by their suspect stamps: they go only once the
-    # quarantine itself (a trusted time after all of them were written) has left the window.
-    expired_q = [q for q in reg.items if datetime.fromisoformat(q.confirmed_utc) < datetime.fromisoformat(cutoff)]
+    # Quarantined records (ADR-0011) are not judged by their suspect stamps, and age alone never removes
+    # them: they go only after an administrator released them (HISTORY_QUARANTINE_REVIEWED, RELEASE) and
+    # once the quarantine itself (a trusted time after all of them were written) has left the window.
+    expired_q = [q for q in reg.items
+                 if q.released and datetime.fromisoformat(q.confirmed_utc) < datetime.fromisoformat(cutoff)]
+    due = review_due(reg, cutoff)
     if dry_run:
         q = lambda sql, extra=(): hist.query(sql, (cutoff,) + extra)[0][0]  # noqa: E731
         kept = {t: sum(r[1] - r[0] + 1 for r in (x.ranges.get(t) for x in reg.items if x not in expired_q) if r)
                 for t in ("samples", "events", "commands")}
         return {"dry_run": True, "cutoff_utc": cutoff, "quarantined_rows_kept": kept,
-                "expired_quarantines": [x.quarantine_id for x in expired_q], "would_delete": {
+                "expired_quarantines": [x.quarantine_id for x in expired_q], "quarantines_review_due": due,
+                "would_delete": {
             "samples": q("SELECT count(*) FROM samples WHERE acquired_utc < ?" + xs, xs_a),
             "events": q(f"SELECT count(*) FROM events WHERE utc < ? AND kind NOT IN {REGISTER_KINDS!r}" + xe, xe_a),
             "commands": q("SELECT count(*) FROM commands WHERE intent_utc < ? AND outcome NOT IN "
@@ -228,6 +237,7 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
         xs, xs_a = _excl(live, "samples", "id")
         xc, xc_a = _excl(live, "cycles", "cycle_pk")
         xe, xe_a = _excl(live, "events", "id")
+        xe, xe_a = xe + kc, xe_a + kc_a
         xm, xm_a = _excl(live, "commands", "rowid")
         _chunks(hist, "DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE acquired_utc < ?" + xs +
                       " ORDER BY acquired_utc LIMIT ?)", (cutoff,) + xs_a, chunk_rows, guard=guard, into=d,
@@ -275,6 +285,8 @@ def prune_expired(hist, *, now: datetime | None = None, chunk_rows: int = PRUNE_
     res = {"cutoff_utc": cutoff, "retention_days": h.retention_days, "deleted": d, "transactions": budget["chunks"]}
     if stopped:
         res["incomplete"] = stopped
+    if due:
+        res["quarantines_review_due"] = due     # kept: an administrator decides KEEP or RELEASE
     if any(d.values()):
         hist.event("RETENTION_PRUNED", res | {"note": "rows older than the rolling window; freed pages are "
                                                       "reused by new history"}, actor="system")
@@ -294,6 +306,24 @@ def _retire(hist, xq) -> None:
                                "ranges no longer mark records"})))
         hist.quarantines = QuarantineRegister.load(c)
     hist.submit(op, wait=True, timeout=120)
+
+
+def _config_definitions(hist) -> tuple[str, tuple]:
+    """The newest CONFIG_LOADED event of each distinct configuration (by its SHA-256) is never pruned:
+    it holds the configuration and scaling (calibration) definitions that the config_version and
+    calibration_ref of retained samples refer to, also when the server ran longer than the window
+    without a restart. One row per distinct configuration, so this stays small."""
+    def ids(c):
+        try:
+            return [r[0] for r in c.execute("SELECT max(id) FROM events WHERE kind='CONFIG_LOADED' "
+                                            "GROUP BY json_extract(payload_json, '$.sha256')")]
+        except sqlite3.OperationalError:          # an SQLite without JSON functions
+            newest: dict = {}
+            for i, pj in c.execute("SELECT id, payload_json FROM events WHERE kind='CONFIG_LOADED' ORDER BY id"):
+                newest[json.loads(pj).get("sha256")] = i
+            return list(newest.values())
+    keep = hist.read(ids)
+    return (f" AND id NOT IN ({','.join('?' * len(keep))})", tuple(keep)) if keep else ("", ())
 
 
 def _excl(items, table: str, col: str) -> tuple[str, tuple]:
@@ -553,12 +583,23 @@ class RetentionTask:
                                            "stopped); acknowledging this alarm does not resume deletion.")
             return
         alarms.clear("RETENTION_HELD", "historian")
+        basis = min(self._wall(), self.trusted_now() or self._wall())
+        cutoff = (datetime.fromtimestamp(basis, tz=timezone.utc) - timedelta(days=h.retention_days)).isoformat(
+            timespec="microseconds")
+        due = review_due(self.hist.quarantines, cutoff)
+        if due:
+            alarms.raise_or_update("HISTORY_QUARANTINE_REVIEW_DUE", "historian", severity="WARNING", sim_s=sim_s,
+                                   message=f"quarantined records older than the {h.retention_days}-day window are "
+                                           f"kept until an administrator reviews them ({', '.join(due)}): Settings, "
+                                           "Timestamp quarantine, KEEP or RELEASE. Acknowledging this alarm decides "
+                                           "nothing.")
+        else:
+            alarms.clear("HISTORY_QUARANTINE_REVIEW_DUE", "historian")
         now = self._mono()
         if self.running or (self._next_due is not None and now < self._next_due):
             return
         self._next_due = now + h.retention_check_interval_s
         self.running = True
-        basis = min(self._wall(), self.trusted_now() or self._wall())
         threading.Thread(target=self._run, args=(datetime.fromtimestamp(basis, tz=timezone.utc),),
                          name="historian-retention", daemon=True).start()
 

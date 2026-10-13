@@ -236,6 +236,63 @@ def test_csv_export_escapes_and_discloses_completeness(env_dense):
     assert _escape_csv("=1+1") == "'=1+1" and _escape_csv("-x") == "'-x" and _escape_csv("ok") == "ok"
 
 
+def test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete(env):
+    """OP-03: a year of history for one point is charted whole, aggregated per day (mean, min, max and the
+    sample counts, partial days and a ten-day hole marked), while a short range stays raw; the paged CSV
+    export returns every sample of the year exactly once and ends COMPLETE. The year is the 363 whole days
+    that end yesterday, which the 365-day rolling retention cannot reach at any time of today."""
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import quote
+    app, c = env
+    login(c, "view1", PW["view1"])
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    start = end - timedelta(days=363)
+    hole = (start + timedelta(days=100), start + timedelta(days=110))
+    iso = lambda t: t.isoformat(timespec="microseconds")  # noqa: E731
+    rows, t = [], start
+    while t < end:
+        if not hole[0] <= t < hole[1]:
+            good = t.hour != 3                       # one unavailable reading a day
+            rows.append((iso(t), "GOOD" if good else "UNAVAILABLE", float(t.hour) if good else None))
+        t += timedelta(hours=1)
+
+    def op(con):
+        pk = con.execute("INSERT INTO cycles(cycle_id,session_id,run_id,sim_s,persisted_utc,n_points,cadence_s,"
+                         "cadence_basis) VALUES('year','old',NULL,NULL,?,1,3600,'WALL')", (rows[0][0],)).lastrowid
+        con.executemany("INSERT INTO samples(cycle_pk,point_id,acquired_utc,persisted_utc,sequence,quality,origin,"
+                        "source_profile,config_version,device_uid,bus_id,session_id,value) VALUES(?,'test.YEAR',?,?,1,"
+                        "?,'REAL','p','v','d','b','old',?)", [(pk, a, a, q, v) for a, q, v in rows])
+    app.state.hist.submit(op, wait=True)
+    # the server runs retention on its first tick and then hourly: run it now, so the result never depends on when
+    from aquacrop.historian.retention import prune_expired
+    assert not prune_expired(app.state.hist, now=datetime.now(timezone.utc))["deleted"].get("samples")
+    q = f"points=test.YEAR&start={quote(iso(start))}&end={quote(iso(end))}"
+    tr = c.get("/api/trends?" + q).json()
+    agg, ser, col = tr["aggregated"]["test.YEAR"], tr["series"]["test.YEAR"], tr["columns"].index
+    assert agg["bucket"] == "1 day" and agg["samples"] == len(rows) == (363 - 10) * 24 and not tr["truncated"]
+    assert len(ser) == 353 and sum(r[col("samples")] for r in ser) == len(rows)
+    first = ser[0]
+    assert first[0] == iso(start).replace(".000000", "") and first[col("quality")] == "PARTIAL"
+    assert (first[col("samples")], first[col("valid_samples")], first[col("min")], first[col("max")]) == (24, 23, 0.0, 23.0)
+    assert first[col("value")] == pytest.approx((sum(range(24)) - 3) / 23)
+    after_hole = next(i for i, r in enumerate(ser) if r[0] >= iso(hole[1]).replace(".000000", ""))
+    assert ser[after_hole][col("gap_before")] and not any(r[col("gap_before")] for r in ser[1:after_hole])
+    short = c.get(f"/api/trends?points=test.YEAR&start={quote(iso(end - timedelta(hours=12)))}&end={quote(iso(end))}").json()
+    assert short["aggregated"] == {} and len(short["series"]["test.YEAR"]) == 12
+    ids, after, pages = [], 0, 0
+    while True:
+        r = c.get(f"/api/export.csv?{q}&limit=3000&after_id={after}")
+        lines = r.text.strip().splitlines()
+        body = [ln for ln in lines if not ln.startswith("#")][1:]
+        ids += [int(ln.split(",")[0]) for ln in body]
+        pages += 1
+        if r.headers["X-Truncated"] == "false":
+            assert lines[-1] == f"# COMPLETE: {len(body)} rows"
+            break
+        after = int(r.headers["X-Next-After-Id"])
+    assert pages == 3 and len(ids) == len(set(ids)) == len(rows)
+
+
 def test_scenario_and_twin_controls(env):
     app, c = env
     hdr = login(c, "oper1", PW["oper1"])

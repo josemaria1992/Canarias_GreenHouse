@@ -15,8 +15,11 @@ quarantine those records:
   snapshot; the same label twice in one epoch is still refused.
 * A quarantine never authorizes deletion. It puts rolling retention on hold (TIMESTAMPS_QUARANTINED),
   and the hold survives restarts until an administrator separately confirms the date and the proposed
-  cutoff (RETENTION_CLOCK_CONFIRMED). Quarantined records are kept until the time of the quarantine
-  itself leaves the retention window, whatever their (wrong) stamps say.
+  cutoff (RETENTION_CLOCK_CONFIRMED). Quarantined records are never pruned by age on their own: they stay
+  until an administrator reviews the quarantine's disposition (HISTORY_QUARANTINE_REVIEWED, brief §9).
+  KEEP keeps them (and can be reviewed again later); RELEASE lets them leave once the time of the
+  quarantine itself (a trusted time) leaves the retention window, whatever their (wrong) stamps say. A
+  quarantine older than the window that nobody has reviewed is reported as review due.
 
 Which records: the proposal finds the first record stamped later than the current clock (plus
 CLOCK_TOLERANCE_S) and widens it to the whole wrong-clock segment: from the forward clock step that
@@ -30,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from .schema import utc_iso
@@ -40,7 +43,11 @@ QUARANTINE_EVENT = "HISTORY_TIMESTAMPS_QUARANTINED"
 # rows that later reuse those ids (SQLite reuses the highest ids after a delete) are neither flagged nor
 # deleted with it.
 RETIRED_EVENT = "HISTORY_QUARANTINE_RETIRED"
-REGISTER_KINDS = (QUARANTINE_EVENT, RETIRED_EVENT)      # never pruned
+# An administrator's disposition of a quarantine's records: KEEP or RELEASE (to rolling retention). The
+# newest review of a quarantine applies; each one is kept as its audit.
+REVIEW_EVENT = "HISTORY_QUARANTINE_REVIEWED"
+DISPOSITIONS = ("KEEP", "RELEASE")
+REGISTER_KINDS = (QUARANTINE_EVENT, RETIRED_EVENT, REVIEW_EVENT)      # never pruned
 TABLES = ("cycles", "samples", "events", "commands")
 _ID = {"cycles": "cycle_pk", "samples": "id", "events": "id", "commands": "rowid"}
 _TIME = {"cycles": "persisted_utc", "samples": "acquired_utc", "events": "utc", "commands": "intent_utc"}
@@ -77,6 +84,14 @@ class Quarantine:
     confirmed_utc: str
     confirmed_by: str
     event_id: int | None = None
+    disposition: str = "UNREVIEWED"          # UNREVIEWED, KEEP or RELEASE (the newest review)
+    reviewed_by: str | None = None
+    reviewed_utc: str | None = None
+    review_reason: str | None = None
+
+    @property
+    def released(self) -> bool:
+        return self.disposition == "RELEASE"
 
     def contains(self, table: str, ident: int | None) -> bool:
         r = self.ranges.get(table)
@@ -86,7 +101,8 @@ class Quarantine:
         return {"quarantine_id": self.quarantine_id, "clock_epoch": self.clock_epoch,
                 "ranges": {t: list(r) for t, r in self.ranges.items()}, "confirmed_utc": self.confirmed_utc,
                 "confirmed_by": self.confirmed_by, "alarm_occurrences": sorted(self.alarm_occurrences),
-                "sessions": sorted(self.sessions)}
+                "sessions": sorted(self.sessions), "disposition": self.disposition, "reviewed_by": self.reviewed_by,
+                "reviewed_utc": self.reviewed_utc, "review_reason": self.review_reason}
 
 
 @dataclass
@@ -102,7 +118,12 @@ class QuarantineRegister:
         rows = c.execute("SELECT id, payload_json FROM events WHERE kind=? ORDER BY id", (QUARANTINE_EVENT,)).fetchall()
         gone = {json.loads(p).get("quarantine_id") for (p,) in
                 c.execute("SELECT payload_json FROM events WHERE kind=?", (RETIRED_EVENT,))}
-        qs = [_from_payload(json.loads(p), eid) for eid, p in rows]
+        reviews = {}
+        for (p,) in c.execute("SELECT payload_json FROM events WHERE kind=? ORDER BY id", (REVIEW_EVENT,)):
+            r = json.loads(p)
+            reviews[r.get("quarantine_id")] = r         # the newest review applies
+        qs = [_reviewed(_from_payload(json.loads(p), eid), reviews.get(json.loads(p)["quarantine_id"]))
+              for eid, p in rows]
         return cls([q for q in qs if q.quarantine_id not in gone], [q for q in qs if q.quarantine_id in gone])
 
     @property
@@ -134,8 +155,63 @@ class QuarantineRegister:
         q = self.find(table, ident)
         return {"timestamp_suspect": q is not None, "quarantine_id": q.quarantine_id if q else None}
 
+    def get(self, quarantine_id: str) -> Quarantine | None:
+        return next((q for q in self.items if q.quarantine_id == quarantine_id), None)
+
     def view(self) -> list[dict]:
         return [q.view() for q in self.items]
+
+
+def _reviewed(q: Quarantine, r: dict | None) -> Quarantine:
+    if not r:
+        return q
+    return replace(q, disposition=r["disposition"], reviewed_by=r.get("reviewed_by"), reviewed_utc=r.get("reviewed_utc"),
+                   review_reason=r.get("reason"))
+
+
+def review_due(reg: QuarantineRegister, cutoff_utc: str) -> list[str]:
+    """Quarantines whose own time left the retention window while nobody reviewed them: their records
+    stay (they are never pruned by age alone) until an administrator decides KEEP or RELEASE."""
+    cut = datetime.fromisoformat(cutoff_utc)
+    return [q.quarantine_id for q in reg.items
+            if q.disposition == "UNREVIEWED" and datetime.fromisoformat(q.confirmed_utc) < cut]
+
+
+def review(hist, quarantine_id: str, disposition: str, *, actor: str, reason: str) -> Quarantine:
+    """Record an administrator's disposition of a quarantine's records (audited, kept as a register).
+    It deletes nothing itself: RELEASE only lets rolling retention remove the records once the quarantine's
+    time is older than the window, at a later scheduled run that is itself guarded by the retention
+    holds. KEEP keeps them until a later review."""
+    if disposition not in DISPOSITIONS:
+        raise ValueError(f"disposition must be one of {', '.join(DISPOSITIONS)}")
+    if not reason or not reason.strip():
+        raise ValueError("a review needs a reason (what was checked and why the records are kept or released)")
+
+    def op(c):
+        reg = QuarantineRegister.load(c)
+        q = reg.get(quarantine_id)
+        if q is None:                       # nothing written; reported to the caller below (never raised in
+            gone = any(x.quarantine_id == quarantine_id for x in reg.retired)     # the writer's transaction)
+            return None, ("was retired: its records are already gone" if gone else "does not exist")
+        now = utc_iso()
+        payload = {"quarantine_id": quarantine_id, "disposition": disposition, "previous": q.disposition,
+                   "reviewed_by": actor, "reviewed_utc": now, "reason": reason.strip(),
+                   "note": ("records stay until a later review" if disposition == "KEEP" else
+                            "rolling retention may remove these records once the quarantine time "
+                            f"({q.confirmed_utc}) is older than the window; nothing is deleted now")}
+        c.execute("INSERT INTO events(utc,kind,actor,session_id,payload_json) VALUES(?,?,?,?,?)",
+                  (now, REVIEW_EVENT, actor, hist.session_id, json.dumps(payload)))
+        hist.quarantines = QuarantineRegister.load(c)
+        return hist.quarantines.get(quarantine_id), None
+
+    try:
+        q, why = hist.submit(op, wait=True, timeout=120)
+    except Exception:
+        hist.reload_quarantines()      # a failed transaction leaves the register as stored
+        raise
+    if q is None:
+        raise LookupError(f"quarantine {quarantine_id} {why}")
+    return q
 
 
 def _from_payload(p: dict, event_id: int | None) -> Quarantine:

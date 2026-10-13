@@ -10,6 +10,11 @@ own scratch database under --out.
     python scripts/measure_storage.py --days 400 --out /tmp/aquacrop-measure            # 48 points
     python scripts/measure_storage.py --days 30 --inventory 24 --out /tmp/m24           # 24 points
     python scripts/measure_storage.py --days 7 --out /tmp/m --skip-drill                # quick, e.g. on the CM4
+    python scripts/measure_storage.py --days 400 --process-workload workload.json --out /tmp/mp   # OP-06
+
+`--process-workload` adds the events and controller commands of the process controllers at the
+rates measured on the simulated installation by `scripts/measure_process_workload.py` (sample
+payloads replayed, so row sizes are real), on top of the workload below.
 
 The report (report.json under --out) records the environment (Python, SQLite, OS, CPU, package
 versions, git commit, script checksum, command line and seed), the workload, the persistent database
@@ -174,6 +179,9 @@ class Workload:
         self.plan: dict[int, list] = {}
         self.faulted = False
         self.counts = {"commands": 0, "alarms_raised": 0, "device_faults": 0, "chatter_edges": 0}
+        self.proc = json.loads(Path(a.process_workload).read_text(encoding="utf-8")) if a.process_workload else None
+        if self.proc:
+            self.counts |= {"process_events": 0, "process_commands": 0}
 
     def plan_day(self, day: int) -> None:
         a, rng, plan = self.a, self.rng, {}
@@ -184,6 +192,14 @@ class Workload:
             plan.setdefault(m, []).append(("raise", target))
             plan.setdefault(m + rng.randint(1, 15), []).append(("ack", target))
             plan.setdefault(m + rng.randint(5, 60), []).append(("clear", target))
+        if self.proc:
+            for kind, k in self.proc["kinds"].items():
+                n = int(k["per_day"]) + (rng.random() < k["per_day"] % 1)
+                for i in range(n):
+                    plan.setdefault(rng.randrange(1440), []).append(("pevent", kind, i))
+            n = self.proc["commands_per_day"]
+            for _ in range(int(n) + (rng.random() < n % 1)):
+                plan.setdefault(rng.randrange(1440), []).append(("pcommand", rng.choice(self.do), rng.random() < 0.5))
         if a.fault_every_days and day % a.fault_every_days == a.fault_every_days - 1:
             m = rng.randrange(1440 - a.fault_minutes - 20)
             plan.setdefault(m, []).append(("fault_start",))
@@ -218,6 +234,23 @@ class Workload:
             self.h.event("DO_EDGE", {"point": str(point), "from": not desired, "to": desired, "origin": "REAL",
                                      "request_id": rid, "resolution_s": 3.0})
         self.counts["commands"] += 1
+
+    def _pevent(self, at, state, kind, i):
+        """A process event as the simulated installation wrote it (its DO/DI edges included)."""
+        smp = self.proc["kinds"][kind]["samples"]
+        self.h.event(kind, smp[i % len(smp)]["payload"], actor=smp[i % len(smp)]["actor"])
+        self.counts["process_events"] += 1
+
+    def _pcommand(self, at, state, point, desired):
+        """A controller command: durable intent and outcome (its DO_EDGE comes with the process events)."""
+        cmd = OutputCommand(new_id("cmd"), "controller", str(point), desired, self.cfg.config_version, None, at,
+                            at + timedelta(seconds=30), CommandOrigin.CONTROLLER, "measurement workload: process")
+        rec = CommandRecord(cmd, Outcome.ACCEPTED)
+        self.h.command_intent(rec)
+        rec.readback = desired
+        rec.advance(Outcome.READBACK_CONFIRMED, "coil readback matches the request (not actuator proof)")
+        self.h.command_outcome(rec)
+        self.counts["process_commands"] += 1
 
     def _raise(self, at, state, target):
         self.alarms.raise_or_update("MEASURE_HIGH", str(target), severity="WARNING", sim_s=None,
@@ -270,6 +303,9 @@ def main() -> None:
     ap.add_argument("--fault-every-days", type=int, default=7, help="0 = no device faults")
     ap.add_argument("--fault-minutes", type=int, default=30)
     ap.add_argument("--chatter-minutes", type=int, default=10)
+    ap.add_argument("--process-workload", default=None,
+                    help="JSON from scripts/measure_process_workload.py: add the process controllers' events and "
+                         "commands at the measured rates")
     ap.add_argument("--out", required=True)
     ap.add_argument("--skip-drill", action="store_true", help="skip the full restore drill")
     a = ap.parse_args()
@@ -297,6 +333,12 @@ def main() -> None:
                            "timeline_utc": [t0.isoformat(), (t0 + timedelta(minutes=n)).isoformat()],
                            "edges_per_digital_point_per_day": a.edges_per_digital_point_per_day,
                            "commands_per_day": a.commands_per_day, "alarms_per_day": a.alarms_per_day,
+                           "process_workload": None if not work.proc else {
+                               "file_sha256": hashlib.sha256(Path(a.process_workload).read_bytes()).hexdigest(),
+                               "simulated_hours": work.proc["simulated_hours"],
+                               "events_per_day": work.proc["events_per_day"],
+                               "commands_per_day": work.proc["commands_per_day"],
+                               "activity": work.proc["activity"]},
                            "device_fault": {"every_days": a.fault_every_days, "minutes": a.fault_minutes,
                                             "device": work.fault_device,
                                             "chatter_edges_per_fault": 20 * a.chatter_minutes},

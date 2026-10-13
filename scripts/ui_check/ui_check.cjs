@@ -234,6 +234,15 @@ async function main() {
   const n = rows(csv.join("\n"));
   check("UI-03 export", n > 0 && /# (COMPLETE|TRUNCATED)/.test(csv.slice(-3).join(" ")), `${n} data rows downloaded, completeness footer present`);
 
+  // OP-03: ranges up to a year; a year range renders with dated axis labels (aggregation itself, which needs a
+  // long history, is covered by tests/integration/test_api.py::test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete)
+  const range = p.locator("#v-trends label", { hasText: "Range" }).locator("select");
+  await range.selectOption("525600");
+  const dated = await until(p, async () => (await p.locator("#v-trends svg.chart text").allTextContents()).some(t => /\d{4}-\d{2}-\d{2}/.test(t)), 10000);
+  await shot(p, "trends-365-days");
+  check("OP-03 year range on the trends page", !!dated, "365 days selectable; the time axis shows dates");
+  await p.locator("#v-trends label", { hasText: "Range" }).locator("select").selectOption("30");
+
   // UI-05: no colour-only semantics: every pill/badge carries text
   await show(p, "alarms");
   const pills = await p.$$eval(".pill, .badge, .q", xs => xs.map(x => x.textContent.trim()));

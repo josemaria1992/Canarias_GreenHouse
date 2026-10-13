@@ -2,7 +2,8 @@
  * X axis is real timestamps. Lines break at invalid samples and where the server flags a gap
  * (missing cycles relative to the recorded cadence, run change, origin change); gaps are shaded. Digital series are steps in a lower band.
  * A series with `suspect: true` (records whose UTC stamps an administrator quarantined) is drawn dashed grey with hollow ring
- * markers on every point, so it can never be read as a trusted trace. */
+ * markers on every point, so it can never be read as a trusted trace. Long ranges arrive aggregated (one point per
+ * bucket); the caller draws the bucket mean solid and its min and max dashed in the same colour and says so in `note`. */
 "use strict";
 window.AqChart = (function () {
   const NS = "http://www.w3.org/2000/svg";
@@ -13,8 +14,12 @@ window.AqChart = (function () {
     if (parent) parent.appendChild(e);
     return e;
   }
-  function fmt(tz) {
-    return new Intl.DateTimeFormat("sv-SE", { timeZone: tz, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  function fmt(tz, spanMs) {
+    const day = 86400000;
+    const o = spanMs > 7 * day ? { year: "numeric", month: "2-digit", day: "2-digit" }
+      : spanMs > day ? { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+      : { hour: "2-digit", minute: "2-digit", second: "2-digit" };
+    return new Intl.DateTimeFormat("sv-SE", Object.assign({ timeZone: tz }, o));
   }
   function render(svg, opts) {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
@@ -38,17 +43,18 @@ window.AqChart = (function () {
       el("line", { x1: L, x2: W - R, y1: yy, y2: yy, class: "grid" }, svg);
       const tx = el("text", { x: L - 4, y: yy + 4, "text-anchor": "end" }, svg); tx.textContent = v.toFixed(Math.abs(vmax - vmin) < 10 ? 2 : 0);
     }
-    const f = fmt(opts.timezone || "Europe/Stockholm");
+    const f = fmt(opts.timezone || "Europe/Stockholm", t1 - t0);
     for (let i = 0; i <= 5; i++) {
       const t = t0 + (t1 - t0) * i / 5, xx = x(t);
       el("line", { x1: xx, x2: xx, y1: T, y2: H - B, class: "grid" }, svg);
-      const tx = el("text", { x: xx, y: H - B + 14, "text-anchor": "middle" }, svg); tx.textContent = f.format(new Date(t));
+      // the last label ends at the right edge so a dated label is never cut off
+      const tx = el("text", { x: xx, y: H - B + 14, "text-anchor": i === 5 ? "end" : "middle" }, svg); tx.textContent = f.format(new Date(t));
     }
     const tzn = new Intl.DateTimeFormat("en-GB", { timeZone: opts.timezone, timeZoneName: "short" }).formatToParts(new Date(t1)).find(p => p.type === "timeZoneName");
     const cap = el("text", { x: W - R, y: H - 4, "text-anchor": "end", class: "muted" }, svg);
     const anySuspect = opts.series.some(s => s.suspect && s.points.length);
     cap.textContent = `${opts.timezone} (${tzn ? tzn.value : ""}) — gaps shaded; lines never bridge missing/invalid data` +
-      (anySuspect ? "; dashed grey with rings = SUSPECT timestamps (quarantined)" : "");
+      (anySuspect ? "; dashed grey with rings = SUSPECT timestamps (quarantined)" : "") + (opts.note ? "; " + opts.note : "");
     el("line", { x1: L, x2: L, y1: T, y2: H - B, class: "axis" }, svg);
     el("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, class: "axis" }, svg);
     // series
@@ -90,5 +96,5 @@ window.AqChart = (function () {
     });
     return all.filter(s => !s.suspect || s.points.length).map(s => ({ name: s.name, color: s.color, suspect: !!s.suspect }));
   }
-  return { render };
+  return { render, COLORS };
 })();

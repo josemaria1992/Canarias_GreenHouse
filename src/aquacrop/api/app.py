@@ -31,6 +31,7 @@ from ..config.schema import InstallationConfig
 from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
 from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
+from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
@@ -202,6 +203,12 @@ class OffsitePolicyIn(Body):
 class QuarantineConfirmIn(Body):
     proposal_id: str = Field(min_length=16, max_length=16, pattern="^[0-9a-f]{16}$")   # from GET /api/history/quarantine
     clock_checked: bool          # the administrator checked the date and time against an independent source
+
+
+class QuarantineReviewIn(Body):
+    quarantine_id: str = Field(min_length=3, max_length=40, pattern="^q_[0-9a-f]{16}$")
+    disposition: Literal["KEEP", "RELEASE"]
+    reason: str = Field(min_length=3, max_length=500)
 
 
 def _escape_csv(v):
@@ -900,15 +907,36 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return [dict(r) | reg.flags("commands", r["seq"]) for r in rows]
 
     # ------------------------------------------------------------------ trends / export / analytics
+    trend_cache = TrendCache()       # final buckets of year-long charts (historian/trends.py)
+
     @app.get("/api/trends")
     def trends(p: Principal = Depends(require(Perm.READ)), points: str = Query(..., max_length=2000),
                start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000),
-               basis: str | None = Query(None, pattern="^(WALL|SIMULATION_TIME|LEGACY_UNKNOWN)$")):
-        # `basis` selects one series when the optional simulation-time recorder is also on.
+               basis: str | None = Query(None, pattern="^(WALL|SIMULATION_TIME|LEGACY_UNKNOWN)$"),
+               max_points: int = Query(2000, ge=100, le=20000)):
+        # `basis` selects one series when the optional simulation-time recorder is also on. A point with
+        # more than `max_points` samples in the range is answered aggregated (mean, min, max per bucket of
+        # 10 min, 1 h or 1 day: the smallest that fits), so a year-long chart covers the whole year; every
+        # sample stays available through the paged CSV export.
         s, e = _range(start, end)
         ids = [x for x in points.split(",") if x][:16]
-        series, truncated = {}, False
+        span = (datetime.fromisoformat(e) - datetime.fromisoformat(s)).total_seconds()
+        series, truncated, aggregated = {}, False, {}
+        reg = hist.quarantines
         for pid in ids:
+            n = hist.query("SELECT count(*) FROM samples WHERE point_id=? AND acquired_utc>=? AND acquired_utc<=?",
+                           (pid, s, e))[0][0] if not basis else \
+                hist.query("SELECT count(*) FROM samples s JOIN cycles c ON c.cycle_pk=s.cycle_pk AND c.cadence_basis=? "
+                           "WHERE s.point_id=? AND s.acquired_utc>=? AND s.acquired_utc<=?", (basis, pid, s, e))[0][0]
+            if n > max_points:
+                # buckets keep runs, recorders and suspect stamps apart; without `basis` they are drawn from
+                # the wall-clock snapshots only, so `samples` counts what the chart holds
+                level = trend_level(span, max_points)
+                series[pid] = trend_buckets(hist, pid, s, e, level, basis, cache=trend_cache)
+                aggregated[pid] = {"bucket": level[0], "bucket_s": level[1], "buckets": len(series[pid]),
+                                   "samples": sum(r[13] for r in series[pid]), "samples_in_range": n,
+                                   "cadence_basis": [basis] if basis else ["WALL", "LEGACY_UNKNOWN"]}
+                continue
             rows = hist.query("SELECT s.id, s.acquired_utc, s.value, s.raw_value, s.quality, s.origin, s.unit, s.sim_s, "
                               "s.sim_run_id, c.cadence_s, c.cadence_basis, c.cycle_id FROM samples s JOIN cycles c ON "
                               "c.cycle_pk=s.cycle_pk WHERE s.point_id=? AND s.acquired_utc>=? AND s.acquired_utc<=? "
@@ -916,7 +944,6 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                               (pid, s, e, basis, basis, limit + 1))
             truncated |= len(rows) > limit
             out, prev, prev_q = [], None, None
-            reg = hist.quarantines
             for r in rows[:limit]:
                 q = reg.find("samples", r["id"])
                 gap = False
@@ -933,7 +960,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         dt = (datetime.fromisoformat(r["acquired_utc"]) - datetime.fromisoformat(prev["acquired_utc"]))
                         gap = dt.total_seconds() > 2.5 * (r["cadence_s"] or cfg.historian.acquisition_interval_s)
                 out.append([r["acquired_utc"], r["value"], r["raw_value"], r["quality"], r["origin"], r["unit"],
-                            r["sim_s"], r["sim_run_id"], gap, q is not None, slot_clock_epoch(r["cycle_id"])])
+                            r["sim_s"], r["sim_run_id"], gap, q is not None, slot_clock_epoch(r["cycle_id"]),
+                            None, None, None, None])
                 prev, prev_q = r, q
             series[pid] = out
         ev = hist.query("SELECT utc, kind, actor FROM events WHERE utc>=? AND utc<=? AND kind IN "
@@ -941,8 +969,12 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         "'OVERRIDE_SET','ACTUATOR_FAULT','DEVICE_FAULT') ORDER BY utc LIMIT 2000", (s, e))
         return {"start": s, "end": e, "columns": ["acquired_utc", "value", "raw", "quality", "origin", "unit",
                                                   "sim_s", "sim_run_id", "gap_before", "timestamp_suspect",
-                                                  "clock_epoch"],
+                                                  "clock_epoch", "min", "max", "samples", "valid_samples"],
                 "series": series, "events": [list(x) for x in ev], "truncated": truncated, "limit": limit,
+                "aggregated": aggregated, "max_points": max_points,
+                "aggregation_note": "An aggregated point is a bucket starting at acquired_utc: value is the mean of "
+                                    "its GOOD or OVERRIDDEN samples, min and max their range; quality GOOD (all "
+                                    "samples valid), PARTIAL (some) or UNAVAILABLE (none). Every sample: the CSV export.",
                 "display_timezone": cfg.site.timezone}
 
     @app.get("/api/export.csv")
@@ -1153,10 +1185,12 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def quarantine_state(p: Principal = Depends(require(Perm.READ))):
         """Quarantines in force and, when records are stamped later than the current clock, the proposal
         an administrator can confirm. Read-only."""
-        from ..historian.quarantine import propose
+        from ..historian.quarantine import propose, review_due
         prop = hist.read(lambda c: propose(c, hist.quarantines, wall_s=time.time()))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=cfg.historian.retention_days)).isoformat()
         return {"clock_epoch": hist.quarantines.clock_epoch, "quarantines": hist.quarantines.view(),
-                "proposal": prop, "recorder": svc.recorder.health(), "retention_held": svc.retention.held}
+                "proposal": prop, "recorder": svc.recorder.health(), "retention_held": svc.retention.held,
+                "review_due": review_due(hist.quarantines, cutoff), "retention_days": cfg.historian.retention_days}
 
     @app.post("/api/history/quarantine")
     def quarantine_confirm(body: QuarantineConfirmIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
@@ -1174,6 +1208,20 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         svc.retention.hold_for_quarantine(q.quarantine_id)
         svc.recorder.rebase(f"timestamp quarantine {q.quarantine_id}")
         return {"quarantined": q.view(), "retention_held": svc.retention.held}
+
+    @app.post("/api/history/quarantine/review")
+    def quarantine_review(body: QuarantineReviewIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        """Administrator's audited disposition of a quarantine's records (brief §9): KEEP keeps them until a
+        later review; RELEASE lets rolling retention remove them once the quarantine's own time is older
+        than the window. Deletes nothing now, and does not release a retention hold."""
+        from ..historian.quarantine import review
+        try:
+            q = review(hist, body.quarantine_id, body.disposition, actor=p.username, reason=body.reason)
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"quarantine": q.view(), "retention_held": svc.retention.held}
 
     backup_job: dict = {"running": False, "last": None}
     backup_lock = threading.Lock()

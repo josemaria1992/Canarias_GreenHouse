@@ -1,4 +1,7 @@
-# Handover: AquaCrop platform 0.2.0.dev0 (2026-10-11; historian, quarantine, off-device backups and the installation model 2026-10-12)
+# Handover: AquaCrop platform 0.3.0, the pre-hardware release (2026-10-13)
+
+This release is software and simulation only. What is still needed before each physical step, item
+by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPTANCE.md`.
 
 ## What works (software, verified on a desktop)
 
@@ -53,6 +56,19 @@
   are read-only observation and every signal is UNBOUND until a mapping is approved.
   `scripts/ui_check/run_ui_check.py` repeats the owner walkthrough in headless Chromium.
 
+- **Release, installers and operations (2026-10-13, pre-hardware stage 4)**: a release ZIP with a
+  SHA-256 manifest, the wheel, offline wheelhouses for Windows and the CM4 and a machine-readable
+  acceptance manifest (`scripts/build_release.py`); a Windows demo launcher that prepares itself
+  offline, guides the first administrator and keeps its state between runs (`AquaCrop-Demo.cmd`,
+  `python -m aquacrop launch`); a guided CM4 installer with checksum verification, pre-upgrade
+  backup, atomic switch and rollback (`deploy/aquacrop-cm4.py`); access from home through the
+  owner's OpenVPN to a TLS proxy on the controller, with `aquacrop netcheck`
+  (`security/remote-access.md`); a review date for quarantined history, which is kept until an
+  administrator decides; year-long trend ranges drawn from per-bucket minimum, mean and maximum;
+  configuration records kept while history refers to them; a completion receipt next to every
+  cloud copy; and a rehearsed recovery on a replacement controller with only the escrowed keys
+  (`operations/offsite-backups.md` 8.1).
+
 ## What changed from v0.1
 
 All 12 findings in the brief were reproduced on the original code and are corrected (table in
@@ -61,16 +77,22 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-352 tests pass on Python 3.11, 3.12 and 3.13 (one of them runs the real rclone binary against a
-local encrypted remote; it is skipped where rclone is not installed and required on CI's Linux jobs). `demo verify` gives 21/21 on both demo fixtures and 42/42 on `installation-48`; the browser checks (`scripts/ui_check/`) pass in headless Chromium; and
-the installed wheel passes 16/16 from outside the repository. A simulated 400-day history at 60 s
-with commands, alarms and device faults measured the one-year size, the rolling window, the WAL,
-the compressed backup and the restore drill; a concurrency stress run measured the WAL and
-responsiveness during a backup, year-range reads and a retention catch-up (desktop figures).
-GitHub CI runs Ubuntu, Windows, macOS and ARM64 on every pull request. Item by item:
-`ACCEPTANCE.md`.
+375 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
+local encrypted remote: the round trip and the replacement-controller recovery; they are skipped where
+rclone is not installed and required on CI's Linux jobs. `demo verify` gives 21/21 on both demo
+fixtures and 42/42 on `installation-48`. The browser check (`scripts/ui_check/`) passes 55/55 in
+headless Chromium, and the wheel from the built release ZIP passes 16/16 from outside the
+repository. A simulated 400-day history at 60 s with the event and command rates of every process
+running in AUTO measured the one-year size, the WAL, the bytes written, the compressed backup and
+the restore drill (OP-06, desktop figures, `operations/measurements/2026-10-13-measurements.md`).
+GitHub CI runs Ubuntu, Windows, macOS and ARM64 on every pull request, builds the release ZIP, runs
+its Windows launcher offline and the CM4 installer from it in a staging root on ARM64. Item by
+item: `ACCEPTANCE.md`.
 
 ## Launch (desktop)
+
+From the release ZIP on Windows: double-click `AquaCrop-Demo.cmd` (`installation/desktop.md`). From a
+source checkout:
 
 ```text
 python3 -m venv .venv
@@ -90,7 +112,9 @@ Resolved on 2026-10-12: the repository is `github.com/josemaria1992/Canarias_Gre
 eMMC and SQLite database (ADR-0008).
 
 ADR-0008 (revised), ADR-0011 (timestamp quarantine) and ADR-0012 (SD card and OneDrive) were
-accepted by the owner on 2026-10-12 20:04 UTC.
+accepted by the owner on 2026-10-12 20:04 UTC. The pre-hardware brief of 2026-10-12 settled the
+installation (tanks, pumps, valves, channels, modules, AUTO alternation, pH by acid only, roles,
+OpenVPN); the full list of physical configuration still open is section 3 of `RELEASE_READINESS.md`.
 
 1. **Activate off-device backups**: the owner chose a 64 GB ext4 card, the shared folder
    `AQUACROP_DATOS_CANARIAS` (a colleague's personal OneDrive), a sealed printed key copy and the

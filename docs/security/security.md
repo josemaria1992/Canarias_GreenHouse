@@ -61,25 +61,13 @@ on each operator PC once. The internal CA renews leaf certificates automatically
 about ten years. Record its expiry. Restrict the proxy to the greenhouse LAN interface with the host
 firewall. Do not configure port forwarding on any router.
 
-### Remote access: Tailscale Serve (private), never Funnel
+### Remote access: your OpenVPN plus the TLS proxy
 
-```text
-sudo tailscale up                               # needs internet and a tailnet account, once
-sudo tailscale serve --bg http://127.0.0.1:8000   # https://<host>.<tailnet>.ts.net -> app
-tailscale serve status                          # must list only the tailnet HTTPS address
-tailscale funnel status                         # must show nothing. Funnel is public: never enable it
-```
-
-Restrict access in the tailnet policy to named users or a group. Example only; adapt to the
-tailnet's policy syntax and tags:
-
-```json
-{ "grants": [ { "src": ["group:aquacrop-operators"], "dst": ["tag:aquacrop"], "ip": ["443"] } ] }
-```
-
-Tailscale renews the HTTPS certificate itself. Tailscale availability is not needed for
-acquisition, simulation, history or local LAN sign-in; if the tailnet is down, use the LAN path
-above. Reference: <https://tailscale.com/docs/features/tailscale-serve>.
+The chosen route is the owner's existing OpenVPN into the greenhouse LAN, then the same TLS proxy as
+above, then the application's own sign-in: `remote-access.md` (setup, firewall, the
+`aquacrop netcheck` route test). VPN reachability never identifies a user or authorizes a command.
+Tailscale was an earlier option and is not used; the rules if it ever is are at the end of
+`remote-access.md` (never Funnel).
 
 ### Desktop demo
 

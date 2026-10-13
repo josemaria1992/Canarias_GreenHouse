@@ -12,14 +12,19 @@ recording. The server only reads the state files below and raises alarms from th
       journal.jsonl          append-only record of every outcome; the server copies it into events
       policy-confirmed.json  the copy policy an administrator confirmed (pruning runs only if it matches)
       drills/                restore-drill reports
+      receipts/              a completion receipt while it is being uploaded
       offsite.lock           one offsite operation at a time
 
 Daily backup: verify the card's identity (sdcard.py) -> consistent compressed backup with checksum and
 manifest written to the card and verified before publication (backup.create_backup; a failure leaves
 the earlier backups untouched) -> read back from the card and verified again -> queued for upload.
-Upload: rclone `copyto` of the backup and its manifest to the crypt remote, then `cryptcheck`; only a
-verified copy enters the ledger. Failures stay queued with exponential backoff; a success after a
-failure drains the rest of the queue at once (connectivity is back).
+Upload: rclone `copyto` of the backup and its manifest to the crypt remote, then `cryptcheck`, then a
+completion receipt (`aquacrop-<time>.receipt.json`: file, checksum, size, verification time), uploaded
+last and checked the same way. Only then does the copy enter the ledger. A copy without a receipt in
+the cloud was interrupted; it stays queued and the retry uploads it again. The receipt is what a
+replacement controller, which has no ledger, uses to choose a complete copy. Failures stay queued with
+exponential backoff; a success after a failure drains the rest of the queue at once (connectivity is
+back).
 
 Pruning never runs until an administrator confirmed the configured policy (7 local daily; 30 daily +
 12 monthly in the cloud, proposed). It never removes a backup still waiting for upload, a copy that is
@@ -42,6 +47,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .. import __version__
 from .backup import (BackupAborted, BackupFailed, BackupRefused, _sha256, _write_atomic, create_backup,
                      estimate_backup_bytes, list_backups, manifest_path, verify_backup)
 from .rclone import Rclone, RcloneError
@@ -82,6 +88,11 @@ def backup_time(name: str) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def receipt_name(name: str) -> str:
+    """aquacrop-<time>.sql.gz -> aquacrop-<time>.receipt.json"""
+    return (name[:-len(".sql.gz")] if name.endswith(".sql.gz") else name) + ".receipt.json"
 
 
 def select_keep(names: list[str], daily: int, monthly: int = 0) -> set[str]:
@@ -340,6 +351,7 @@ class Offsite:
                 self.rclone.upload(local, ent["name"])
                 self.rclone.upload(man, ent["manifest"])
                 self.rclone.cryptcheck(src, [ent["name"], ent["manifest"]])
+                rname = self._upload_receipt(ent, man)
             except RcloneError as e:
                 self._upload_failed(ent, e.code, str(e))
                 res["failed"].append(ent["name"])
@@ -347,7 +359,8 @@ class Offsite:
                     break
                 continue
             row = {k: ent[k] for k in ("name", "manifest", "sha256", "bytes", "created_utc", "source_db_used_bytes",
-                                       "schema_version")} | {"uploaded_utc": _iso(self.now()), "verified": "cryptcheck"}
+                                       "schema_version")} | {"uploaded_utc": _iso(self.now()), "verified": "cryptcheck",
+                                                             "receipt": rname}
             ledger = [r for r in self.store.ledger() if r["name"] != ent["name"]] + [row]
             self.store.save_ledger(ledger)
             self.store.drop_queue(ent["name"])
@@ -362,6 +375,21 @@ class Offsite:
             last |= {"code": failed["last_code"], "error": failed["last_error"]}
         self.store.update_status(last_upload=last, cloud=self._cloud_view())
         return res
+
+    def _upload_receipt(self, ent: dict, man: Path) -> str:
+        """Upload the completion receipt last, after both files passed cryptcheck, and check it too."""
+        rname = receipt_name(ent["name"])
+        rdir = self.store.dir / "receipts"
+        rdir.mkdir(parents=True, exist_ok=True)
+        rec = {"receipt": 1, "file": ent["name"], "sha256": ent["sha256"], "bytes": ent["bytes"],
+               "manifest": ent["manifest"], "manifest_sha256": _sha256(man), "created_utc": ent.get("created_utc"),
+               "schema_version": ent.get("schema_version"), "verified": "cryptcheck",
+               "verified_utc": _iso(self.now()), "config_id": self.cfg.config_id, "software": __version__}
+        _write_atomic(rdir / rname, json.dumps(rec, indent=2))
+        self.rclone.upload(rdir / rname, rname)
+        self.rclone.cryptcheck(rdir, [rname])
+        (rdir / rname).unlink(missing_ok=True)
+        return rname
 
     def _upload_failed(self, ent: dict, code: str, error: str) -> None:
         c = self.s.cloud
@@ -401,6 +429,8 @@ class Offsite:
             present = {e["name"] for e in listing}
             out["cloud"]["missing_in_cloud"] = [n for n in led if n not in present]
             out["cloud"]["not_in_ledger"] = sorted(n for n in present if n.endswith(".sql.gz") and n not in set(led))
+            out["cloud"]["without_receipt"] = sorted(n for n in present if n.endswith(".sql.gz")
+                                                     and receipt_name(n) not in present)
         newest = max([t for n in names_local + led if (t := backup_time(n))], default=None)
         if newest is not None and newest.timestamp() > self.now() + FUTURE_SLACK_S:
             out["refused"] = (f"a backup is named {newest.isoformat()}, later than the clock "
@@ -438,6 +468,9 @@ class Offsite:
             led = {r["name"]: r for r in self.store.ledger()}
             for n in p["cloud"]["delete"]:
                 try:
+                    rn = led[n].get("receipt")
+                    if rn and rn in present:          # first: a half-removed copy never looks complete
+                        self.rclone.delete(rn)
                     if n in present:
                         self.rclone.delete(n)
                     if led[n]["manifest"] in present:
@@ -505,6 +538,11 @@ class Offsite:
             man = json.loads((run / src["manifest"]).read_text(encoding="utf-8"))
             report["download_seconds"] = round(time.monotonic() - t0, 1)
             report["checksum_ok"] = got == src["sha256"] == man.get("sha256")
+            if src.get("receipt"):
+                self.rclone.download(src["receipt"], run / src["receipt"])
+                rec = json.loads((run / src["receipt"]).read_text(encoding="utf-8"))
+                report["receipt_ok"] = rec.get("file") == src["name"] and rec.get("sha256") == src["sha256"]
+                report["checksum_ok"] = report["checksum_ok"] and report["receipt_ok"]
             if not report["checksum_ok"]:
                 raise BackupFailed("the downloaded copy does not match the checksum recorded at upload")
             v = verify_backup(local, full=True, scratch_dir=run, scratch_reserve_bytes=d.headroom_bytes,

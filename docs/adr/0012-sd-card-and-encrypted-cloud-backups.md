@@ -76,7 +76,12 @@ untouched. A verified backup is queued for upload.
   no `sync`, `bisync`, `move` or `purge`, so nothing local (an empty card, a pruned copy) can delete
   cloud data by mirroring.
 - Verification: `rclone cryptcheck --one-way` of both files against the local ones, through the
-  provider's checksums. Only then does the copy enter the ledger and leave the queue.
+  provider's checksums. Then a completion receipt (`aquacrop-<time>.receipt.json`: file, SHA-256,
+  size, manifest checksum, verification time, configuration id, software version) is uploaded last
+  and checked the same way. Only then does the copy enter the ledger and leave the queue. A copy
+  without a receipt was cut off; the retry uploads it again (`copyto` is idempotent). Pruning removes
+  the receipt first. The receipt lets a replacement controller, which has no ledger, choose a
+  complete copy (stage 4 of the pre-hardware release; `offsite-backups.md` section 8.1).
 - Failures stay queued with exponential backoff (5 min doubling to 1 h); the upload timer runs every
   15 min. "Not now" failures (offline, authorization, card missing) stop the batch; the first success
   after a failure drains the queue in the same run. Queue entries are files, so they survive restarts

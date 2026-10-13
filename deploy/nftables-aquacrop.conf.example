@@ -1,0 +1,26 @@
+# Host firewall for the AquaCrop controller (example; fill in your subnets and load it deliberately).
+# Install: sudo cp deploy/nftables-aquacrop.conf.example /etc/nftables.conf, edit, `sudo nft -c -f
+# /etc/nftables.conf` to check, then `sudo systemctl enable --now nftables`. Keep a console or a second
+# SSH session open while you apply it. The application itself listens on 127.0.0.1:8000 only.
+flush ruleset
+
+define GREENHOUSE_LAN = 192.168.50.0/24     # example only: the greenhouse LAN
+define VPN_CLIENTS    = 10.8.0.0/24         # example only: the OpenVPN client subnet
+define ADMIN_NETS     = { 192.168.50.0/24, 10.8.0.0/24 }   # where SSH is allowed from
+
+table inet aquacrop {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif lo accept
+    ct state established,related accept
+    ct state invalid drop
+    ip protocol icmp accept
+    ip6 nexthdr icmpv6 accept
+    ip saddr $ADMIN_NETS tcp dport 22 accept
+    ip saddr { $GREENHOUSE_LAN, $VPN_CLIENTS } tcp dport 443 accept   # the TLS proxy (Caddy)
+    # no rule for 80 or 8000: plain HTTP is never reachable from the network
+  }
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+}

@@ -38,6 +38,7 @@ from aquacrop.historian.backup import BackupAborted, BackupFailed, BackupRefused
 from aquacrop.historian.recording import complete_snapshot  # noqa: E402
 from aquacrop.historian.retention import (PRUNE_MAX_TRANSACTIONS_PER_RUN, evaluate_storage_alarm,  # noqa: E402
                                           prune_expired)
+from aquacrop.historian.trends import trend_buckets, trend_level  # noqa: E402
 from aquacrop.historian.writer import Historian  # noqa: E402
 from aquacrop.io.sampling import AcqContext, make_sample  # noqa: E402
 
@@ -244,6 +245,15 @@ class Stress:
                                 "s.acquired_utc<=? AND (? IS NULL OR c.cadence_basis=?) ORDER BY s.acquired_utc "
                                 "LIMIT ?", (pid, s, e, None, None, 20001)))
         out["trend_year_16_points"] = {"seconds": round(time.perf_counter() - tic, 2), "rows": rows}
+        self.mark("year-range chart, aggregated as /api/trends draws it (16 points, daily mean/min/max)")
+        tic = time.perf_counter()
+        level, rows, samples = trend_level(365 * 86400, 2000), 0, 0
+        for pid in ids:
+            b = trend_buckets(h, pid, s, e, level)
+            rows += len(b)
+            samples += sum(r[13] for r in b)
+        out["trend_year_16_points_aggregated"] = {"seconds": round(time.perf_counter() - tic, 2), "buckets": rows,
+                                                  "samples_read": samples, "bucket": level[0]}
         self.mark("year-range CSV export page (API cap 200 000 rows)")
         tic = time.perf_counter()
         rows = len(h.query("SELECT id, acquired_utc, point_id, raw_value, raw_type, raw_unit, value, unit, quality, "

@@ -525,3 +525,44 @@ def test_stale_sample_replace_keeps_traceability(cfg24):
     di = next(x for x in out if x.point_id == "relay_A.DI1")
     assert di.quality == Quality.STALE and di.sequence == s.sequence and di.last_good_value is True
     assert len(out) == len(cfg24.all_points())
+
+
+def test_op01_three_60_s_snapshots_of_the_installation_are_144_observations(tmp_path):
+    """OP-01: on the 48-point installation, three scheduled 60 s snapshots are 144 observations: every
+    point in every snapshot, unchanged values repeated and points with no reading recorded as such. The
+    300 s option is not the default and does not change how fast acquisition and control run."""
+    from aquacrop.config import load_config
+    from tests.conftest import ROOT
+    cfg = load_config(ROOT / "configs" / "installation-48.yaml")
+    assert cfg.historian.recording_interval_s == 60 and len(cfg.all_points()) == 48
+    ticks = {}
+    for interval in (60, 300):
+        c = cfg.model_copy(update={"historian": cfg.historian.model_copy(update={"recording_interval_s": interval})})
+        clk = Clock(LABEL - 0.25)                   # 10:00:00 is a minute and a five-minute boundary
+        h, svc = _service(tmp_path / f"i{interval}.sqlite3", c, "s", clk)
+        svc.runtime.apply("DEVICE_FAULT", "test", {"device_uid": "analog_B", "fault": "TIMEOUT"})   # no readings
+        _run(svc, clk, 120.5)
+        h.wait_idle()
+        ticks[interval] = svc.runtime.tick
+        cycles = h.query("SELECT cycle_pk, n_points FROM cycles ORDER BY cycle_pk")
+        if interval == 300:
+            assert len(cycles) == 1
+            h.close()
+            continue
+        assert len(cycles) == 3 and all(r["n_points"] == 48 for r in cycles)
+        rows = h.query("SELECT cycle_pk, point_id, quality, value FROM samples")
+        assert len(rows) == 144
+        per = {}
+        for r in rows:
+            per.setdefault(r["cycle_pk"], set()).add(r["point_id"])
+        assert all(len(p) == 48 for p in per.values())
+        by_point = {}
+        for r in rows:
+            by_point.setdefault(r["point_id"], []).append((r["quality"], r["value"]))
+        unchanged = [p for p, v in by_point.items() if len({x[1] for x in v}) == 1 and v[0][0] == "GOOD"]
+        no_reading = [p for p, v in by_point.items() if all(x[0] != "GOOD" for x in v)]
+        assert unchanged and sorted(no_reading) == [f"analog_B.AI{i}" for i in range(1, 9)]
+        assert {q for q, _ in by_point["analog_B.AI1"]} == {"UNAVAILABLE"}
+        assert all(len(v) == 3 for v in by_point.values())
+        h.close()
+    assert ticks[60] == ticks[300] > 0                # control advanced the same with either interval

@@ -243,6 +243,32 @@
   function susPill(r) {
     return r && r.timestamp_suspect ? [" ", h("span", { class: "pill warn", title: `stored time unchanged; quarantined by ${r.quarantine_id}` }, "SUSPECT TIME")] : null;
   }
+  // One quarantine and its disposition review (brief §9): quarantined records are never pruned by age alone.
+  // KEEP keeps them; RELEASE lets retention remove them once the quarantine itself is older than the window.
+  function quarantineRow(x, due, days) {
+    const disp = x.disposition || "UNREVIEWED";
+    const state = disp === "KEEP" ? pill("KEPT", "ok") : disp === "RELEASE" ? pill("RELEASED TO RETENTION", "warn")
+      : due ? pill("REVIEW DUE", "bad") : pill("NOT REVIEWED", "warn");
+    const kids = [h("p", null, h("strong", null, x.quarantine_id), " ", state, " ", h("span", { class: "muted" },
+      `epoch ${x.clock_epoch}, confirmed by ${x.confirmed_by} at ${fmtTime(x.confirmed_utc)}; ids ` +
+      Object.entries(x.ranges).map(([t, r]) => `${t} ${r[0]}–${r[1]}`).join(", ") + ". Records kept with their original stamps."))];
+    if (x.reviewed_by) kids.push(h("p", { class: "muted" }, `Reviewed ${disp} by ${x.reviewed_by} at ${fmtTime(x.reviewed_utc)}: ${x.review_reason || ""}`));
+    else kids.push(h("p", { class: "muted" }, due ? `The quarantine is older than the ${days}-day window; its records stay until an administrator decides.`
+      : `Its records are not removed by age until an administrator reviews them.`));
+    if (can("config_admin")) {
+      const reason = h("input", { type: "text", maxlength: "500", placeholder: "what was checked, and why", "aria-label": `Review reason for ${x.quarantine_id}` });
+      const send = (d, ok) => async () => {
+        if (!reason.value.trim()) { toast("Write the reason for this review first.", "bad"); return; }
+        const res = await act("POST", "/api/history/quarantine/review", { quarantine_id: x.quarantine_id, disposition: d, reason: reason.value.trim() }, ok);
+        if (res) { S.settingsLoaded = false; VIEWS.settings(); }
+      };
+      kids.push(h("div", { class: "row" }, reason,
+        h("button", { class: "cmd small", onclick: send("KEEP", "records kept until a later review") }, "Keep records"),
+        h("button", { class: "cmd small", onclick: send("RELEASE", `records leave with the rolling ${days}-day window, counted from the quarantine time`) }, "Release to retention")),
+        h("p", { class: "muted" }, "Neither choice deletes anything now or releases a retention hold."));
+    }
+    return h("div", { class: "subcard" }, ...kids);
+  }
   function quarantineCard(q) {
     if (!q) return h("div", { class: "card" }, h("h2", null, "Clock and timestamps"), h("p", { class: "muted" }, "Timestamp state unavailable."));
     const prop = q.proposal || {}, rec = q.recorder || {};
@@ -250,9 +276,7 @@
       h("dt", null, "Clock epoch"), h("dd", null, String(q.clock_epoch), q.clock_epoch ? h("span", { class: "muted" }, " (snapshot ids carry /e" + q.clock_epoch + "/)") : null),
       h("dt", null, "Recorder"), h("dd", null, rec.clock_behind ? [pill("WAITING: stored snapshots are later than the clock", "bad"), h("div", { class: "muted" }, `since ${fmtTime(rec.clock_behind.since_utc)}; newest stored ${fmtTime(rec.clock_behind.newest_label_utc)}`)] : pill(rec.state === "RUNNING" ? "recording" : (rec.state || "unknown"), rec.state === "RUNNING" ? "ok" : "warn")),
       h("dt", null, "Quarantines"), h("dd", null, q.quarantines.length ? `${q.quarantines.length} in force` : "none"))];
-    q.quarantines.slice().reverse().forEach(x => kids.push(h("p", { class: "muted" },
-      `${x.quarantine_id}: epoch ${x.clock_epoch}, confirmed by ${x.confirmed_by} at ${fmtTime(x.confirmed_utc)}; ids ` +
-      Object.entries(x.ranges).map(([t, r]) => `${t} ${r[0]}–${r[1]}`).join(", ") + ". Records kept with their original stamps.")));
+    q.quarantines.slice().reverse().forEach(x => kids.push(quarantineRow(x, (q.review_due || []).includes(x.quarantine_id), q.retention_days)));
     if (prop.needed) {
       kids.push(h("h3", null, "Records stamped later than the clock"),
         h("p", null, `The clock reads ${fmtTime(prop.wall_utc)} (${S.tz}).`),
@@ -692,50 +716,84 @@
   // ------------------------------------------------ trends
   VIEWS.trends = async function () {
     if (!S.allPoints) { const d = await api("GET", "/api/points"); S.allPoints = d.devices.flatMap(g => g.points); }
-    const end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000);
+    // ranges over a day are drawn from buckets of an hour or more: fetched again once a minute, not every refresh
+    const key = S.trendSel.join(",") + "|" + S.trendMin, f = S.trendFetch;
+    let end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000), tr;
+    if (S.trendMin > 1440 && f && f.key === key && end - f.end < 60000) ({ start, end, tr } = f);
     const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
-    const tr = await api("GET", "/api/trends?" + q);
+    if (!tr) { tr = await api("GET", "/api/trends?" + q); S.trendFetch = { key, start, end, tr }; }
     const series = trendSeries(tr, S.trendSel, pid => ({ kind: (S.allPoints.find(p => p.id === pid) || {}).kind }));
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");
     const picker = h("select", { multiple: true, size: 8 }, S.allPoints.map(p => h("option", { value: p.id, selected: S.trendSel.includes(p.id) }, `${p.id}${p.label ? " — " + p.label : ""}`)));
     picker.addEventListener("change", () => { S.trendSel = Array.from(picker.selectedOptions).map(o => o.value).slice(0, 8); refresh(); });
-    const rng = h("select", null, [5, 10, 30, 120, 720].map(m => h("option", { value: m, selected: m === S.trendMin }, m + " min")));
+    const ranges = [[5, "5 min"], [10, "10 min"], [30, "30 min"], [120, "2 h"], [720, "12 h"], [1440, "1 day"], [10080, "7 days"],
+      [43200, "30 days"], [129600, "90 days"], [525600, "365 days"]];
+    const rng = h("select", null, ranges.map(([m, l]) => h("option", { value: m, selected: m === S.trendMin }, l)));
     rng.addEventListener("change", () => { S.trendMin = Number(rng.value); refresh(); });
-    const an = await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()));
+    // the analytics estimate reads every sample: only for ranges up to a day
+    const an = S.trendMin <= 1440 ? await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()))
+      : { estimates: {}, note: "Runtime and volume estimates are shown for ranges up to one day." };
+    const agg = Object.entries(tr.aggregated || {});
+    const aggNote = agg.length ? `aggregated: one point per ${agg[0][1].bucket}, solid = mean, dashed = min and max` : "";
     const legend = h("div", { class: "legend" });
     mount("v-trends",
       h("div", { class: "card" }, h("div", { class: "row" }, h("label", null, "Points (max 8)", picker), h("label", null, "Range", rng),
         h("a", { href: "/api/export.csv?" + q, download: "aquacrop-samples.csv" }, "Export CSV (complete, paginated)")),
-        svg, legend, tr.truncated ? h("p", { class: "error" }, `Truncated at ${tr.limit} rows per point — narrow the range.`) : null),
+        svg, legend, tr.truncated ? h("p", { class: "error" }, `Truncated at ${tr.limit} rows per point — narrow the range.`) : null,
+        agg.length ? h("p", { class: "muted", id: "trend-aggregation" }, `Aggregated: ${agg.map(([pid, a]) => `${pid} ${a.samples} samples in ${a.buckets} buckets of ${a.bucket}${a.samples_in_range > a.samples ? ` (${a.samples_in_range - a.samples} simulation-time recorder samples not drawn)` : ""}`).join("; ")}. `,
+          "Each point is the mean of the valid samples in its bucket; the dashed lines are their minimum and maximum. The CSV export has every sample.") : null),
       h("div", { class: "card" }, h("h3", null, "Runtime / volume estimates (from sampled history; coverage disclosed)"),
         h("table", null, h("thead", null, h("tr", null, ["Signal", "Kind", "Origin", "Estimate", "Coverage"].map(x => h("th", null, x)))),
           h("tbody", null, Object.entries(an.estimates).flatMap(([sig, e]) => Object.entries(e.by_origin).map(([o, v]) =>
             h("tr", null, h("td", null, sig), h("td", null, e.kind), h("td", null, oBadge(o)), h("td", null, num(v.estimate, 2)), h("td", null, (v.coverage * 100).toFixed(0) + " %")))))),
         h("p", { class: "muted" }, an.note)));
-    const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz });
+    const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz, note: aggNote });
     legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
   };
 
   /** Chart series from an /api/trends answer. Records whose stamps an administrator quarantined are split into
    * their own dashed grey series; neither half draws a line across the other, so a suspect stamp never joins a
-   * trusted trace. `metaOf(pid)` gives { kind: "AI" | other, label }. */
+   * trusted trace. An aggregated point (`tr.aggregated[pid]`) is a bucket: its mean is drawn solid and its min and
+   * max dashed in the same colour; a digital point shows ON when it was ON at any time in the bucket.
+   * `metaOf(pid)` gives { kind: "AI" | other, label }. */
   function trendSeries(tr, pids, metaOf) {
-    const iSus = tr.columns.indexOf("timestamp_suspect"), tag = isReal() ? "REAL" : "SIM";
-    return pids.flatMap(pid => {
-      const meta = metaOf(pid), rows = tr.series[pid] || [];
-      const trusted = [], suspect = [];
-      rows.forEach((r, i) => {
-        const sus = iSus >= 0 && !!r[iSus], t = Date.parse(r[0]), own = sus ? suspect : trusted;
-        // The server flags a gap between neighbouring rows of the merged list; where the other kind sits
-        // in between (same stamps can interleave), each half breaks only on a missed snapshot of its own.
-        const switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
-        const gap = switched ? (own.length === 0 || t - own[own.length - 1][0] > 150000) : !!r[8];
-        own.push([t, r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", gap]);
-      });
+    const col = n => tr.columns.indexOf(n), iSus = col("timestamp_suspect"), iMin = col("min"), iMax = col("max");
+    const tag = isReal() ? "REAL" : "SIM";
+    return pids.flatMap((pid, k) => {
+      const meta = metaOf(pid), rows = tr.series[pid] || [], agg = (tr.aggregated || {})[pid];
+      const digital = meta.kind !== "AI", color = AqChart.COLORS[k % AqChart.COLORS.length];
+      const split = vi => {
+        const trusted = [], suspect = [];
+        rows.forEach((r, i) => {
+          const sus = iSus >= 0 && !!r[iSus], t = Date.parse(r[0]), own = sus ? suspect : trusted;
+          // The server flags a gap between neighbouring rows of the merged list; where the other kind sits
+          // in between (same stamps can interleave), each half breaks only on a missed snapshot (or bucket) of its own.
+          const switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
+          const step = agg ? 1.5 * agg.bucket_s * 1000 : 150000;
+          const gap = switched ? (own.length === 0 || t - own[own.length - 1][0] > step) : !!r[8];
+          const v = r[vi];
+          const ok = agg ? r[3] === "GOOD" || r[3] === "PARTIAL" : r[3] === "GOOD" || r[3] === "OVERRIDDEN";
+          own.push([t, v == null ? null : (digital ? v > 0.5 : v), ok, gap]);
+        });
+        return [trusted, suspect];
+      };
       const unit = rows.map(r => r[5]).find(u => u) || "", name = `${meta.label || pid}${unit ? " [" + unit + "]" : ""} (${tag})`;
-      return [{ name, digital: meta.kind !== "AI", points: trusted, dashed: false },
-        { name: name + " SUSPECT timestamps (quarantined)", digital: meta.kind !== "AI", points: suspect, suspect: true }];
+      if (!agg) {
+        const [trusted, suspect] = split(1);
+        return [{ name, digital, points: trusted, dashed: false, color },
+          { name: name + " SUSPECT timestamps (quarantined)", digital, points: suspect, suspect: true }];
+      }
+      if (digital) {
+        const [trusted, suspect] = split(iMax);
+        return [{ name: `${name}, ON at any time per ${agg.bucket}`, digital, points: trusted, color },
+          { name: name + " SUSPECT timestamps (quarantined)", digital, points: suspect, suspect: true }];
+      }
+      const [mean, sMean] = split(1), [lo] = split(iMin), [hi] = split(iMax);
+      return [{ name: `${name}, mean per ${agg.bucket}`, digital, points: mean, color },
+        { name: `${name}, min`, digital, points: lo, dashed: true, color },
+        { name: `${name}, max`, digital, points: hi, dashed: true, color },
+        { name: name + " SUSPECT timestamps (quarantined)", digital, points: sMean, suspect: true }];
     });
   }
 

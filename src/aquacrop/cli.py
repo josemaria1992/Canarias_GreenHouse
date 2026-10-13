@@ -105,7 +105,7 @@ def cmd_serve(args) -> int:
         loop = args.host == "localhost"
     if not loop and not args.behind_tls_proxy:
         print("refusing to bind a non-loopback interface over plain HTTP. Bind 127.0.0.1 and publish through the "
-              "documented TLS reverse proxy (or Tailscale Serve), then pass --behind-tls-proxy.", file=sys.stderr)
+              "documented TLS reverse proxy (docs/security/remote-access.md), then pass --behind-tls-proxy.", file=sys.stderr)
         return 2
     if cfg.profile.value not in ("SIMULATED", "HARDWARE_READ_ONLY"):
         print(f"profile {cfg.profile.value} is not served by this release", file=sys.stderr)
@@ -643,6 +643,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     from .drivers.diagnostics import add_parser as add_diag   # light: pymodbus loads only when run
     add_diag(sub)
+    from .launcher import add_parser as add_launch
+    add_launch(sub)
+    from .netcheck import add_parser as add_netcheck
+    add_netcheck(sub)
     return p
 
 

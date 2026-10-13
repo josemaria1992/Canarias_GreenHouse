@@ -9,8 +9,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import aquacrop.historian.writer as writer_mod
-from aquacrop.historian.quarantine import QUARANTINE_EVENT, RETIRED_EVENT, QuarantineMismatch, confirm, propose
-from aquacrop.historian.retention import prune_expired
+from aquacrop.historian.quarantine import (QUARANTINE_EVENT, RETIRED_EVENT, REVIEW_EVENT, Quarantine,
+                                           QuarantineMismatch, QuarantineRegister, confirm, propose, review)
+from aquacrop.historian.retention import RetentionTask, prune_expired
 from aquacrop.historian.writer import Historian, newest_wall_label
 
 T0 = datetime(2026, 10, 12, 10, 0, tzinfo=timezone.utc).timestamp()
@@ -147,11 +148,32 @@ def test_forward_step_then_correction_quarantine_restart_and_retention(tmp_path,
     left = {r[0] for r in h.query("SELECT cycle_pk FROM cycles")}
     assert not left & set(pks[:3])                             # trusted rows older than the window went
     assert set(pks[3:8]) <= left                               # quarantined rows stay: the quarantine is younger
+    # age alone never removes quarantined records: they wait for an administrator's disposition review
+    res = prune_expired(h, now=qtime + timedelta(days=365, minutes=1))
+    assert res["quarantines_review_due"] == [q.quarantine_id]
+    assert set(pks[3:8]) <= {r[0] for r in h.query("SELECT cycle_pk FROM cycles")}
+    with pytest.raises(ValueError):
+        review(h, q.quarantine_id, "DELETE", actor="admin1", reason="checked")
+    with pytest.raises(ValueError):
+        review(h, q.quarantine_id, "KEEP", actor="admin1", reason="  ")
+    with pytest.raises(LookupError):
+        review(h, "q_" + "0" * 16, "KEEP", actor="admin1", reason="checked")
+    assert h.health["ok"]                                  # a refused review never fails the writer
+    assert review(h, q.quarantine_id, "KEEP", actor="admin1", reason="kept for the clock investigation").disposition \
+        == "KEEP"
+    res = prune_expired(h, now=qtime + timedelta(days=365, minutes=1))
+    assert "quarantines_review_due" not in res and set(pks[3:8]) <= {r[0] for r in h.query("SELECT cycle_pk FROM cycles")}
+    rel = review(h, q.quarantine_id, "RELEASE", actor="admin2", reason="investigation closed")
+    assert rel.disposition == "RELEASE" and rel.reviewed_by == "admin2"
+    assert set(pks[3:8]) <= {r[0] for r in h.query("SELECT cycle_pk FROM cycles")}   # a review deletes nothing
+    assert [json.loads(r[0])["disposition"] for r in h.query(
+        "SELECT payload_json FROM events WHERE kind=? ORDER BY id", (REVIEW_EVENT,))] == ["KEEP", "RELEASE"]
     prune_expired(h, now=qtime + timedelta(days=365, minutes=1))
     left = {r[0] for r in h.query("SELECT cycle_pk FROM cycles")}
     assert not left & set(pks[3:8])    # gone a year after the quarantine, not a year after their (future) stamps
     assert h.query("SELECT count(*) FROM samples WHERE id BETWEEN ? AND ?", tuple(prop["ranges"]["samples"]))[0][0] == 0
     assert h.query("SELECT count(*) FROM events WHERE kind=?", (QUARANTINE_EVENT,))[0][0] == 1   # register kept
+    assert h.query("SELECT count(*) FROM events WHERE kind=?", (REVIEW_EVENT,))[0][0] == 2       # and its reviews
     # the purged quarantine is retired: its id ranges stop applying (SQLite may hand those ids out again)
     assert json.loads(h.query("SELECT payload_json FROM events WHERE kind=?", (RETIRED_EVENT,))[0][0])[
         "quarantine_id"] == q.quarantine_id
@@ -342,3 +364,53 @@ def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_p
         row = app.state.hist.query("SELECT acquired_utc, value FROM samples WHERE point_id='analog_A.AI1' "
                                    "AND session_id='earlier'")[0]
         assert row[0] == ts and row[1] == 4.5
+        # disposition review: administrators only, audited, deletes nothing
+        qid = c.get("/api/history/quarantine").json()["quarantines"][0]["quarantine_id"]
+        rv = {"quarantine_id": qid, "disposition": "KEEP", "reason": "checked against the site log"}
+        assert c.post("/api/history/quarantine/review", json=rv, headers=op_h).status_code == 403
+        assert c.post("/api/history/quarantine/review", json=rv | {"disposition": "DELETE"}, headers=adm).status_code == 422
+        assert c.post("/api/history/quarantine/review", json=rv | {"reason": ""}, headers=adm).status_code == 422
+        assert c.post("/api/history/quarantine/review", json=rv | {"quarantine_id": "q_" + "0" * 16},
+                      headers=adm).status_code == 409
+        r = c.post("/api/history/quarantine/review", json=rv, headers=adm)
+        assert r.status_code == 200 and r.json()["quarantine"]["disposition"] == "KEEP"
+        st = c.get("/api/history/quarantine").json()
+        assert st["quarantines"][0]["reviewed_by"] == "admin1" and st["review_due"] == []
+        assert app.state.hist.query("SELECT count(*) FROM samples WHERE session_id='earlier'")[0][0] == 1
+
+
+class _Alarms:
+    def __init__(self):
+        self.active = {}
+
+    def raise_or_update(self, rule, target, **kw):
+        self.active[rule] = kw.get("message")
+
+    def clear(self, rule, target):
+        self.active.pop(rule, None)
+
+
+def test_unreviewed_quarantine_older_than_the_window_raises_review_due(tmp_path, cfg24):
+    import time
+    from dataclasses import replace
+    h = Historian(tmp_path / "r.sqlite3", cfg24, "s1")
+    old = (datetime.now(timezone.utc) - timedelta(days=cfg24.historian.retention_days + 30)).isoformat()
+    q = Quarantine("q_" + "a" * 16, 1, {"cycles": (1, 2)}, frozenset(), frozenset(), old, "admin1")
+    task, al = RetentionTask(h), _Alarms()
+    try:
+        h.quarantines = QuarantineRegister([q])
+        task.tick(al)
+        assert "HISTORY_QUARANTINE_REVIEW_DUE" in al.active and q.quarantine_id in al.active[
+            "HISTORY_QUARANTINE_REVIEW_DUE"]
+        h.quarantines = QuarantineRegister([replace(q, disposition="KEEP")])
+        task.tick(al)
+        assert "HISTORY_QUARANTINE_REVIEW_DUE" not in al.active
+        young = replace(q, confirmed_utc=datetime.now(timezone.utc).isoformat())
+        h.quarantines = QuarantineRegister([young])
+        task.tick(al)
+        assert "HISTORY_QUARANTINE_REVIEW_DUE" not in al.active      # not due while inside the window
+    finally:
+        end = time.monotonic() + 30
+        while task.running and time.monotonic() < end:
+            time.sleep(0.05)
+        h.close()
