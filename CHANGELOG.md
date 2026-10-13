@@ -148,6 +148,19 @@ Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists a
 - The simulation runtime acquires once per control period for the installation topology (the demo
   topology still scans every tick); configuration lookups are cached.
 
+### Fixed (owner review of 2026-10-13)
+- R3: irrigation checks the main level (low-low switch and the dry-run guard) during the valve lead
+  and re-checks the start permissives in the scan that requests drive RUN. A loss there locks out
+  (`MAIN_LOW_LOW` or `START_INHIBITED`) without the drive ever being started.
+- R4: EC-target batch maxima count measured delivery, not commanded step sizes. Paths now integrate
+  the meter for as long as they hold the valve (start-up flow was previously not counted); each step
+  keeps commanded and measured quantities; the next step is shortened by the largest coast measured in
+  the batch; a measured total above a maximum (tolerance 0 L) is an overrun: dosing stops, alarm
+  `REFILL_EC_LIMIT_EXCEEDED`, batch `OUT_OF_SPEC`.
+- R2: an unusable EC probe during an active EC-target A/B step stops both nutrient paths in the same
+  scan (previously only after the step completed), records the measured delivery and the reason, and
+  no further step runs in that batch even if the probe returns. The batch keeps its first stop reason.
+
 ## 0.3.0 (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 
 ### Added

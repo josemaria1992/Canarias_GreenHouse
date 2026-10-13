@@ -208,6 +208,17 @@ later pull request.
 | PC-12 a fault stops and locks out; ack alone cannot reset; reset while the fault is active fails; a healthy reset does not restart; a deliberate restart succeeds under the same role rules locally and remotely | PASS | scenarios `vfd_trip_recovery`, `safety_chain_open`, `main_pump_no_flow`, `sector_valve_stuck_open`, `main_level_open_loop`, `stale_acquisition`, `module_timeout`, `main_source_empty`, `main_low_low`; `test_pc12_ack_reset_restart_are_distinct`, `test_pc12_storage_fault_inhibits_new_starts`, `test_pc12_stop_all_brings_every_output_off`; roles: `integration/test_api_installation.py` (one API for local and remote) |
 | PC-13 bounded MANUAL fills, transfers and doses honour quantity, time, capacity and arbitration; a stale required sensor disables the operation with an actionable reason | PASS | scenarios `manual_bounds_rejected`, `raw_command_refused`, `stale_acquisition` |
 
+### Owner review of 13 October 2026 (findings R2-R4, process controllers)
+
+Regression cases from `REVIEW_AND_REQUIRED_FIXES.md`, in
+`tests/acceptance/test_installation_review_r2_r4.py`, on the synthetic twin (not physical verification).
+
+| ID | Status | Evidence |
+|---|---|---|
+| RV-R3 main level and start permissives checked again during the valve lead and in the scan that requests drive RUN; a loss prevents RUN rather than stopping the drive afterwards | PASS | `test_r3_permissive_lost_during_lead_never_starts_the_drive[analog_below_guard,low_low_switch]` (no RUN command, lockout, no restart when the level returns), `test_r3_storage_inhibit_during_lead_never_starts_the_drive`, `test_r3_healthy_alternation_still_starts`; the existing valve-loss, drive-fault, sensor-unavailable and stop/switch scenarios unchanged |
+| RV-R4 EC batch maxima enforced on measured delivery (start-up and stopping coast included), next step shortened by the measured coast, commanded kept separately, overrun detected and reported | PASS | `test_r4_batch_maxima_hold_on_measured_delivery` (several small steps; the twin's stock loss matches the measured total within 0.05 L), `test_r4_unequal_ratio_and_several_small_steps`, `test_r4_overrun_is_reported_not_hidden` (alarm, `MAX_EXCEEDED`, batch `OUT_OF_SPEC`), `test_r4_partner_failure_records_both_deliveries` |
+| RV-R2 an unusable EC probe during an active EC-controlled A/B step stops both nutrient paths in the same scan, records the measured delivery and reason, and allows no further step when the probe returns | PASS | `test_r2_unusable_ec_during_a_step_stops_both_nutrient_paths[invalid,stale,unavailable]` (pumps off within the scan, stock volumes constant afterwards, no new `REFILL_EC_STEP`), `test_r2_no_new_nutrient_step_when_the_probe_returns`; FIXED_VOLUMES scenarios unchanged. "stale" uses an acquisition stall: the twin has no per-point staleness |
+
 ## Pre-hardware release: process pages and installation diagram (UI)
 
 Browser evidence comes from `scripts/ui_check/run_ui_check.py`: it serves `installation-48`
