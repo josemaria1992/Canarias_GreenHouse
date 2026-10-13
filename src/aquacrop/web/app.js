@@ -25,7 +25,19 @@
     return e;
   }
   const $ = id => document.getElementById(id);
-  function mount(id, ...kids) { const el = $(id); el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false)); return el; }
+  // A refresh that was already fetching when the user changed a field or a choice on this page does not
+  // rebuild it: that would put back the old value just before the user presses the button next to it.
+  const edits = { seq: 0, id: null };
+  document.addEventListener("change", e => {
+    const v = e.target && e.target.closest ? e.target.closest("section") : null;
+    if (v) { edits.seq += 1; edits.id = v.id; }
+  }, true);
+  let rendering = null;          // the edit count when the current refresh started
+  function mount(id, ...kids) {
+    const el = $(id);
+    if (rendering !== null && edits.seq !== rendering && edits.id === id) return el;
+    el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false)); return el;
+  }
   function toast(msg, bad) {
     const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
     t.style.background = bad ? "var(--bad)" : "";
@@ -114,6 +126,7 @@
   }
   function route() {
     S.view = (location.hash || "#overview").slice(1);
+    S.rendered = null;
     highlightNav();
     const sec = section(S.view);
     document.querySelectorAll(".view").forEach(v => v.classList.toggle("hidden", v.id !== sec));
@@ -121,10 +134,13 @@
   }
   window.addEventListener("hashchange", route);
 
-  let busy = false;
-  async function refresh() {
-    if (busy || $("app").classList.contains("hidden")) return;
-    busy = true;
+  let busy = false, again = false;
+  async function refresh(queue = true) {
+    if ($("app").classList.contains("hidden")) return;
+    if (busy) { again = again || queue; return; }   // a page change or an action runs right after the one in flight
+    busy = true; again = false;
+    rendering = edits.seq;
+    const view = S.view;
     try {
       S.status = await api("GET", "/api/status");
       S.lastOk = Date.now(); S.cfgVersion = S.status.config_version; S.tz = S.status.timezone;
@@ -135,9 +151,13 @@
       const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
       if (fn && !typing) await fn();
       else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
+      if (S.view === view) S.rendered = view;
     } catch (e) {
       if (String(e.message) !== "not authenticated") setStale(true);
-    } finally { busy = false; }
+    } finally {
+      busy = false; rendering = null;
+      if (again) refresh();
+    }
   }
   function setStale(stale) {
     S.stale = stale;
@@ -149,7 +169,7 @@
     }
   }
   setInterval(() => { if (S.lastOk && Date.now() - S.lastOk > STALE_AFTER_MS) setStale(true); }, 1000);
-  setInterval(refresh, 1000);
+  setInterval(() => refresh(false), 1000);
 
   function renderBanner() {
     const st = S.status;
