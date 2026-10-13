@@ -413,6 +413,27 @@ def test_at_mb_06_expiry_sends_no_off_sequence(fake_bus):
     assert len(bus.write_frames()) == n and relay.coils[0] is True   # stays as it was; nothing sent
 
 
+def test_r1_relay_lease_expiring_during_preflight_sends_no_frame(fake_bus):
+    """Owner review R1: the lease is checked again inside the bus lock, after the mode preflight read."""
+    cfg, bus, relay, ai = fake_bus
+    be = ModbusBackend(cfg, context=ctx)
+    clock = Clock()
+    gate, *_ = make_gate(cfg, be, clock)
+    lease = arm(gate, duration_s=60)
+    read = be.devices["relay_A"].read_relay_modes
+
+    def expire_during_read():
+        result = read()
+        clock.t = lease.expires_monotonic + 0.01
+        return result
+    be.devices["relay_A"].read_relay_modes = expire_during_read
+    cs, _ = bench_cs(cfg, be, gate)
+    rec = cs.submit(cs.build(actor="bench1", target="relay_A.DO1", desired=True, origin=CommandOrigin.BENCH,
+                             reason="t", lease_id=lease.lease_id))
+    assert rec.outcome == Outcome.REJECTED and "no bench lease" in rec.detail
+    assert bus.write_frames() == [] and relay.coils[0] is False and gate.active() is None
+
+
 @pytest.mark.parametrize("fault,outcome", [
     ("apply_then_timeout", Outcome.OUTCOME_UNKNOWN), ("timeout", Outcome.REJECTED),
     ("exception", Outcome.REJECTED), ("readback_mismatch", Outcome.FAILED),

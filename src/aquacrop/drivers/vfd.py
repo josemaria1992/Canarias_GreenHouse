@@ -72,12 +72,13 @@ class VfdDevice:
     def values(self, run: bool) -> list[int]:
         return list(self.m.run_sequence) if run else [self.m.stop_value]
 
-    def command(self, run: bool) -> int:
+    def command(self, run: bool, *, before_write=None) -> int:
         """Write the run sequence or the stop value; returns the number of frames echoed."""
         vals = self.values(run)
         for i, v in enumerate(vals):
             try:
-                self.bus.write_single_register(self.m.address, self.m.control_register, v)
+                self.bus.write_single_register(self.m.address, self.m.control_register, v,
+                                               before_write=before_write)
             except RtuError as e:
                 raise VfdCommandError(i, len(vals), e) from e
         return len(vals)

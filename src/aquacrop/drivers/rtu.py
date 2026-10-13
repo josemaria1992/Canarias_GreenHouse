@@ -84,10 +84,13 @@ class RtuBus:
         if isinstance(unit, bool) or not isinstance(unit, int) or not 1 <= unit <= 247:
             raise RtuRefused(f"unit address {unit!r} outside 1..247 (broadcast is never used)")
 
-    def _call(self, fc: int, unit: int, fn, *, write: bool):
+    def _call(self, fc: int, unit: int, fn, *, write: bool, before_write=None):
         self._check_unit(unit)
         with self._lock:
             self._ensure_open()
+            # Revalidate after any wait for the bus lock or port connection, before sending a frame.
+            if write and before_write is not None and (why := before_write()) is not None:
+                raise RtuRefused(why)
             self.stats.requests += 1
             if write:
                 self.stats.write_requests += 1
@@ -164,14 +167,15 @@ class RtuBus:
             return regs
         return self._with_read_retries(op)
 
-    def write_single_coil(self, unit: int, address: int, value: bool) -> None:
+    def write_single_coil(self, unit: int, address: int, value: bool, *, before_write=None) -> None:
         """FC05, sent exactly once. Raises on anything but a matching echo; the caller decides
         FAILED (exception response) versus OUTCOME_UNKNOWN (no/invalid answer)."""
         if not isinstance(value, bool) or not 0 <= address <= 7:
             raise RtuRefused("coil write outside channel range 0..7 or non-boolean value")
         try:
             rsp = self._call(FC_WRITE_SINGLE_COIL, unit,
-                             lambda: self._client.write_coil(address, value, device_id=unit), write=True)
+                             lambda: self._client.write_coil(address, value, device_id=unit), write=True,
+                             before_write=before_write)
         except RtuError as e:
             self._note(e)
             raise
@@ -182,7 +186,7 @@ class RtuBus:
             self._note(e)
             raise e
 
-    def write_single_register(self, unit: int, address: int, value: int) -> None:
+    def write_single_register(self, unit: int, address: int, value: int, *, before_write=None) -> None:
         """FC06, sent exactly once. Raises on anything but a matching echo (address and value)."""
         for x in (address, value):
             if isinstance(x, bool) or not isinstance(x, int) or not 0 <= x <= 0xFFFF:
@@ -191,7 +195,8 @@ class RtuBus:
             raise RtuRefused(f"register {address} of unit {unit} is not a configured drive control register")
         try:
             rsp = self._call(FC_WRITE_SINGLE_REGISTER, unit,
-                             lambda: self._client.write_register(address, value, device_id=unit), write=True)
+                             lambda: self._client.write_register(address, value, device_id=unit), write=True,
+                             before_write=before_write)
         except RtuError as e:
             self._note(e)
             raise

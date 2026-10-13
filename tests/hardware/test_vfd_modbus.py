@@ -275,3 +275,46 @@ def test_diagnostics_reads_the_drive_without_writing(drv, tmp_path, capsys):
     rec = next(x for x in lines if x.get("device_uid") == "drive:MAIN")
     assert rec["register_map"] == "PROPOSED" and rec["status"]["fault"] is True and rec["control_register"] == 0
     assert lines[-1]["summary"]["writes_sent"] == 0 and bus.write_frames() == []
+
+
+@pytest.mark.parametrize('boundary', ['expiry_in_preflight', 'revoke_after_first_frame'])
+def test_drive_lease_is_rechecked_at_every_write_frame(drv, boundary):
+    from aquacrop.control.bench import BenchGate
+    from aquacrop.control.commands import CommandService, MemoryAudit
+    from aquacrop.domain.model import ControllerState
+    from tests.hardware.test_modbus import Clock, principal
+    cfg, bus, v, _ = drv
+    clock = Clock()
+    be = ModbusBackend(cfg, context=lambda: AcqContext('test', 'cycle'))
+    try:
+        gate = BenchGate(cfg, 'test', lambda l: None, lambda l: None, lambda devices: None,
+                         lambda *a: None, clock)
+        lease = gate.arm(principal(), confirmation=CONFIRMATION_PHRASE,
+                         setup_description='isolated simulated drive, no physical serial device or motor',
+                         allowlist=['drive:MAIN'], duration_s=60)
+        be.authorize = gate.authorize
+        cs = CommandService(cfg, be, MemoryAudit(), gate.authorize, lambda: ControllerState.STOPPED)
+        if boundary == 'expiry_in_preflight':
+            read = be.drives['drive:MAIN'].read_status
+            def expire():
+                result = read()
+                clock.t = lease.expires_monotonic + 0.01
+                return result
+            be.drives['drive:MAIN'].read_status = expire
+        else:
+            apply = v.on_write
+            def revoke(address, value):
+                apply(address, value)
+                gate.revoke('test: revoke after first echoed value', 'bench1')
+            v.on_write = revoke
+        record = cs.submit(cs.build(actor='bench1', target='drive:MAIN', desired=True,
+                                   origin=CommandOrigin.BENCH, reason=boundary, lease_id=lease.lease_id))
+        if boundary == 'expiry_in_preflight':
+            assert record.outcome == Outcome.REJECTED and bus.write_frames() == []
+        else:
+            assert record.outcome == Outcome.OUTCOME_UNKNOWN and len(bus.write_frames()) == 1
+            assert "1 of 2 control value(s) echoed" in record.detail      # the partial sequence is audited
+            assert v.holding[100] == 1 and not (v.holding[101] & RUNNING)
+        assert gate.active() is None
+    finally:
+        be.close()

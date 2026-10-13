@@ -154,7 +154,7 @@ class ModbusBackend:
         if not modes.all_normal:
             return WriteResult(Outcome.REJECTED, None, f"preflight: relay modes {modes.describe()} not all NORMAL")
         try:
-            wd.write_coil(pid.channel, command.desired)
+            wd.write_coil(pid.channel, command.desired, before_write=lambda: self._write_guard(command))
         except RtuExceptionResponse as e:
             return WriteResult(Outcome.FAILED, None, f"module refused write: {e}")
         except RtuRefused as e:
@@ -183,7 +183,7 @@ class ModbusBackend:
         if command.desired and st.ready is False:
             return WriteResult(Outcome.REJECTED, None, f"drive not ready (status 0x{st.word:04X}); nothing sent")
         try:
-            n = dv.command(command.desired)
+            n = dv.command(command.desired, before_write=lambda: self._write_guard(command))
         except VfdCommandError as e:
             if e.sent == 0 and isinstance(e.cause, RtuRefused):
                 return WriteResult(Outcome.REJECTED, None, str(e.cause))
@@ -199,6 +199,19 @@ class ModbusBackend:
         return WriteResult(Outcome.ECHO_CONFIRMED, after.running,
                            f"FC06 echo of {n} value(s); status 0x{after.word:04X}: running={after.running}, "
                            f"fault={after.fault} (an echo is not motor proof; the drive ramps)")
+
+    def _write_guard(self, command: OutputCommand) -> str | None:
+        """Run inside the bus lock immediately before each FC05/FC06 frame (after preflight reads and any
+        wait for the bus): the lease, configuration version and command expiry must still hold."""
+        if self.authorize is None:
+            return "read-only profile: no bench lease armed"
+        if (why := self.authorize(command)) is not None:
+            return why
+        if command.expected_config_version != self.cfg.config_version:
+            return "configuration version changed before write"
+        if command.expires_utc <= utcnow():
+            return "command expired before write"
+        return None
 
     def close(self) -> None:
         for b in self.buses.values():

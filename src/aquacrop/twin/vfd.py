@@ -136,6 +136,8 @@ class SimVfdBus:
         self._unit(unit)
         return [self.vfd.read(fc, start + i) for i in range(count)]
 
-    def write_single_register(self, unit: int, address: int, value: int) -> None:
+    def write_single_register(self, unit: int, address: int, value: int, *, before_write=None) -> None:
         self._unit(unit)
+        if before_write is not None and (why := before_write()) is not None:
+            raise RtuRefused(why)
         self.vfd.write(address, value)

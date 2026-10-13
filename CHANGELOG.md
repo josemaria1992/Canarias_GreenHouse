@@ -31,6 +31,13 @@ manual or register map has been seen, and the installation's drive interface sta
   release readiness items 1, 2, 9, 10 and 20).
 - The Modbus error types live in `drivers/rtu_errors.py` so the simulation never imports pymodbus.
 
+### Fixed (owner review of 2026-10-13)
+- R1: the bench authorization (lease, allowlist, configuration version, command expiry) is checked
+  again inside the bus lock immediately before every FC05 and FC06 frame, after the preflight reads
+  and any wait for the bus. Expiry or revocation stops the remaining frames: nothing is sent, a run
+  sequence cut after its first value is `OUTCOME_UNKNOWN` with the echoed count audited, and nothing
+  is retried or compensated.
+
 ## 0.3.0 (2026-10-13): pre-hardware release
 
 Stage 4 of the pre-hardware release, and the release itself: it contains the three 0.3.0 sections

@@ -54,11 +54,11 @@ class WaveshareDevice:
         return RelayModes(tuple(self.bus.read_registers(FC_READ_HOLDING_REGISTERS, self.address,
                                                         MODE_REGISTER_START, CHANNELS)))
 
-    def write_coil(self, channel: int, value: bool) -> None:
+    def write_coil(self, channel: int, value: bool, *, before_write=None) -> None:
         self._need(ModelId.WAVESHARE_RELAY_D)
         if not 1 <= channel <= CHANNELS:
             raise ValueError("channel must be 1..8")
-        self.bus.write_single_coil(self.address, channel - 1, value)
+        self.bus.write_single_coil(self.address, channel - 1, value, before_write=before_write)
 
     # analog input 8CH
     def read_analog(self) -> list[int]:
