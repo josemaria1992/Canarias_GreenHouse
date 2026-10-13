@@ -4,7 +4,7 @@
 3.11.3, FastAPI 0.143, SQLite WAL, rclone 1.60.1. **Run:** 2026-10-13, software 0.3.0 (the
 pre-hardware release). Earlier runs: 2026-10-11 at `0ce4842` (183 tests), ADR-0008 at `f0b18e2` (252
 tests), quarantine and off-device backups (271 tests), pre-hardware stages 1 to 3 (352 tests).
-**Results:** `python -m pytest`: 373 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
+**Results:** `python -m pytest`: 375 passed on 3.11, 3.12 and 3.13 locally; `pip check` clean.
 `demo verify --seed 42`: 21/21 PASS for `demo-48` and `demo-24`, 42/42 for `installation-48`.
 Installed-wheel check (`scripts/check_installed_wheel.py`) on the wheel from the built release ZIP:
 16/16 PASS. Browser check (`scripts/ui_check/`, headless Chromium): 55/55 PASS. Storage measurements and

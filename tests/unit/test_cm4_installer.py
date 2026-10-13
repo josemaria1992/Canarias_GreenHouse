@@ -41,6 +41,8 @@ def cm4(monkeypatch):
 
 
 def release(base: Path, version: str) -> Path:
+    """A fake release folder; its service unit names its version, so the installed units show which release
+    they came from."""
     r = base / f"rel-{version}"
     (r / "wheels").mkdir(parents=True)
     (r / "wheels" / f"aquacrop_greenhouse-{version}-py3-none-any.whl").write_bytes(b"wheel " + version.encode())
@@ -49,6 +51,8 @@ def release(base: Path, version: str) -> Path:
     (wh / "dep-1.0-py3-none-any.whl").write_bytes(b"dep")
     shutil.copy2(ROOT / "requirements.lock", r / "requirements.lock")
     shutil.copytree(ROOT / "deploy", r / "deploy")
+    unit = r / "deploy" / "aquacrop-greenhouse.service"
+    unit.write_bytes(unit.read_bytes() + f"# release {version}\n".encode())
     shutil.copytree(ROOT / "configs", r / "configs")
     (r / "RELEASE.json").write_text(json.dumps({"version": version, "commit": "0" * 40}))
     files = sorted(p for p in r.rglob("*") if p.is_file())
@@ -65,8 +69,9 @@ def test_install_upgrade_rollback_in_a_staging_root(cm4, tmp_path, capsys):
     assert cm4.main(args + ["install", "--release", str(r1), "--config", str(r1 / "configs" / "installation-48.yaml")]) == 0
     cur = stage / "opt" / "aquacrop" / "current"
     assert cur.is_symlink() and Path(cur.readlink()).as_posix() == "releases/9.9.0" and cur.resolve().name == "9.9.0"
+    units = stage / "etc" / "systemd" / "system"
     for u in cm4.UNITS:
-        assert (stage / "etc" / "systemd" / "system" / u).read_bytes() == (ROOT / "deploy" / u).read_bytes()
+        assert (units / u).read_bytes() == (r1 / "deploy" / u).read_bytes()
     env = stage / "etc" / "aquacrop" / "aquacrop.env"
     assert env.stat().st_mode & 0o777 == 0o640 and (stage / "var" / "lib" / "aquacrop").stat().st_mode & 0o777 == 0o700
     out = capsys.readouterr().out
@@ -79,6 +84,7 @@ def test_install_upgrade_rollback_in_a_staging_root(cm4, tmp_path, capsys):
     env.write_text(f"AQUACROP_CONFIG={r2 / 'configs' / 'installation-48.yaml'}\n")
     assert cm4.main(args + ["upgrade", "--release", str(r2)]) == 0
     assert cur.resolve().name == "9.9.1" and (stage / "opt" / "aquacrop" / "previous").read_text().strip() == "9.9.0"
+    assert (units / "aquacrop-greenhouse.service").read_text().endswith("# release 9.9.1\n")
     out = capsys.readouterr().out
     assert "backup create" in out and "--destination /var/lib/aquacrop/backups/pre-upgrade" in out   # before the switch
     assert out.index("backup create") < out.index("systemctl stop aquacrop-greenhouse.service")
@@ -86,6 +92,7 @@ def test_install_upgrade_rollback_in_a_staging_root(cm4, tmp_path, capsys):
     assert cm4.main(args + ["upgrade", "--release", str(r2)]) == 2           # already current
     assert cm4.main(["--root", str(stage), "rollback"]) == 0
     assert cur.resolve().name == "9.9.0" and (stage / "opt" / "aquacrop" / "previous").read_text().strip() == "9.9.1"
+    assert (units / "aquacrop-greenhouse.service").read_text().endswith("# release 9.9.0\n")   # its own units again
     assert cm4.main(["--root", str(stage), "rollback", "--to", "1.0.0"]) == 2
     log = (stage / "var" / "lib" / "aquacrop-install.log").read_text()
     assert [ln.split(" ", 1)[1] for ln in log.splitlines()] == ["install 9.9.0", "upgrade 9.9.0 -> 9.9.1",

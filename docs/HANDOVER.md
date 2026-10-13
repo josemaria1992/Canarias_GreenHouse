@@ -77,7 +77,7 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-373 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
+375 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
 local encrypted remote: the round trip and the replacement-controller recovery; they are skipped where
 rclone is not installed and required on CI's Linux jobs. `demo verify` gives 21/21 on both demo
 fixtures and 42/42 on `installation-48`. The browser check (`scripts/ui_check/`) passes 55/55 in

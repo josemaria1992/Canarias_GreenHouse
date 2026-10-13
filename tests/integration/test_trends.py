@@ -80,3 +80,30 @@ def test_a_bucket_is_final_only_after_the_settling_time_and_a_quarantine_is_a_ne
     out = trend_buckets(h, "test.P", s, e, DAY, cache=cache, now=now)
     assert any(r[9] for r in out) and len(cache._d) == 2 and len(seen) == 3   # recomputed under the new key
     assert out == trend_buckets(h, "test.P", s, e, DAY, now=now)
+
+
+def add_cycle(h, start, hours, run=None, basis="WALL", origin="REAL", value=1.0):
+    def op(con):
+        pk = con.execute("INSERT INTO cycles(cycle_id,session_id,run_id,sim_s,persisted_utc,n_points,cadence_s,"
+                         "cadence_basis) VALUES(?,'old',?,NULL,?,1,3600,?)",
+                         (f"c{start}{run}{basis}", run, start.isoformat(), basis)).lastrowid
+        con.executemany("INSERT INTO samples(cycle_pk,point_id,acquired_utc,persisted_utc,sequence,quality,origin,"
+                        "source_profile,config_version,device_uid,bus_id,session_id,sim_run_id,value) VALUES(?,'test.P',"
+                        "?,?,1,'GOOD',?,'p','v','d','b','old',?,?)",
+                        [(pk, a, a, origin, run, value) for a in
+                         ((start + timedelta(hours=i)).isoformat(timespec="microseconds") for i in range(hours))])
+    h.submit(op, wait=True)
+
+
+def test_a_bucket_never_mixes_simulation_runs_or_the_simulation_time_recorder(h):
+    day = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    add_cycle(h, day, 12, run="run_a", origin="SIMULATED", value=1.0)
+    add_cycle(h, day + timedelta(hours=12), 12, run="run_b", origin="SIMULATED", value=9.0)
+    add_cycle(h, day, 24, run="run_a", basis="SIMULATION_TIME", origin="SIMULATED", value=100.0)
+    s, e = day.isoformat(), (day + timedelta(days=1)).isoformat()
+    # the wall-clock chart: one row per run, the line broken between them, the recorder's samples left out
+    rows = trend_buckets(h, "test.P", s, e, DAY)
+    assert [(r[7], r[1], r[13], r[8]) for r in rows] == [("run_a", 1.0, 12, False), ("run_b", 9.0, 12, True)]
+    # the recorder is its own series when asked for
+    rows = trend_buckets(h, "test.P", s, e, DAY, basis="SIMULATION_TIME")
+    assert [(r[7], r[1], r[13]) for r in rows] == [("run_a", 100.0, 24)]

@@ -112,12 +112,14 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
 
 
 def localize(cfg, port: int):
-    """The loopback origins follow the chosen port (the packaged configs allow 127.0.0.1:8000 only)."""
+    """The loopback origins follow the chosen port (the packaged configs allow 127.0.0.1:8000 only); any other
+    origin a custom configuration allows is kept as it is."""
     sec = cfg.security
-    loop = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
-    if port == 8000 or not all(o.startswith(("http://127.0.0.1:", "http://localhost:")) for o in sec.allowed_origins):
+    if port == 8000:
         return cfg
-    return cfg.model_copy(update={"security": sec.model_copy(update={"allowed_origins": sorted(loop)})})
+    keep = [o for o in sec.allowed_origins if not o.startswith(("http://127.0.0.1:", "http://localhost:"))]
+    loop = [f"http://127.0.0.1:{port}", f"http://localhost:{port}"]
+    return cfg.model_copy(update={"security": sec.model_copy(update={"allowed_origins": keep + loop})})
 
 
 def first_admin(cfg, state_dir: Path, *, username: str, password_stdin: bool) -> bool:

@@ -126,12 +126,15 @@ def test_prerequisite_failures_are_reported_and_start_nothing(tmp_path, monkeypa
     assert not (tmp_path / "t" / "installation-48.sqlite3").exists()
 
 
-def test_origins_follow_a_non_default_port_only_for_loopback_configs():
+def test_loopback_origins_follow_a_non_default_port_and_other_origins_are_kept():
+    """The browser opened by the launcher sends the loopback origin of the chosen port, so it must be allowed
+    also when a custom configuration allows other origins (those stay as they are)."""
     from aquacrop.cli import _cfg
     cfg = _cfg("installation-48")
     assert launcher.localize(cfg, 8000) is cfg
     moved = launcher.localize(cfg, 8123)
     assert moved.security.allowed_origins == ["http://127.0.0.1:8123", "http://localhost:8123"]
-    remote = cfg.model_copy(update={"security": cfg.security.model_copy(
-        update={"allowed_origins": ["https://aquacrop.lan"]})})
-    assert launcher.localize(remote, 8123) is remote
+    custom = cfg.model_copy(update={"security": cfg.security.model_copy(
+        update={"allowed_origins": ["https://aquacrop.lan", "http://127.0.0.1:8000"]})})
+    assert launcher.localize(custom, 8123).security.allowed_origins == [
+        "https://aquacrop.lan", "http://127.0.0.1:8123", "http://localhost:8123"]

@@ -13,6 +13,7 @@ endurance claim**; the CM4 figures belong to CP-00 (AT-STO-02).
 | `2026-10-13-storage-48pt-60s-400d-process.json` | `measure_storage.py --process-workload`, 48 points, 400 days: environment, workload, checkpoints, final storage, WAL, bytes written, backup, restore drill |
 | `2026-10-13-stress-48pt-400d-process.json` | `stress_concurrency.py` on that database: marks, results, latencies, timeline every 5 s |
 | `2026-10-13-trend-cache-48pt-365d.json` | `measure_trend_cache.py` on that database: a 365-day chart of 16 points without the cache, filling it, and refreshed from it |
+| `2026-10-13-trend-cache-48pt-365d-by-run.json` | the same, repeated after the buckets were split by simulation run and recorder |
 
 ## Reproduce
 
@@ -36,6 +37,11 @@ python scripts/measure_trend_cache.py --db OUT/measure.sqlite3 --out OUT/trend-c
 - Trend cache: `measure_trend_cache.py` on the same database afterwards, at commit `a723b3c`
   (clean), 2026-10-13T04:03:12+00:00; script SHA-256
   `eea54a409b1c2fda03c143211c7e4641f6eb0b961438638fa99db935ee08cea7`.
+- Trend cache repeated: the same script on the same database, 2026-10-13T05:27:29+00:00, on the
+  working tree of the review fix that keeps simulation runs and recorders apart, before it was
+  committed (the report says `67c5af5`, dirty); `historian/trends.py` SHA-256
+  `271dee7f9bdb21f1e632049d65d6896919a98345c03f1d4fb09dfcc90dc640bb`. A first attempt while the
+  browser check ran took 86.1 s without the cache and is not reported.
 - Environment: Python 3.13.16, SQLite 3.45.1, Linux-6.18.44-fc-v114-x86_64 (Intel(R) Xeon(R)
   Processor @ 2.10GHz, 4 CPUs, 16 GiB RAM, ext4). Other jobs shared the machine during part of the
   run, so the durations are not benchmarks.
@@ -142,6 +148,14 @@ minute. On the same database afterwards, without the stress load, the same 16-po
 equals a full read, before and after two more days of samples, and that a new quarantine is read
 again in full. The first read of a year chart after a restart still takes the full time; the page
 shows at most 8 points.
+
+The buckets were then split by simulation run and recorder, so that a bucket never averages two
+runs or the wall-clock snapshots with the finer simulation-time recorder (a review finding; the
+query now joins each sample's cycle). Repeated on the same database without other load: 27.1 s
+without the cache, 26.0 s for the first read and 45 ms for a refresh, all three equal and the same
+5,632 buckets and 8,096,272 samples, since this database holds wall-clock snapshots of one run
+(`2026-10-13-trend-cache-48pt-365d-by-run.json`). The stress figure of 38 s above was measured with
+the earlier query.
 
 ## Low and full disk
 

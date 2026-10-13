@@ -1,7 +1,11 @@
 """Aggregated trends for long ranges (OP-03): a year-long chart is drawn from one row per bucket.
 
 Buckets are UTC prefixes of the stored ISO stamps (10 min, 1 h or 1 day), so each read is one indexed
-range read of one point, grouped; no sample is skipped. A year of one point takes about a second on a
+range read of one point, grouped. A bucket never mixes origins, trusted and suspect stamps, simulation
+runs or recorders: each combination is its own row, and the chart breaks its line between them. Unless a
+cadence basis is asked for, the chart is drawn from the wall-clock snapshots (`WALL`, and imported
+`LEGACY_UNKNOWN` history); the optional simulation-time recorder is a finer copy of the same signals that
+would outweigh them in a mean, and stays available raw and in the export. A year of one point takes about a second on a
 desktop (more on the CM4), so finished buckets are kept in a `TrendCache` and a refresh reads only the
 buckets that can still change and a first bucket that the range cuts. Used by `/api/trends` and by
 `scripts/stress_concurrency.py`, which times the uncached read.
@@ -64,22 +68,24 @@ def _grouped(hist, pid: str, lo: str, hi: str, width: int, basis: str | None, rs
              hi_inclusive: bool) -> list[dict]:
     sus = "(" + (" OR ".join("s.id BETWEEN ? AND ?" for _ in rs) or "0") + ")"
     good = "s.quality IN ('GOOD','OVERRIDDEN')"
-    join = " JOIN cycles c ON c.cycle_pk=s.cycle_pk AND c.cadence_basis=?" if basis else ""
+    which = "c.cadence_basis=?" if basis else "c.cadence_basis IN ('WALL','LEGACY_UNKNOWN')"
     rows = hist.query(
-        f"SELECT substr(s.acquired_utc,1,{width}) AS b, s.origin, {sus} AS sus, count(*) AS n, "
-        f"sum({good} AND s.value IS NOT NULL) AS nv, min(CASE WHEN {good} THEN s.value END) AS vmin, "
-        f"avg(CASE WHEN {good} THEN s.value END) AS vavg, max(CASE WHEN {good} THEN s.value END) AS vmax, "
-        f"max(s.unit) AS unit, max(s.sim_run_id) AS run FROM samples s{join} WHERE s.point_id=? "
-        f"AND s.acquired_utc>=? AND s.acquired_utc{'<=' if hi_inclusive else '<'}? GROUP BY b, s.origin, sus ORDER BY b",
+        f"SELECT substr(s.acquired_utc,1,{width}) AS b, s.origin, {sus} AS sus, s.sim_run_id AS run, "
+        f"c.cadence_basis AS basis, count(*) AS n, sum({good} AND s.value IS NOT NULL) AS nv, "
+        f"min(CASE WHEN {good} THEN s.value END) AS vmin, avg(CASE WHEN {good} THEN s.value END) AS vavg, "
+        f"max(CASE WHEN {good} THEN s.value END) AS vmax, max(s.unit) AS unit FROM samples s "
+        f"JOIN cycles c ON c.cycle_pk=s.cycle_pk AND {which} WHERE s.point_id=? AND s.acquired_utc>=? "
+        f"AND s.acquired_utc{'<=' if hi_inclusive else '<'}? GROUP BY b, s.origin, sus, run, basis "
+        f"ORDER BY b, s.origin, sus, run, basis",
         tuple(x for r in rs for x in r) + ((basis,) if basis else ()) + (pid, lo, hi))
     return [dict(r) for r in rows]
 
 
 def trend_buckets(hist, pid: str, start: str, end: str, level: tuple, basis: str | None = None,
                   cache: TrendCache | None = None, now: datetime | None = None) -> list:
-    """One row per bucket (and origin, and trusted/suspect stamps): mean, min and max of the GOOD or
-    OVERRIDDEN values, with the sample counts, in the column order of `/api/trends`. `start` and `end`
-    are UTC ISO stamps in the historian's format."""
+    """One row per bucket (and origin, trusted/suspect stamps, simulation run and recorder): mean, min and
+    max of the GOOD or OVERRIDDEN values, with the sample counts, in the column order of `/api/trends`.
+    `start` and `end` are UTC ISO stamps in the historian's format."""
     name, size, width = level
     rs = [tuple(q.ranges["samples"]) for q in hist.quarantines.items if "samples" in q.ranges]
     first = _floor(start, width)
@@ -105,7 +111,7 @@ def trend_buckets(hist, pid: str, start: str, end: str, level: tuple, basis: str
     out, last, prev = [], {}, None
     for r in rows:
         t = r["b"] + _PAD[width]
-        k = (r["origin"], bool(r["sus"]))
+        k = (r["origin"], bool(r["sus"]), r["run"], r["basis"])
         gap = prev is not None and (prev != k or (k in last and (datetime.fromisoformat(t) - last[k])
                                                   .total_seconds() > 1.5 * size))
         q = "GOOD" if r["nv"] == r["n"] else "PARTIAL" if r["nv"] else "UNAVAILABLE"

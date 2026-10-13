@@ -17,10 +17,12 @@ step: `docs/RELEASE_READINESS.md`.
 - Desktop launcher `python -m aquacrop launch`: prerequisite checks, the full installation demo
   (`installation-48`, simulated) with its state under `%LOCALAPPDATA%\AquaCrop` (or the platform
   equivalent), a guided first administrator (no default password), a log file, the browser opened
-  after the health check, and a clean stop. `AquaCrop-Demo.cmd` prepares a private environment from
+  after the health check, and a clean stop; on a port other than 8000 it also allows its own
+  loopback origin. `AquaCrop-Demo.cmd` prepares a private environment from
   the bundled wheelhouse, offline.
 - Guided CM4 installer `deploy/aquacrop-cm4.py` (standard library only): `check`, `install`,
-  `upgrade` (verified backup with the running version first), `rollback`, `tls`, `status`;
+  `upgrade` (verified backup with the running version first), `rollback` (with the previous
+  release's service units), `tls`, `status`;
   `--dry-run` and a staging `--root`. It verifies the release manifest, installs offline with hashes,
   switches releases atomically and never formats a disk, edits the boot configuration or creates an
   account with a default password.
@@ -40,7 +42,9 @@ step: `docs/RELEASE_READINESS.md`.
   per bucket of 10 min, 1 h or 1 day with mean, min, max and sample counts, drawn as a solid mean
   with dashed min and max and labelled as aggregated. The CSV export (paged, complete) keeps every
   sample. The server keeps the buckets that can no longer change, so a refresh reads only the first
-  and the newest ones, and the page fetches ranges over a day once a minute.
+  and the newest ones, and the page fetches ranges over a day once a minute. A bucket never mixes
+  simulation runs, origins, suspect stamps or recorders; without a chosen cadence basis the chart is
+  drawn from the wall-clock snapshots and says how many simulation-time recorder samples it left out.
 - `scripts/measure_process_workload.py` and `measure_storage.py --process-workload`: the storage
   measurement with the event and command rates of all processes running in AUTO;
   `scripts/measure_trend_cache.py` times a year chart with and without the kept buckets.

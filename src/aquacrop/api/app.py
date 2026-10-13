@@ -925,12 +925,17 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         reg = hist.quarantines
         for pid in ids:
             n = hist.query("SELECT count(*) FROM samples WHERE point_id=? AND acquired_utc>=? AND acquired_utc<=?",
-                           (pid, s, e))[0][0]
+                           (pid, s, e))[0][0] if not basis else \
+                hist.query("SELECT count(*) FROM samples s JOIN cycles c ON c.cycle_pk=s.cycle_pk AND c.cadence_basis=? "
+                           "WHERE s.point_id=? AND s.acquired_utc>=? AND s.acquired_utc<=?", (basis, pid, s, e))[0][0]
             if n > max_points:
+                # buckets keep runs, recorders and suspect stamps apart; without `basis` they are drawn from
+                # the wall-clock snapshots only, so `samples` counts what the chart holds
                 level = trend_level(span, max_points)
                 series[pid] = trend_buckets(hist, pid, s, e, level, basis, cache=trend_cache)
-                aggregated[pid] = {"bucket": level[0], "bucket_s": level[1], "samples": n,
-                                   "buckets": len(series[pid])}
+                aggregated[pid] = {"bucket": level[0], "bucket_s": level[1], "buckets": len(series[pid]),
+                                   "samples": sum(r[13] for r in series[pid]), "samples_in_range": n,
+                                   "cadence_basis": [basis] if basis else ["WALL", "LEGACY_UNKNOWN"]}
                 continue
             rows = hist.query("SELECT s.id, s.acquired_utc, s.value, s.raw_value, s.quality, s.origin, s.unit, s.sim_s, "
                               "s.sim_run_id, c.cadence_s, c.cadence_basis, c.cycle_id FROM samples s JOIN cycles c ON "

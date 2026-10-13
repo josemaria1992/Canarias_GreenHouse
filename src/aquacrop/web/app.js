@@ -741,7 +741,7 @@
       h("div", { class: "card" }, h("div", { class: "row" }, h("label", null, "Points (max 8)", picker), h("label", null, "Range", rng),
         h("a", { href: "/api/export.csv?" + q, download: "aquacrop-samples.csv" }, "Export CSV (complete, paginated)")),
         svg, legend, tr.truncated ? h("p", { class: "error" }, `Truncated at ${tr.limit} rows per point — narrow the range.`) : null,
-        agg.length ? h("p", { class: "muted", id: "trend-aggregation" }, `Aggregated: ${agg.map(([pid, a]) => `${pid} ${a.samples} samples in ${a.buckets} buckets of ${a.bucket}`).join("; ")}. `,
+        agg.length ? h("p", { class: "muted", id: "trend-aggregation" }, `Aggregated: ${agg.map(([pid, a]) => `${pid} ${a.samples} samples in ${a.buckets} buckets of ${a.bucket}${a.samples_in_range > a.samples ? ` (${a.samples_in_range - a.samples} simulation-time recorder samples not drawn)` : ""}`).join("; ")}. `,
           "Each point is the mean of the valid samples in its bucket; the dashed lines are their minimum and maximum. The CSV export has every sample.") : null),
       h("div", { class: "card" }, h("h3", null, "Runtime / volume estimates (from sampled history; coverage disclosed)"),
         h("table", null, h("thead", null, h("tr", null, ["Signal", "Kind", "Origin", "Estimate", "Coverage"].map(x => h("th", null, x)))),

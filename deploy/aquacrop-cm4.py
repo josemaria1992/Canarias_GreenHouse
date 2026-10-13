@@ -413,6 +413,12 @@ def cmd_rollback(a, host: Host) -> int:
         raise Fail(f"release {target} is not installed under {dest.parent}")
     print(f"Rolling back {cur.name} -> {target}")
     host.run(["systemctl", "stop", SERVICE], system=True)
+    # the target's own service units: the newer release may have changed a command line or a hardening
+    # setting that the older one does not know (install_release keeps each release's deploy folder)
+    for u in UNITS:
+        if (dest / "deploy" / u).is_file():
+            host.install_file(dest / "deploy" / u, f"/etc/systemd/system/{u}", 0o644)
+    host.run(["systemctl", "daemon-reload"], system=True)
     host.write_file("/opt/aquacrop/previous", cur.name + "\n", 0o644)
     host.symlink(dest, "/opt/aquacrop/current")
     host.run(["systemctl", "start", SERVICE], system=True)
