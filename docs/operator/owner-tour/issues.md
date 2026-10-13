@@ -25,6 +25,8 @@ repeating yet; the column says what a later fix to the same area would affect.
 | DEL-14 | UAT-08, UAT-09 | "Last result" and the batch/run tables were printed as `key=value` developer text | Readable labels (for example "pH start 6.80 · total (L) 16.79 · pH end 6.20") | UAT-08, UAT-09 |
 | DEL-15 | UAT-03, UAT-10 | In the diagram, main pump MP1 read "req ON · run" while the drive was stopped after a trip: the feedback shown is the selection contactor K1, not the motor | The label reads "req ON · K1 closed"; whether the motor runs is shown on the drive symbol | UAT-03, UAT-10 |
 | DEL-16 | illustrated guide | In `owner-tour/index.html`, 21 list items that wrap onto a second line were split into a stray paragraph, and the header showed the rehearsal machine's folder path | Wrapped items stay one item (`tests/unit/test_tour_guide.py`); the header names the release launcher only | none (reading only) |
+| DEL-17 | UAT-01 | A release folder whose `RELEASE.json` had been deleted started as "not a release" instead of failing the release check (code review) | The launchers always check a release wheel against `RELEASE.json`; a missing file stops the start with MISSING | UAT-01 |
+| DEL-18 | all | A button pressed while a page refresh was still fetching data could still be replaced before release (code review) | The pointer state is checked again just before the page is redrawn | all |
 
 Not changed, by design: no control algorithm, production mapping, recipe value, retention, cadence or
 storage budget was changed to make the demo look successful.

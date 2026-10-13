@@ -24,6 +24,10 @@ def release_info(env: dict | None = None) -> dict:
     if not path:
         return out
     out["release_file"] = path
+    if not Path(path).is_file():                 # a release wheel was installed but its RELEASE.json is gone
+        out |= {"status": "MISSING", "detail": "RELEASE.json is missing from the release folder; extract the whole ZIP "
+                                               "again into a new folder"}
+        return out
     try:
         info = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:

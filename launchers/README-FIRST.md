@@ -56,8 +56,8 @@ AquaCrop is served on this PC only (127.0.0.1). It never opens a serial port in 
   time and **wheel verified** when the installed program is exactly the one in this folder. *Config*
   shows `installation-80@…`, *Inventory* `6 modules: 16 AI + 32 DI + 32 DO = 80 points`.
 - In the launcher window: the line `AquaCrop <version>, release <version>, source commit …: VERIFIED`.
-- If it says **MISMATCH**, the environment does not belong to this folder: extract the whole ZIP again
-  into a new folder and start from there.
+- If it says **MISMATCH** (the environment does not belong to this folder) or **MISSING** (`RELEASE.json`
+  is gone), extract the whole ZIP again into a new folder and start from there.
 
 ## 5. Where your data is
 
@@ -109,7 +109,7 @@ browser's sign-in cookie). To return to the normal data, start `AquaCrop-Demo.cm
 |---|---|
 | `AquaCrop needs Python 3.11, 3.12 or 3.13 (64-bit), and none was found` | Install Python 3.12 (64-bit) as in section 2, then start again |
 | `[FAIL] port 8000 on 127.0.0.1 is free` followed by "another program (or AquaCrop already running) uses it" | Another AquaCrop window is still open: close it and start again. Or start with `AquaCrop-Demo.cmd --port 8010` and open <http://127.0.0.1:8010/> |
-| `MISMATCH` in the release check | Extract the whole ZIP into a new folder and start from there |
+| `MISMATCH` or `MISSING` in the release check | The program or `RELEASE.json` does not match this folder: extract the whole ZIP into a new folder and start from there |
 | `Installation failed; the incomplete environment was removed` | Extract the ZIP again (a file is missing or blocked, for example by antivirus) and start again |
 | `requirements.lock is missing` / `Cannot find the AquaCrop wheel` | You started a single file: extract the whole ZIP |
 | The browser does not open | Open <http://127.0.0.1:8000/> yourself |

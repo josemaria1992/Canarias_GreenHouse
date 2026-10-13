@@ -149,6 +149,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # the 0.3.1 fixture below is built from its own commit
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -199,6 +201,16 @@ jobs:
           path: |
             dist-release/*.zip
             dist-release/*.zip.sha256
+      - name: Build the provisional 0.3.1 demo from its own commit (main at bcd6200), for the upgrade test
+        run: |
+          git worktree add "$RUNNER_TEMP/v031" bcd620094fdfadbe466a973f27d67b5592c600d9
+          cd "$RUNNER_TEMP/v031" && python scripts/build_release.py --out "$RUNNER_TEMP/old" --wheelhouse win_amd64:3.12
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-0.3.1
+          path: |
+            ${{ runner.temp }}/old/*.zip
+            ${{ runner.temp }}/old/*.zip.sha256
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -209,13 +221,10 @@ jobs:
     # DL-01 from the ZIP on Windows, through AquaCrop-Demo.cmd as the owner starts it: a cold start offline
     # from the bundled wheelhouse (package index disabled) with the first administrator, sign-in, browser
     # assets, version and release check, a clean stop and a restart that keeps the data; the installed-wheel
-    # check outside any source tree; and an upgrade over the provisional 0.3.1 demo (its ZIP from the run that
-    # built it), keeping accounts, recipes, history and backups. Simulation only.
+    # check outside any source tree; and an upgrade over the provisional 0.3.1 demo (rebuilt from its commit
+    # bcd6200 in the release job), keeping accounts, recipes, history and backups. Simulation only.
     needs: release
     runs-on: windows-2022
-    permissions:
-      contents: read
-      actions: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -258,10 +267,8 @@ jobs:
           cp unpacked/aquacrop-*/check_installed_wheel.py "$RUNNER_TEMP/" && cd "$RUNNER_TEMP" && "$PY" check_installed_wheel.py
       - uses: actions/download-artifact@v4
         with:
-          name: release
+          name: release-0.3.1
           path: old
-          run-id: 38445307048   # CI on main at bcd6200 (0.3.1), the provisional demo
-          github-token: ${{ github.token }}
       - name: Upgrade over the provisional 0.3.1 demo
         shell: bash
         env:

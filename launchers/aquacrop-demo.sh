@@ -62,5 +62,6 @@ if [ ! -x "$VENV/bin/python" ]; then
   [ -z "$WSHA" ] || printf '%s\n' "$WSHA" > "$MARKER"
 fi
 export AQUACROP_WHEEL_SHA256="$WSHA"
-if [ -f "$HERE/RELEASE.json" ]; then export AQUACROP_RELEASE_INFO="$HERE/RELEASE.json"; else export AQUACROP_RELEASE_INFO=""; fi
+# a release wheel is always checked against RELEASE.json (missing counts as a failed check); a source checkout is not a release
+if [ -n "$WSHA" ]; then export AQUACROP_RELEASE_INFO="$HERE/RELEASE.json"; else export AQUACROP_RELEASE_INFO=""; fi
 exec "$VENV/bin/python" -m aquacrop launch "$@"

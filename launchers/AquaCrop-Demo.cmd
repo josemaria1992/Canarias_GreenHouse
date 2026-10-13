@@ -85,8 +85,9 @@ if not exist "!VENV!\Scripts\python.exe" (
   if defined WSHA (>"!MARKER!" echo !WSHA!)
 )
 set "AQUACROP_WHEEL_SHA256=!WSHA!"
+rem a release wheel is always checked against RELEASE.json (missing counts as a failed check)
 set "AQUACROP_RELEASE_INFO="
-if exist "%HERE%RELEASE.json" set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"
+if defined WSHA set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"
 
 rem 3. Start (prerequisite checks, first administrator, browser) and wait until stopped
 "!VENV!\Scripts\python.exe" -m aquacrop launch %*

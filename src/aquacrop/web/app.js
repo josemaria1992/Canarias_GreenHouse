@@ -56,6 +56,8 @@
     if (rendering !== null && edits.seq !== rendering && edits.id === id) return el;
     const view = renderingView || S.view;
     if (view !== S.view) return el;      // the user moved to another page meanwhile: the next refresh draws that one
+    // a refresh must not replace a button held down since it started its requests: the click would be lost
+    if (renderingView !== null && el.dataset.view === view && pressed && Date.now() - pressed < 2000) return el;
     const keep = el.dataset.view === view ? new Map(fieldKeys(el).filter(([, f]) => f.dataset.dirty && f.type !== "file")
       .map(([k, f]) => [k, f.type === "checkbox" || f.type === "radio" ? f.checked : f.value])) : new Map();
     const same = el.dataset.view === view;

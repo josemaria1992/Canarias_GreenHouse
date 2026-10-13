@@ -65,3 +65,17 @@ def test_both_launchers_key_the_environment_by_the_wheel_sha256_and_report_it():
     for line in cmd.splitlines() + sh.splitlines():
         if re.search(r"\b(rmdir|rm -rf|del)\b", line):
             assert "VENV" in line and "AquaCrop\\demo" not in line and "state" not in line.lower(), line
+
+
+def test_a_release_folder_without_its_release_json_stops_the_launcher(tmp_path, monkeypatch):
+    # the launchers always pass RELEASE.json for a release wheel; a missing file is not "not a release"
+    info = release_info({"AQUACROP_RELEASE_INFO": str(tmp_path / "RELEASE.json"), "AQUACROP_WHEEL_SHA256": SHA})
+    assert info["status"] == "MISSING" and "extract the whole ZIP" in info["detail"]
+    monkeypatch.setenv("AQUACROP_RELEASE_INFO", str(tmp_path / "RELEASE.json"))
+    monkeypatch.setenv("AQUACROP_WHEEL_SHA256", SHA)
+    _, failed = launcher.prerequisites("installation-80", tmp_path / "state", 0)
+    assert any("MISSING" in f for f in failed)
+    cmd = (ROOT / "launchers" / "AquaCrop-Demo.cmd").read_text(encoding="utf-8")
+    sh = (ROOT / "launchers" / "aquacrop-demo.sh").read_text(encoding="utf-8")
+    assert 'if defined WSHA set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"' in cmd
+    assert 'if [ -n "$WSHA" ]; then export AQUACROP_RELEASE_INFO="$HERE/RELEASE.json"' in sh
