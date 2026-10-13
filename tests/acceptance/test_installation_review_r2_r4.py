@@ -5,7 +5,7 @@ Synthetic quantities only; none of this is physical verification or a proposed f
 import pytest
 
 from aquacrop.config import load_config
-from aquacrop.domain.model import ControllerState as CS
+from aquacrop.domain.model import ControllerState as CS, Outcome
 from aquacrop.twin.installation_scenarios import recipe, tw, with_twin_overrides
 from aquacrop.twin.runtime import make_runtime
 from tests.conftest import ROOT
@@ -132,6 +132,80 @@ def test_r2_unusable_ec_during_a_step_stops_both_nutrient_paths(icfg, fault):
     assert a0 - rt.plant.tanks["A"].volume == pytest.approx(a_used, abs=1e-6)
     assert b0 - rt.plant.tanks["B"].volume == pytest.approx(b_used, abs=1e-6)
     assert not [e for e in rt.events if e["kind"] == "REFILL_EC_STEP"][n_steps:]
+
+
+def nutrient_starts(rt, since):
+    """Accepted pump ON commands to the A/B transfer pumps in the command audit after index `since`."""
+    pts = {rt.cfg.point_for_signal("pump.TP_A.cmd"), rt.cfg.point_for_signal("pump.TP_B.cmd")}
+    outcome = dict(rt.audit.outcomes)
+    return [r for r in rt.audit.intents[since:] if r.command.target in pts and r.command.desired
+            and outcome.get(r.command.request_id) not in (Outcome.REJECTED, Outcome.FAILED, Outcome.CANCELLED)]
+
+
+def _make_unusable(rt, fault):
+    p = ec_point(rt)
+    if fault == "invalid":
+        rt.set_override("t", p, 0, "open circuit")
+    elif fault == "stale":
+        rt.freeze_observation("t", p)
+        rt.set_acquisition_stall("t", True)
+    else:
+        rt.set_device_fault("t", p.split(".")[0], "TIMEOUT")
+
+
+@pytest.mark.parametrize("phase", ["OPENING_LAST_SCAN", "STARTING", "RUNNING"])
+@pytest.mark.parametrize("fault", ["invalid", "stale", "unavailable"])
+def test_r2_unusable_ec_never_lets_a_nutrient_pump_start(icfg, fault, phase):
+    """Second review: EC is checked before the A/B paths advance. Whatever the step's phase, no transfer pump
+    ON is accepted in any scan whose EC observation is unusable (command audit, not only the end state)."""
+    rt = refill_rt(icfg, {"refill": {"ec": {"step_total_L": 200, "settle_s": 1}}})
+    assert rt.process_request("t", "REFILL", CS.AUTO)[0]
+    rf = rt.sup.by_id["REFILL"]
+    if phase == "OPENING_LAST_SCAN":
+        until(rt, lambda: "A" in rf.paths and rf.paths["A"].state == "OPENING")
+        a = rf.paths["A"]
+        # each fault makes EC unusable by the last opening scan (a stalled observation ages ~1.5 s first)
+        wait = 0.5 if fault == "stale" else 1.5
+        while rt.sim_s - a.phase_t0 < wait - 1e-9:
+            rt.step()
+        assert not rt.plant.pumps["TP_A"].cmd and not rt.plant.pumps["TP_B"].cmd
+    else:
+        until(rt, lambda: "A" in rf.paths and rf.paths["A"].state == phase)
+    n0, before = len(rt.audit.intents), len(nutrient_starts(rt, 0))
+    _make_unusable(rt, fault)
+    violations, unusable_scans = [], 0
+    for _ in range(40):                                 # 20 s, one scan at a time
+        k = len(rt.audit.intents)
+        rt.step()
+        if rt.obs().num("main.ec") is None:
+            unusable_scans += 1
+            violations += nutrient_starts(rt, k)
+    assert unusable_scans > 0 and violations == []
+    if fault != "stale":                                 # unusable from the first scan: no ON at all after it
+        assert nutrient_starts(rt, n0) == []
+    if phase == "OPENING_LAST_SCAN":                     # the pumps never ran in this step
+        assert len(nutrient_starts(rt, 0)) == before
+    assert not rt.plant.pumps["TP_A"].cmd and not rt.plant.pumps["TP_B"].cmd
+    b = batch_of(rf)
+    assert b["nutrients"].startswith("STOPPED (EC unavailable during step 1"), b["nutrients"]
+    assert rt.alarms.is_active("REFILL_EC_UNAVAILABLE", "process.REFILL")
+    if fault == "stale":
+        rt.set_acquisition_stall("t", False)
+    rt.run_for(15)
+    b = batch_of(rf)
+    step = b["ec_steps"][-1]
+    assert "a_delivered_L" in step and step["a_delivered_L"] < step["a_L"]     # measured delivery audited
+    # probe back: no new step and no further nutrient ON in the stopped batch
+    if fault == "invalid":
+        rt.clear_override("t", ec_point(rt))
+    elif fault == "unavailable":
+        rt.set_device_fault("t", ec_point(rt).split(".")[0], None)
+    else:
+        rt.clear_override("t", ec_point(rt))
+    n1 = len(rt.audit.intents)
+    rt.run_for(60)
+    assert nutrient_starts(rt, n1) == [] and len(batch_of(rf)["ec_steps"]) == 1
+    assert batch_of(rf)["nutrients"].startswith("STOPPED (EC unavailable")
 
 
 def test_r2_no_new_nutrient_step_when_the_probe_returns(icfg):
