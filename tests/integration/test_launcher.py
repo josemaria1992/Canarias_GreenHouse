@@ -44,16 +44,20 @@ def _start(state, port, stdin_text=None):
 
 
 def _wait_health(base, p, timeout=120):
-    end = time.monotonic() + timeout
+    """The health answer once it says ok: the first answers can come before the first simulation tick."""
+    end, last = time.monotonic() + timeout, None
     while time.monotonic() < end:
         if p.poll() is not None:
             raise AssertionError(f"launcher exited early ({p.returncode}): {p.stdout.read()}")
         try:
             with urllib.request.urlopen(base + "/api/health", timeout=2) as r:
-                return json.load(r)
+                last = json.load(r)
+            if last["ok"]:
+                return last
         except OSError:
-            time.sleep(0.25)
-    raise AssertionError("launcher did not become healthy")
+            pass
+        time.sleep(0.25)
+    raise AssertionError(f"launcher did not become healthy: {last}")
 
 
 def _stop(p):

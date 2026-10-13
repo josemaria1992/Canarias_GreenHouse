@@ -9,6 +9,7 @@ Only SIMULATED configurations are launched: a hardware profile is served with `s
 from __future__ import annotations
 
 import getpass
+import json
 import logging
 import os
 import platform
@@ -157,19 +158,26 @@ def first_admin(cfg, state_dir: Path, *, username: str, password_stdin: bool) ->
 
 
 def _open_browser_when_ready(url: str, stop: threading.Event, log: logging.Logger, open_browser: bool) -> None:
-    end = time.monotonic() + 120
+    """Ready once /api/health says the simulation is running and storage accepts starts (not merely that the
+    server answers: the first answers can come before the first simulation tick)."""
+    end, last = time.monotonic() + 120, None
     while not stop.is_set() and time.monotonic() < end:
         try:
             with urllib.request.urlopen(url + "api/health", timeout=2) as r:
-                if r.status == 200:
-                    log.info("ready: %s", url)
-                    print(f"\nAquaCrop is running: {url}\nStop it with Ctrl+C in this window (or close the window).")
-                    if open_browser:
-                        webbrowser.open(url)
-                    return
-        except OSError:
+                last = json.load(r)
+            if last.get("ok"):
+                log.info("ready: %s", url)
+                print(f"\nAquaCrop is running: {url}\nStop it with Ctrl+C in this window (or close the window).")
+                if open_browser:
+                    webbrowser.open(url)
+                return
+        except (OSError, ValueError):
             pass
         time.sleep(0.5)
+    if not stop.is_set():
+        log.warning("not healthy after 120 s: %s", last)
+        print(f"\nAquaCrop did not report healthy within 120 s ({last or 'no answer'}); see the log file.",
+              file=sys.stderr)
 
 
 def cmd_launch(args) -> int:
