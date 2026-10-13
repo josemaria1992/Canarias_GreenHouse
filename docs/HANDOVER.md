@@ -4,7 +4,10 @@
 modules; the launcher default is `installation-80` and the added channels are testable but
 unallocated (`model/digital_io_8ch.md`, ADR-0016). The owner review findings R1-R4 of the same day
 are fixed (`ACCEPTANCE.md`, "Owner review of 13 October 2026"). 48-point sizing figures below are
-kept for the record; the 80-point measurement is in `operations/measurements/`.
+kept for the record. 80 points measured on the desktop: 15.0 GiB for a year with every process in
+AUTO, above the provisional 10 GiB budget (warning only, nothing deleted); a 17 GiB eMMC budget with
+backups and drills on the SD card is proposed for the owner to agree (`operations/measurements/
+2026-10-13-measurements.md`, RELEASE_READINESS item 24).
 
 This release is software and simulation only. What is still needed before each physical step, item
 by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPTANCE.md`.

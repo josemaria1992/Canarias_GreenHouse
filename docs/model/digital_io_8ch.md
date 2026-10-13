@@ -59,6 +59,11 @@ Keep the provisional budget warning; obtain a measured deployment budget and act
 restore working-space requirement. The earlier 10 GiB scratch figure is a minimum, not a guarantee
 that the larger inventory fits.
 
+**Re-measured 2026-10-13** (400 days, 80 points, every process in AUTO): 15.02 GiB at day 365, a
+0.82 GiB compressed backup, and a full restore drill that passed needing 18.05 GiB of scratch
+(19.9 GiB on the card with the downloaded copy and headroom). Layout and the proposed 17 GiB budget:
+`operations/measurements/2026-10-13-measurements.md`, section "80 points".
+
 On arrival: identify units separately, verify unique addresses manually, stimulate 16 added DI,
 test 16 added DO using suitable dummy loads under a lease, verify modes/firmware and loss/restart/
 expiry/revocation behavior. Electrical protections remain independent. Final field mapping and

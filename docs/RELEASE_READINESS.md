@@ -73,7 +73,7 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 | 21 | Network time and OS updates | not set | NTP source on the LAN or the RTC only; `apt` update schedule (never during a bench session) |
 | 22 | Remote access site values | examples only in `remote-access.md` | VPN server location, LAN and VPN subnets, controller address and name, one VPN profile per person |
 | 23 | Off-device backup activation | disabled; card, folder, key escrow and copy counts chosen 2026-10-12 | `offsite-backups.md` sections 2, 3 and 5 on the controller |
-| 24 | Storage for 80 points: database budget, WAL, backups and restore scratch | 60 s complete snapshots, 365 days, SQLite unchanged; the 10 GiB database budget was sized for 48 points and is provisional; the owner's one-day 80-point run projects about 13.2 GiB/year | a representative 80-point measurement and an agreed storage layout (CM4 eMMC size, SD card use) before deployment; retention, cadence and format are not changed to fit |
+| 24 | Storage for 80 points: database budget, WAL, backups and restore scratch | 60 s complete snapshots, 365 days, SQLite unchanged. Measured on the desktop (400 days, every process in AUTO): 15.0 GiB database, 0.82 GiB backup, restore drill needs 18.05 GiB scratch (19.9 GiB on the card). The 10 GiB budget is provisional and too small; proposal: 17 GiB on the 32 GB eMMC, backups and drills on the 64 GB card (`operations/measurements/2026-10-13-measurements.md`) | owner agrees the layout and budget; CP-00 measures OS footprint, eMMC and card on the CM4; retention, cadence and format are not changed to fit |
 
 ## 4. Not part of this release
 
