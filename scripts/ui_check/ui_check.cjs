@@ -69,8 +69,8 @@ async function login(p, user, pass) {
 async function show(p, view) {
   await p.goto(BASE + "/#" + view);
   await until(p, () => p.evaluate(v => {
-    const sec = document.querySelector("section.view:not(.hidden)");
-    return sec && location.hash === "#" + v && sec.innerText.trim().length > 40;
+    const sec = document.querySelector("section.view:not(.hidden)");   // rendered for this page, not the previous one
+    return sec && location.hash === "#" + v && window.AqUI.S.rendered === v && sec.innerText.trim().length > 40;
   }, view), 10000);
   await p.waitForTimeout(400);
 }
@@ -184,8 +184,12 @@ async function main() {
   // step 3: inject a fault (drive trip while irrigating) from the twin page
   await show(p, "twin");
   const row = p.locator(".row").filter({ has: p.locator("span", { hasText: /^drive$/ }) }).first();
-  await row.locator("select").nth(1).selectOption("TRIP");
+  const fault = row.locator("select").nth(1);
+  await fault.focus();                       // as a user's click would; the page is not rebuilt under a focused field
+  await fault.selectOption("TRIP");
   await row.locator("button", { hasText: "Apply" }).click();
+  const applied = await until(p, async () => { const d = (await get(p, "/api/twin")).snapshot.plant.drive; return d.fault === "TRIP" || d.tripped; }, 5000);
+  if (!applied) check("UI-03 drive trip applied from the twin page", false, `drive ${JSON.stringify((await get(p, "/api/twin")).snapshot.plant.drive)}`);
   const P3 = await until(p, async () => { const x = await procs(p); return x.IRRIGATION.state === "FAULT_LOCKOUT" && x; });
   await show(p, "main-pumps");
   await shot(p, "walk-3-fault");

@@ -97,6 +97,10 @@ and the process pages are read-only observation and every signal stays UNBOUND.
   is hidden for the installation topology (its processes have their own pages).
 - `/api/plant` returns full alarm occurrences (latch and reset state included) so pages can say what
   to do next.
+- The page refresh no longer undoes a choice made while it was fetching (for example a fault picked on
+  the twin page just before Apply), and a page change or an action that arrives during a refresh is
+  drawn right after it instead of at the next tick.
+- On a hardware profile a `NOT_CONFIGURED` drive adapter is shown UNBOUND like every other signal.
 
 ## 0.3.0 (2026-10-12): installation model and process controllers (ADR-0013, ADR-0014)
 
