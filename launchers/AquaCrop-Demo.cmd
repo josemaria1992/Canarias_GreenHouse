@@ -51,7 +51,9 @@ if not exist "!VENV!\Scripts\python.exe" (
   echo Preparing AquaCrop in "!VENV!" ^(first run only^) ...
   %PY% -m venv "!VENV!" || goto :fail
   set "OFFLINE="
-  for /f %%T in ('"!VENV!\Scripts\python.exe" -c "import sys; print('py%%d%%d' %% sys.version_info[:2])"') do set "PYTAG=%%T"
+  rem the version of the new environment, from the interpreter that made it: a for /f command that starts
+  rem with a quoted path loses its first and last quote to cmd /c
+  for /f %%T in ('!PY! -c "import sys; print('py%%d%%d' %% sys.version_info[:2])"') do set "PYTAG=%%T"
   if exist "%HERE%wheelhouse-win_amd64-!PYTAG!\" set "OFFLINE=--no-index --find-links "%HERE%wheelhouse-win_amd64-!PYTAG!""
   if defined OFFLINE (echo Installing from the bundled wheelhouse ^(no internet needed^).) else (echo Installing the locked packages from the internet.)
   "!VENV!\Scripts\python.exe" -m pip install --disable-pip-version-check -q !OFFLINE! --require-hashes -r "!LOCK!" || goto :failvenv
