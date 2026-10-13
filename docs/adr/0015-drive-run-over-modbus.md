@@ -46,8 +46,10 @@ register map has been supplied.
 ## Consequences
 
 * All 16 relay DO stay allocated as proposed in `docs/model/signal_budget.md`; no third relay module.
-  The IO 8CH modules added later the same day (ADR-0016) do not change this decision; one of their
-  transistor outputs is proposed only as a hardwired fallback, pending the owner's answer.
+  The IO 8CH modules added later the same day (ADR-0016) do not change this decision. The owner
+  decided (2026-10-13, 17:19 UTC) that all 16 of their transistor outputs stay spare/test-only,
+  `digital_A.DO1` included: a hardwired run is a possible future option, not an approved assignment
+  or a second command path.
 * The installation cannot run its main pumps until CP-06 passes on the bench and the verified map is
   configured; that was already true (no physical AUTO in this release).
 * If the real drive's comm-loss timer is reset only by writes, this design would stop a running drive

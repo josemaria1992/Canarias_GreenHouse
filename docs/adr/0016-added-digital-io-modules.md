@@ -20,5 +20,9 @@ Retain NOT_CONFIGURED for physical VFD control until its actual interface is ver
 Do not invent feedback sensors or enable physical AUTO. Reassess the 80-point storage budget;
 do not shorten 365-day retention or slow 60-second recording without a further owner decision.
 
+Owner decision, 2026-10-13 17:19 UTC: all 32 added channels stay unassigned, and all 16 added
+outputs (DO1 included) are spare/test-only until hardware and wiring are verified. A hardwired drive
+run is a future option, not an approved assignment.
+
 Protocol, commissioning limitations and sizing evidence are in
 [digital_io_8ch.md](../model/digital_io_8ch.md).

@@ -9,9 +9,10 @@ boards stay; no further module is required.
 Configurations: `configs/installation-80.yaml` (SIMULATED, launcher default) and the earlier
 `configs/installation-48.yaml`. The 48 relay/analog channels carry the allocation below, decided in
 principle on 2026-10-13 (all 16 DI and 16 DO in use) but still a **per-channel proposal**. The 32
-IO 8CH channels are **unallocated test points**: the plant model reads and drives none of them, and
-the proposal for them (last section) needs the owner's answer before anything is bound. Physical
-wiring is TBD and nothing has been wired or commissioned (ADR-0013).
+IO 8CH channels are **unassigned test points by owner decision (2026-10-13 evening)**: the plant
+model reads and drives none of them, and the last section lists possible future uses only as a
+proposal, not as devices known to be fitted. Physical wiring is TBD and nothing has been wired or
+commissioned (ADR-0013).
 
 ## What the processes need
 
@@ -106,7 +107,8 @@ instruments' data sheets at commissioning.
 
 **Chosen 2026-10-13 (morning): option 1, with the drive's run command over Modbus.** Later the same day
 the owner reported two IO 8CH modules, which supply the extra inputs option 2 asked for without a
-third relay module; their use is the proposal below. The options are kept for the record.
+third relay module; the owner then decided to leave all 32 of them unassigned (below). The options
+are kept for the record.
 
 1. Keep 48 points and confirm the VFD interface (Modbus or terminal) so the drive adapter can be
    configured; accept the weaker evidence above.
@@ -115,20 +117,30 @@ third relay module; their use is the proposal below. The options are kept for th
 3. Change the allocation (for example trade the sector pressures for valve feedback). Every point
    is a configuration entry; the controllers use signal names.
 
-## Proposal for the 32 added channels (owner to confirm; nothing is bound)
+## The 32 added channels: unassigned (owner decision, 2026-10-13)
+
+**Decision (owner, second re-review, 2026-10-13 17:19 UTC): all 32 added channels stay unassigned.**
+`digital_A` and `digital_B` are unallocated test points with no bindings until the hardware and its
+wiring are verified. All 16 added outputs, `digital_A.DO1` included, are spare/test-only. A hardwired
+drive run is a possible future option, not an approved assignment and not a second command path:
+the drive run stays on the simulated Modbus adapter, and the installation's physical drive interface
+stays `NOT_CONFIGURED` (ADR-0015). No feedback device below is assumed fitted or purchased.
+
+The table that follows is kept as a **proposal** for a later decision. It does not say that any of
+these contacts or switches exist on the plant.
 
 The IO 8CH inputs are dry-contact/voltage inputs and the outputs are DC open-drain sinks (500 mA
 per channel; the bank total, supply voltage and suppression are still to be verified on the
 received units). They must not switch mains voltage, AC contactor coils or motors directly.
 
 The plant model has **no** sensors beyond those listed above, and this proposal adds none. Each
-input row below names a device that may already exist on the confirmed equipment (for example a
+input row below names a device that might exist on the confirmed equipment (for example a
 limit switch built into a motorised valve, or an auxiliary contact in a motor starter); it is used
 **only if the owner confirms that the device is fitted and wired**. The signal names in the third
 column already exist in the controllers and replace the weaker indirect evidence when they are
 bound; rows marked "needs a controller change" do not exist yet.
 
-| Point | Proposed use (only if fitted) | Signal | Effect on cause and effect when bound |
+| Point | Possible future use (proposal; not known to be fitted) | Signal | Effect on cause and effect when bound |
 |---|---|---|---|
 | `digital_A.DI1` | Sector 1 valve closed limit | `valve.S1.closed_limit` | Closure proven by the limit instead of "open limit released and flow below 0.5 L/min"; `VALVE_CLOSE_TIMEOUT` on the limit |
 | `digital_A.DI2` | Sector 2 valve closed limit | `valve.S2.closed_limit` | as above |
@@ -146,18 +158,12 @@ bound; rows marked "needs a controller change" do not exist yet.
 | `digital_B.DI6` | Return pumps: motor protection tripped (common contact) | `pump.RP.protection_trip` (needs a controller change) | Return lockout with the cause shown |
 | `digital_B.DI7` | Transfer pumps: motor protection tripped (common contact) | `pump.TP.protection_trip` (needs a controller change) | Refill/acid/stock lockout with the cause shown |
 | `digital_B.DI8` | Spare (test only) | — | — |
-| `digital_A.DO1` | Drive run over a hardwired terminal, as a fallback to Modbus (through an interposing relay, or directly only if the drive's input accepts a sinking signal within the module's rating) | `drive.MAIN.run` | Only if CP-06 shows the drive's comm-loss timer is not reset by reads (ADR-0015 §Consequences) or the owner prefers a hardwired run; the Modbus adapter would then be removed, not run in parallel |
-| `digital_A.DO2`-`DO8`, `digital_B.DO1`-`DO8` | Spare (test only) | — | — |
+| `digital_A.DO1`-`DO8`, `digital_B.DO1`-`DO8` | Spare (test only), by owner decision | — | — |
 
-Questions for the owner (one answer per row is enough: "fitted" or "not fitted"):
+A hardwired drive run (an interposing relay driven by a transistor output, or a sinking drive input
+within the module's rating) remains a **future option** to consider only if CP-06 shows that the
+drive's comm-loss timer is not reset by reads (ADR-0015 §Consequences). It would need a new owner
+decision and an ADR, and would replace the Modbus run command rather than run beside it.
 
-1. Do the two sector valves have closed limit switches, and the three stock outlet and four mains
-   fill valves open limit switches?
-2. Do the three stock tanks have low-level switches in addition to the level transmitters?
-3. Does the drive have a relay output that can be set to "ready", and do the return and transfer
-   pump starters have auxiliary trip contacts?
-4. Keep the drive run on Modbus (decided) with `digital_A.DO1` reserved as the hardwired fallback,
-   or leave all 16 transistor outputs as spares?
-
-Until answered, `installation-80` keeps the 32 channels unallocated and every controller uses the
-indirect evidence described above.
+`installation-80` keeps the 32 channels unallocated and every controller uses the indirect evidence
+described above. Any later binding needs the owner to confirm the device is fitted and wired.

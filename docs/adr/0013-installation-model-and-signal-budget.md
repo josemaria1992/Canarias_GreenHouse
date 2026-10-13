@@ -66,5 +66,6 @@ the twin, `NOT_CONFIGURED` on hardware until CP-06. The per-channel table remain
 
 The inventory is six modules, 80 points: the two Relay (D) and two AI boards above plus two IO 8CH
 (SKU 26244) with 8 DI and 8 open-drain DO each (ADR-0016). "No third relay module" still holds; the
-48-point allocation above is unchanged, and the 32 added channels stay unallocated until the owner
-answers the proposal in `docs/model/signal_budget.md`.
+48-point allocation above is unchanged. The owner decided the same evening (17:19 UTC) that all 32
+added channels stay unassigned test points until the hardware and its wiring are verified; the
+table in `docs/model/signal_budget.md` stays a proposal and does not mean any device is fitted.
