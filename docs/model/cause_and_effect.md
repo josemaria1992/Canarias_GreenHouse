@@ -42,13 +42,15 @@ is requested; while one is active it waits with the reason shown.
 | Selection feedback (K aux) not seen in `contactor_timeout_s` | Lockout `SELECTION_TIMEOUT`. |
 | Open limit not seen in `valve_open_timeout_s` | Lockout `VALVE_OPEN_TIMEOUT`; the drive never starts. |
 | Open limit lost before the pump starts | Lockout `VALVE_LOST_OPEN`. |
+| During the valve lead (LEAD): main low-low switch or level below the dry-run guard | Lockout `MAIN_LOW_LOW` in that scan; the drive is never started. |
+| End of the valve lead, in the scan that would request RUN: the start permissives checked again (storage inhibit, safety chain, start interlocks) | Any one lost: lockout `START_INHIBITED`; RUN is not requested. Recovery only by acknowledge, reset and a deliberate restart. |
 | No running feedback in `drive_start_timeout_s` | Lockout `DRIVE_START_TIMEOUT`. |
 | Running feedback lost while pumping | Lockout `DRIVE_STOPPED`. |
 | Flow below `min_flow_L_min` for `no_flow_sustain_s` after `flow_grace_s` | Lockout `NO_FLOW`. |
 | Drive fault input | Lockout `DRIVE_FAULT`. |
 | Both K1 and K2 report closed, or the other pump than the owned one | Lockout `BOTH_PUMPS_SELECTED` / `UNEXPECTED_PUMP_SELECTED`. |
 | Drive running while no pumping phase is active | Lockout `UNCOMMANDED_DRIVE_RUN`. |
-| Main low-low switch or level below the dry-run guard while pumping | Lockout `MAIN_LOW_LOW`. |
+| Main low-low switch or level below the dry-run guard while pumping (or during the lead, above) | Lockout `MAIN_LOW_LOW`. |
 | Drive still running `drive_stop_timeout_s` after the stop command | Lockout `STOP_NOT_VERIFIED`; the sector valve and the pump selection are **held** (no switching under a possibly running motor) until stop is verified on site. |
 | Valve not verified closed in `valve_close_timeout_s` | Lockout `VALVE_CLOSE_TIMEOUT`. |
 | Selection still reported after release | Lockout `DESELECT_TIMEOUT`. |

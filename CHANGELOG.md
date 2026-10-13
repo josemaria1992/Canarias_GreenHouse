@@ -40,6 +40,11 @@ Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists a
 - The simulation runtime acquires once per control period for the installation topology (the demo
   topology still scans every tick); configuration lookups are cached.
 
+### Fixed (owner review of 2026-10-13)
+- R3: irrigation checks the main level (low-low switch and the dry-run guard) during the valve lead
+  and re-checks the start permissives in the scan that requests drive RUN. A loss there locks out
+  (`MAIN_LOW_LOW` or `START_INHIBITED`) without the drive ever being started.
+
 ## Unreleased (2026-10-12): timestamp quarantine (ADR-0011) and off-device backups (ADR-0012)
 
 ### Added

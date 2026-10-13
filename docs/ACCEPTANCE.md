@@ -197,6 +197,15 @@ isolation and inventory checks). The UI, OP, BK and DL gates follow in later pul
 | PC-12 a fault stops and locks out; ack alone cannot reset; reset while the fault is active fails; a healthy reset does not restart; a deliberate restart succeeds under the same role rules locally and remotely | PASS | scenarios `vfd_trip_recovery`, `safety_chain_open`, `main_pump_no_flow`, `sector_valve_stuck_open`, `main_level_open_loop`, `stale_acquisition`, `module_timeout`, `main_source_empty`, `main_low_low`; `test_pc12_ack_reset_restart_are_distinct`, `test_pc12_storage_fault_inhibits_new_starts`, `test_pc12_stop_all_brings_every_output_off`; roles: `integration/test_api_installation.py` (one API for local and remote) |
 | PC-13 bounded MANUAL fills, transfers and doses honour quantity, time, capacity and arbitration; a stale required sensor disables the operation with an actionable reason | PASS | scenarios `manual_bounds_rejected`, `raw_command_refused`, `stale_acquisition` |
 
+### Owner review of 13 October 2026 (findings R2-R4, process controllers)
+
+Regression cases from `REVIEW_AND_REQUIRED_FIXES.md`, in
+`tests/acceptance/test_installation_review_r2_r4.py`, on the synthetic twin (not physical verification).
+
+| ID | Status | Evidence |
+|---|---|---|
+| RV-R3 main level and start permissives checked again during the valve lead and in the scan that requests drive RUN; a loss prevents RUN rather than stopping the drive afterwards | PASS | `test_r3_permissive_lost_during_lead_never_starts_the_drive[analog_below_guard,low_low_switch]` (no RUN command, lockout, no restart when the level returns), `test_r3_storage_inhibit_during_lead_never_starts_the_drive`, `test_r3_healthy_alternation_still_starts`; the existing valve-loss, drive-fault, sensor-unavailable and stop/switch scenarios unchanged |
+
 ## Milestone 5: hardware arrival
 
 | ID | Status | Evidence |

@@ -187,10 +187,10 @@ class Irrigation(Process):
         pumping_phases = ("START", "VERIFY_FLOW", "IRRIGATE", "STOP_DRIVE")
         if running and self.phase not in pumping_phases:
             return self.fault("UNCOMMANDED_DRIVE_RUN", f"drive running during {self.phase}")
-        if self.phase in ("START", "VERIFY_FLOW", "IRRIGATE"):
+        if self.phase in ("LEAD", "START", "VERIFY_FLOW", "IRRIGATE"):
             bad = self._level_bad(ctx)
             if bad:
-                return self.fault("MAIN_LOW_LOW", "; ".join(bad))
+                return self.fault("MAIN_LOW_LOW", "; ".join(bad) + (" (drive not started)" if self.phase == "LEAD" else ""))
         flow = o.num(f"flow.{sec}")
         e = self.elapsed()
 
@@ -212,6 +212,10 @@ class Irrigation(Process):
                 return self.fault("VALVE_LOST_OPEN", f"{sec} open limit released before the pump started")
             lead = max(1.0, ir.open_lead_s)
             if now - self.open_cmd_s + 1e-9 >= lead:
+                # the start permissives again, in the scan that requests RUN (a lockout here never starts it)
+                why = self.sup.run_blockers(self.pid, ctx)
+                if why:
+                    return self.fault("START_INHIBITED", f"drive not started: {'; '.join(why)}")
                 self._to(None, "START", f"{now - self.open_cmd_s:.1f} s since the open command (lead {lead:g} s)")
                 if not self.cmd(f"{self.drive}.run", True, f"start drive for {pump}/{sec}"):
                     self.fault("COMMAND_REJECTED", "drive start rejected")
