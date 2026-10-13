@@ -612,6 +612,8 @@ class Refill(_PathProcess):
 
     def _batch_tick(self, ctx: Ctx) -> None:
         b, rf = self.batch, self.recipe.body.refill
+        if rf.nutrient_mode == "EC_TARGET":
+            self._ec_permissive(ctx)       # before the paths advance: an unusable EC must prevent a pump ON
         for p in list(self.paths.values()):
             was = p.finished
             p.tick(ctx)
@@ -667,17 +669,6 @@ class Refill(_PathProcess):
         steps = b["ec_steps"]
         doing = [self.paths[s] for s in ("A", "B") if s in self.paths and not self.paths[s].finished]
         if doing:
-            if ctx.obs.num("main.ec") is None:     # the step is EC-controlled: no usable EC, no more nutrient
-                why = ctx.obs.why("main.ec")
-                for p in doing:
-                    p.stop(ctx, f"EC_UNAVAILABLE ({why}): nutrient dosing stopped")
-                b["nutrients"] = f"STOPPED (EC unavailable during step {len(steps)}: {why})"
-                self.sup.emit("REFILL_EC_STEP_STOPPED", {"batch": b["batch_id"], "step": len(steps), "reason": why,
-                                                         "paths": [p.name for p in doing]}, "controller")
-                self.sup.alarms.raise_or_update("REFILL_EC_UNAVAILABLE", "process.REFILL", severity="WARNING",
-                                                sim_s=ctx.now, message=f"Refill: EC probe unusable ({why}) during a "
-                                                f"nutrient step; both nutrient paths stopped")
-                return
             b["nutrients"] = "DOSING"
             return
         if b["nutrients"] == "DOSING":
@@ -744,6 +735,28 @@ class Refill(_PathProcess):
             b["nutrients"] = "STOPPED (a nutrient path could not start)"
             return
         b["nutrients"] = "DOSING"
+
+    def _ec_permissive(self, ctx: Ctx) -> None:
+        """EC_TARGET steps are EC-controlled: checked in every scan before the A/B paths advance, so an
+        unusable probe stops a step that is opening, starting or running before any pump ON is sent (the
+        paths then stop and verify as usual; their measured delivery is recorded when they finish).
+        Step evaluation, settling and the batch budget stay in _ec_tick, after the paths."""
+        b = self.batch
+        if b["nutrients"].startswith(("STOPPED", "EC_", "MAX", "ABOVE")) or b["nutrients"] == "DONE":
+            return
+        active = [self.paths[s] for s in ("A", "B") if s in self.paths and self.paths[s].state in
+                  ("PENDING", "OPENING", "STARTING", "RUNNING")]
+        if not active or ctx.obs.num("main.ec") is not None:
+            return
+        why, n = ctx.obs.why("main.ec"), len(b["ec_steps"])
+        for p in active:
+            p.stop(ctx, f"EC_UNAVAILABLE ({why}): nutrient dosing stopped")
+        b["nutrients"] = f"STOPPED (EC unavailable during step {n}: {why})"
+        self.sup.emit("REFILL_EC_STEP_STOPPED", {"batch": b["batch_id"], "step": n, "reason": why,
+                                                 "paths": [p.name for p in active]}, "controller")
+        self.sup.alarms.raise_or_update("REFILL_EC_UNAVAILABLE", "process.REFILL", severity="WARNING",
+                                        sim_s=ctx.now, message=f"Refill: EC probe unusable ({why}) during a "
+                                        f"nutrient step; both nutrient paths stopped")
 
     @staticmethod
     def _delivered(steps: list[dict], k: str) -> float:
