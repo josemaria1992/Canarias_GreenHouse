@@ -140,56 +140,154 @@ jobs:
         run: sh launchers/aquacrop-demo.sh --check-only
 
   release:
-    # DL-05: the release ZIP with offline wheelhouses for the Windows demo (py3.12) and the CM4
-    # (aarch64, py3.11, Raspberry Pi OS Bookworm), its SHA-256 manifest and RELEASE.json.
+    # DL-05: the release ZIP with offline wheelhouses for the Windows demo (py3.12) and the CM4 (aarch64, py3.11,
+    # Raspberry Pi OS Bookworm), its SHA-256 manifest and RELEASE.json. Two passes with the same wheel: pass 1 is
+    # extracted and started through its own aquacrop-demo.sh for Claude's browser rehearsal of the owner tour
+    # (UAT-01..16, headless Chromium, screenshots); pass 2 adds that illustrated guide and the wheelhouses, and the
+    # extracted result is checked by verify_release.py. Simulation only; owner results stay NOT RUN.
     needs: [test, wheel]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # the 0.3.1 fixture below is built from its own commit
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build the release ZIP
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install build tools and Playwright
         run: |
           python -m pip install --require-hashes -r requirements-dev.lock
-          python scripts/build_release.py --out dist-release --wheelhouse win_amd64:3.12 --wheelhouse aarch64:3.11
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+      - name: "Pass 1: build, extract, rehearse the owner tour through the release launcher"
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
+        run: |
+          T="$RUNNER_TEMP"
+          python scripts/build_release.py --out "$T/pass1"
+          mkdir "$T/x1" && unzip -q "$T"/pass1/aquacrop-*.zip -d "$T/x1"
+          REL1=$(ls -d "$T"/x1/aquacrop-*)
+          VERSION=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$REL1/RELEASE.json")
+          AQ_EXPECT_RELEASE="$VERSION" python scripts/ui_check/run_tour_rehearsal.py --out "$T/tour-evidence" \
+            --launcher "$REL1/aquacrop-demo.sh"
+      - name: "Pass 2: same wheel and build time, with the illustrated guide and the wheelhouses"
+        run: |
+          T="$RUNNER_TEMP"; REL1=$(ls -d "$T"/x1/aquacrop-*)
+          BUILT=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['built_utc'])" "$REL1/RELEASE.json")
+          python scripts/build_release.py --out dist-release --wheel "$(ls "$REL1"/wheels/aquacrop_greenhouse-*.whl)" \
+            --built-utc "$BUILT" --owner-tour "$T/tour-evidence" --wheelhouse win_amd64:3.12 --wheelhouse aarch64:3.11
+          mkdir "$T/x2" && unzip -q dist-release/aquacrop-*.zip -d "$T/x2"
+          REL2=$(ls -d "$T"/x2/aquacrop-*)
+          python - "$REL1/RELEASE.json" "$REL2/RELEASE.json" <<'PY'
+          import json, sys
+          a, b = (json.load(open(p)) for p in sys.argv[1:])
+          keys = ("version", "commit", "tree_clean", "built_utc", "wheel", "requirements_lock_sha256")
+          diff = [k for k in keys if a[k] != b[k]]
+          print("the rehearsed and the delivered release share", ", ".join(keys), "" if not diff else f"EXCEPT {diff}")
+          raise SystemExit(1 if diff else 0)
+          PY
+      - name: Verify the extracted release with the rehearsed environment
+        run: |
+          T="$RUNNER_TEMP"; REL2=$(ls -d "$T"/x2/aquacrop-*)
+          PY=$(ls -d "$HOME"/.local/share/aquacrop/venv-*/bin/python | head -n 1)
+          python scripts/verify_release.py --release "$REL2" --zip "$(ls dist-release/aquacrop-*.zip)" --python "$PY" \
+            --json "$T/tour-evidence/verify-release.json"
       - uses: actions/upload-artifact@v4
         with:
           name: release
           path: |
             dist-release/*.zip
             dist-release/*.zip.sha256
+      - name: Build the provisional 0.3.1 demo from its own commit (main at bcd6200), for the upgrade test
+        run: |
+          git worktree add "$RUNNER_TEMP/v031" bcd620094fdfadbe466a973f27d67b5592c600d9
+          cd "$RUNNER_TEMP/v031" && python scripts/build_release.py --out "$RUNNER_TEMP/old" --wheelhouse win_amd64:3.12
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-0.3.1
+          path: |
+            ${{ runner.temp }}/old/*.zip
+            ${{ runner.temp }}/old/*.zip.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-evidence
+          path: ${{ runner.temp }}/tour-evidence
 
   release-windows:
-    # DL-01 from the ZIP: offline first run from the bundled wheelhouse (package index disabled), the
-    # launcher's checks, and the installed-wheel check outside any source tree.
+    # DL-01 from the ZIP on Windows, through AquaCrop-Demo.cmd as the owner starts it: a cold start offline
+    # from the bundled wheelhouse (package index disabled) with the first administrator, sign-in, browser
+    # assets, version and release check, a clean stop and a restart that keeps the data; the installed-wheel
+    # check outside any source tree; and an upgrade over the provisional 0.3.1 demo (rebuilt from its commit
+    # bcd6200 in the release job), keeping accounts, recipes, history and backups. Simulation only.
     needs: release
     runs-on: windows-2022
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
           name: release
+          path: new
       - name: Unpack and verify
         shell: bash
         run: |
-          sha256sum -c aquacrop-*.zip.sha256
-          unzip -q aquacrop-*.zip -d unpacked
+          (cd new && sha256sum -c aquacrop-*.zip.sha256)
+          unzip -q new/aquacrop-*.zip -d unpacked
           cd unpacked/aquacrop-* && sha256sum -c --quiet MANIFEST.sha256
-      - name: First run offline, then the checks
+      - name: Launcher checks, offline
         shell: cmd
         env:
           AQUACROP_NO_PAUSE: "1"
           PIP_NO_INDEX: "1"
+          LOCALAPPDATA: ${{ runner.temp }}\checks
         run: |
           for /d %%D in (unpacked\aquacrop-*) do call "%%D\AquaCrop-Demo.cmd" --check-only || exit /b 1
+      - name: Cold start, first administrator, sign-in, clean stop; then a restart that keeps the data
+        shell: bash
+        env:
+          PIP_NO_INDEX: "1"
+        run: |
+          T="$RUNNER_TEMP"; E="$T/evidence"; mkdir -p "$E"
+          L=$(ls -d unpacked/aquacrop-*)/AquaCrop-Demo.cmd
+          V=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$(dirname "$L")/RELEASE.json")
+          python scripts/release_smoke.py --launcher "$L" --local "$T/cold" --secret "$T/pw-cold" --first --seed \
+            --record "$E/cold-1.json" --expect-version "$V"
+          python scripts/release_smoke.py --launcher "$L" --local "$T/cold" --secret "$T/pw-cold" \
+            --compare "$E/cold-1.json" --record "$E/cold-2.json" --expect-version "$V"
       - name: Installed-wheel check with the launcher's environment
         shell: bash
         run: |
-          PY=$(ls -d "$LOCALAPPDATA"/AquaCrop/venv-aquacrop_greenhouse-*/Scripts/python.exe | head -n 1)
+          PY=$(ls -d "$RUNNER_TEMP"/cold/AquaCrop/venv-aquacrop_greenhouse-*/Scripts/python.exe | head -n 1)
           cp unpacked/aquacrop-*/check_installed_wheel.py "$RUNNER_TEMP/" && cd "$RUNNER_TEMP" && "$PY" check_installed_wheel.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-0.3.1
+          path: old
+      - name: Upgrade over the provisional 0.3.1 demo
+        shell: bash
+        env:
+          PIP_NO_INDEX: "1"
+        run: |
+          T="$RUNNER_TEMP"; E="$T/evidence"
+          (cd old && sha256sum -c aquacrop-*.zip.sha256)
+          unzip -q old/aquacrop-*.zip -d old-unpacked
+          OLD=$(ls -d old-unpacked/aquacrop-*)/AquaCrop-Demo.cmd; NEW=$(ls -d unpacked/aquacrop-*)/AquaCrop-Demo.cmd
+          V=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$(dirname "$NEW")/RELEASE.json")
+          python scripts/release_smoke.py --launcher "$OLD" --local "$T/upgrade" --secret "$T/pw-up" --first --seed \
+            --record "$E/upgrade-0.3.1.json" --expect-version 0.3.1 --expect-release ANY
+          python scripts/release_smoke.py --launcher "$NEW" --local "$T/upgrade" --secret "$T/pw-up" \
+            --compare "$E/upgrade-0.3.1.json" --record "$E/upgrade-new.json" --expect-version "$V"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-windows-evidence
+          path: ${{ runner.temp }}/evidence
 
   release-cm4-staging:
     # DL-02 from the ZIP on an ARM64 runner (not a CM4): the guided installer, staged under a temporary
@@ -212,9 +310,10 @@ jobs:
           python deploy/aquacrop-cm4.py --root "$R" check --release .
           python deploy/aquacrop-cm4.py --root "$R" install --release . --config configs/hardware-read-only.example.yaml
           PY="$R/opt/aquacrop/current/venv/bin/python"
-          "$PY" -m aquacrop demo verify --config installation-48 --seed 42
+          "$PY" -m aquacrop demo verify --config installation-80 --seed 42
+          "$PY" -m aquacrop demo verify --config installation-48 --seed 42   # legacy 48-point fixture
           cp check_installed_wheel.py "$RUNNER_TEMP/" && (cd "$RUNNER_TEMP" && "$PY" check_installed_wheel.py)
-          echo "AQUACROP_CONFIG=$PWD/configs/installation-48.yaml" > "$R/etc/aquacrop/aquacrop.env"
+          echo "AQUACROP_CONFIG=$PWD/configs/installation-80.yaml" > "$R/etc/aquacrop/aquacrop.env"
           python deploy/aquacrop-cm4.py --root "$R" upgrade --release . --reinstall
           python deploy/aquacrop-cm4.py --root "$R" rollback
           python deploy/aquacrop-cm4.py --root "$R" status

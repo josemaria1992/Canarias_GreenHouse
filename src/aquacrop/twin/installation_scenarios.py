@@ -208,8 +208,67 @@ SMALL_REFILL = {"main": {"refill_trigger_L": 8000, "rearm_hysteresis_L": 500},
                 "refill": {"final_level_L": 9000, "ec": {"settle_s": 300}}}
 
 
+# Owner-tour presets (docs/operator/walkthrough.md, UAT-01..16). Simulation only. All but one only set a start
+# condition and start nothing: the owner presses the buttons the guide names. Every level here is a DEMO value
+# chosen against the DEMO recipe demo-sim (refill trigger 8,000 L, return start 2,500 L, pH target 6.0), not
+# a field setting. The EC-boundary preset is scripted because the moment it demonstrates lasts 2 s.
+TOUR_LOW_MAIN_L = 7600
+TOUR_EC_FAULT_AT_S = 13.5     # stock A outlet valve opening runs 12.0-14.0 s in this run: 1.5 s into it
+
+
+def _no_ab_start(rt) -> list[str]:
+    """No accepted ON command to transfer pump A or B in the whole run (the command audit, not the end state)."""
+    pts = {rt.cfg.point_for_signal("pump.TP_A.cmd"), rt.cfg.point_for_signal("pump.TP_B.cmd")}
+    outcome = {rid: getattr(o, "value", str(o)) for rid, o in rt.audit.outcomes}
+    on = [r for r in rt.audit.intents if r.command.target in pts and r.command.desired
+          and outcome.get(r.command.request_id) not in ("REJECTED", "FAILED", "CANCELLED")]
+    return [f"{len(on)} transfer pump ON command(s) accepted"] if on else []
+
+
+def _nutrients_stopped_by_ec(rt) -> list[str]:
+    rf = rt.sup.by_id["REFILL"]
+    b = rf.batch if rf.batch is not None else (rf.batches[-1] if rf.batches else None)
+    if b is None:
+        return ["no refill batch"]
+    return [] if str(b["nutrients"]).startswith("STOPPED (EC unavailable during step 1") else [
+        f"nutrients {b['nutrients']}"]
+
+
+def tour_presets() -> list[Scenario]:
+    return [
+        Scenario("tour_low_main", f"Owner tour (UAT-06): main tank starts at {TOUR_LOW_MAIN_L:,} L (DEMO), below the "
+                 "8,000 L refill trigger of the DEMO recipe. Nothing is started: acknowledge the stocks on Nutrients & "
+                 "acid, then press AUTO for Main-tank refill.", 5,
+                 twin_overrides=tw({"MAIN": TOUR_LOW_MAIN_L}),
+                 checks=[proc("REFILL", "STOPPED"), lambda rt: [] if abs(rt.plant.tanks["MAIN"].volume - TOUR_LOW_MAIN_L) < 1
+                         else [f"main {rt.plant.tanks['MAIN'].volume:.0f} L"]]),
+        Scenario("tour_ph_high", "Owner tour (UAT-08): synthetic main-tank pH starts at 6.8 (DEMO chemistry), above the "
+                 "6.0 target of the DEMO recipe. Nothing is started: acknowledge the acid stock, then press AUTO for "
+                 "Acid pH dosing.", 5, twin_overrides=tw(chemistry={"initial_main_ph": 6.8}),
+                 checks=[proc("ACID", "STOPPED"), no_event("ACID_DOSE_ENDED")]),
+        Scenario("tour_sump_high", "Owner tour (UAT-09): sump starts at 2,700 L (DEMO), above the 2,500 L return start "
+                 "of the DEMO recipe. Nothing is started: press AUTO for Drainage return.", 5,
+                 twin_overrides=tw({"SUMP": 2700}), checks=[proc("RETURN", "STOPPED")]),
+        Scenario("tour_main_full_sump_high", "Owner tour (UAT-09): main tank 18,800 L and sump 4,700 L (DEMO): the "
+                 "destination is above the 18,500 L hold level. Nothing is started: press AUTO for Drainage return "
+                 "and watch it hold.", 5, twin_overrides=tw({"MAIN": 18800, "SUMP": 4700}),
+                 checks=[proc("RETURN", "STOPPED")]),
+        Scenario("tour_ec_lost_at_valve_opening", "Owner tour (UAT-11), runs by itself and needs the DEMO recipe "
+                 "demo-sim (EC_TARGET) active: stocks acknowledged, main tank 7,600 L, refill AUTO at 1 s; the stock A "
+                 f"outlet valve opens at 12 s and at {TOUR_EC_FAULT_AT_S:g} s, the last part of its 2 s opening, the EC "
+                 "input is overridden to raw 0 (open circuit). Expected: no transfer pump A or B is ever started, the "
+                 "nutrient step is STOPPED with the reason, alarm REFILL_EC_UNAVAILABLE; clearing the override does not "
+                 "restart the step.", 60,
+                 _ack_stocks() + [_start("REFILL", 1),
+                                  (TOUR_EC_FAULT_AT_S, "OVERRIDE_SET", {"point": "analog_A.AI7", "raw": 0,
+                                                                        "reason": "tour: EC probe open circuit"})],
+                 twin_overrides=tw({"MAIN": TOUR_LOW_MAIN_L}),
+                 checks=[_no_ab_start, _nutrients_stopped_by_ec, alarm("REFILL_EC_UNAVAILABLE", "process.REFILL")]),
+    ]
+
+
 def presets() -> dict[str, Scenario]:
-    S = [
+    S = tour_presets() + [
         # -------------------------------------------------------------- irrigation (PC-01..03, PC-13)
         Scenario("irrigation_alternation", "AUTO: two full cycles P1/S1 then P2/S2, 300 s each, with the verified "
                  "shared-drive changeover (owner sequence).", 1250, [IRR],

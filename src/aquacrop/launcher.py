@@ -68,6 +68,11 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
     from .cli import _cfg
     chk = Check()
     print(f"AquaCrop {__version__}: checking prerequisites")
+    from .release import describe, release_info
+    rel = release_info()
+    chk(rel["status"] in ("VERIFIED", "NOT_A_RELEASE"), describe(rel),
+        "this environment does not hold the release next to the launcher: unpack the whole release ZIP into a "
+        "new folder and start AquaCrop-Demo.cmd from there")
     v = sys.version_info[:2]
     chk(v in SUPPORTED, f"Python {platform.python_version()} ({sys.executable})",
         "install Python 3.11, 3.12 or 3.13 from python.org and run the launcher again")
@@ -91,7 +96,9 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
         chk(cfg.profile.value == "SIMULATED", f"configuration {cfg.config_id} ({cfg.profile.value})",
             "the launcher only runs simulations; serve a hardware profile with `aquacrop serve` on the controller")
     except Exception as e:
-        chk(False, f"configuration {cfg_name}: {e}", "use a packaged name (installation-48, demo-48) or a valid file")
+        chk(False, f"configuration {cfg_name}: {e}",
+            "use a packaged name (installation-80, the normal demo; legacy installation-48, demo-48, demo-24) "
+            "or a valid file")
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
         probe = state_dir / ".write-test"
@@ -219,7 +226,9 @@ def cmd_launch(args) -> int:
             log.exception("cannot start")
             print(f"cannot start: {e} (details in {log_path})", file=sys.stderr)
             return 3
-        log.info("starting %s %s on %s, state %s", cfg.config_id, __version__, url, state_dir)
+        from .release import describe, release_info
+        log.info("starting %s %s on %s, state %s; %s", cfg.config_id, __version__, url, state_dir,
+                 describe(release_info()))
         threading.Thread(target=_open_browser_when_ready, args=(url, stop, log, not args.no_browser),
                          daemon=True).start()
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, workers=1,
