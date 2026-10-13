@@ -16,10 +16,18 @@ reviewed. Software and simulation only: no module has been connected.
 - `installation-80` (SIMULATED, launcher default): the installation model on six modules, the 32
   added channels unallocated test points. `installation-48` and the 24/48-point demos are kept.
 - Six-module read-only and Malmö bench examples (proposed addresses 5 and 6, unverified).
-- `measure_storage.py --inventory 80`, ADR-0016, `docs/model/digital_io_8ch.md`, and a concrete
-  proposal for the 32 added channels in `docs/model/signal_budget.md` (owner to confirm).
+- `measure_storage.py --inventory 80`, ADR-0016 and `docs/model/digital_io_8ch.md`. Owner decision:
+  all 32 added channels stay unassigned and all 16 added outputs (DO1 included) are spare/test-only;
+  the table in `docs/model/signal_budget.md` stays a proposal, not fitted devices.
 
 ### Changed
+- Database budget 17 GiB (`db_budget_bytes: 18253611008`, owner 2026-10-13) in `installation-80`
+  (version `2026-10-13.80.1`) and the Malmö bench and read-only examples (version `UNVERIFIED-1`),
+  packaged copies identical; a planning/warning budget only, never pruning inside the 365-day
+  window. Legacy configurations keep 10 GiB. The measurement note separates measured (15.0 GiB) from
+  planned (17 GiB), leaves about 7.8 GiB of the eMMC for OS, application, logs and filesystem
+  overhead, and the off-device backup runbook carries the 80-point sizing (card about 6.6 GiB of
+  copies and 19.9 GiB of drill scratch, cloud about 34.4 GiB for 42 copies).
 - The point count is the sum of the catalogue channels of every device, not a 24/48 formula.
 - Package version 0.3.1, so the Windows launcher prepares a fresh environment.
 

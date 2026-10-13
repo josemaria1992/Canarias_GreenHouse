@@ -45,7 +45,9 @@ interface is verified; terminal control or additional feedback assignments need 
 ## History and commissioning
 
 Keep full 60-second snapshots and 365 days. Old 48-point sizing and the 10 GiB warning budget do not
-size 80 points; new examples label that budget provisional. It cannot prune in-window history.
+size 80 points. The owner set 17 GiB (`db_budget_bytes: 18253611008`) as the planning/warning budget
+in `installation-80` and the bench and read-only examples (2026-10-13); legacy configurations keep
+theirs. A budget is a warning only and cannot prune in-window history.
 The benchmark supports `--inventory 80`; reassess DB/WAL/events/export/restore margins on the CM4
 and SD card before deployment, without silently changing cadence, retention or database format.
 
@@ -55,13 +57,13 @@ One synthetic Windows benchmark recorded 1,440 complete snapshots (115,200 sampl
 free-space, export and restore margins. This is an extrapolation, not a year-long CM4 capacity
 test. A compressed one-day backup was 2,141,916 bytes and its local restore drill passed; it is
 not evidence of a OneDrive upload/restore or of the eventual full-year archive size.
-Keep the provisional budget warning; obtain a measured deployment budget and actual full-size
-restore working-space requirement. The earlier 10 GiB scratch figure is a minimum, not a guarantee
+Keep the budget warning (17 GiB, owner 2026-10-13); CP-00 measures the deployment's real growth and
+full-size restore working space on the CM4. The earlier 10 GiB scratch figure is a minimum, not a guarantee
 that the larger inventory fits.
 
 **Re-measured 2026-10-13** (400 days, 80 points, every process in AUTO): 15.02 GiB at day 365, a
 0.82 GiB compressed backup, and a full restore drill that passed needing 18.05 GiB of scratch
-(19.9 GiB on the card with the downloaded copy and headroom). Layout and the proposed 17 GiB budget:
+(19.9 GiB on the card with the downloaded copy and headroom). Layout and the owner's 17 GiB budget:
 `operations/measurements/2026-10-13-measurements.md`, section "80 points".
 
 On arrival: identify units separately, verify unique addresses manually, stimulate 16 added DI,

@@ -1,13 +1,13 @@
 # Handover: AquaCrop platform 0.3.0, the pre-hardware release (2026-10-13)
 
 **Owner inventory update (2026-10-13):** two IO 8CH (SKU 26244) added, for 80 points across six
-modules; the launcher default is `installation-80` and the added channels are testable but
-unallocated (`model/digital_io_8ch.md`, ADR-0016). The owner review findings R1-R4 of the same day
+modules; the launcher default is `installation-80` and the 32 added channels are testable but stay
+unassigned by owner decision (`model/digital_io_8ch.md`, ADR-0016). The owner review findings R1-R4 of the same day
 are fixed (`ACCEPTANCE.md`, "Owner review of 13 October 2026"). 48-point sizing figures below are
 kept for the record. 80 points measured on the desktop: 15.0 GiB for a year with every process in
-AUTO, above the provisional 10 GiB budget (warning only, nothing deleted); a 17 GiB eMMC budget with
-backups and drills on the SD card is proposed for the owner to agree (`operations/measurements/
-2026-10-13-measurements.md`, RELEASE_READINESS item 24).
+AUTO. The owner set a 17 GiB planning/warning database budget for 80 points, with backups and
+restore drills on the SD card (warning only, never deletes inside the 365-day window;
+`operations/measurements/2026-10-13-measurements.md`, RELEASE_READINESS item 24).
 
 This release is software and simulation only. What is still needed before each physical step, item
 by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPTANCE.md`.
@@ -141,10 +141,11 @@ OpenVPN); the full list of physical configuration still open is section 3 of `RE
    relay-module DI and DO in use, no third relay module, and the 17th output (the shared drive's run) over the drive's
    Modbus interface (ADR-0015, `model/vfd_modbus.md`). Simulation and bench software are done; the
    real interface stays `NOT_CONFIGURED` until the drive's manual is supplied and CP-06 passes on the
-   Malmö bench. Later that day the owner added two IO 8CH modules (80 points); their 16 DI and 16
-   transistor DO are unallocated, with a concrete proposal awaiting the owner's answer (which limit
-   switches, stock low switches, drive ready and starter trip contacts are fitted). Still to
-   confirm: both per-channel tables and the cause-and-effect table (`model/cause_and_effect.md`).
+   Malmö bench. Later that day the owner added two IO 8CH modules (80 points) and decided that their
+   16 DI and 16 transistor DO all stay unassigned test points (DO1 included) until hardware and
+   wiring are verified; the table in `model/signal_budget.md` is a proposal for later, not fitted
+   devices. Still to confirm: the relay/analog per-channel table and the cause-and-effect table
+   (`model/cause_and_effect.md`).
 5. **Site time zone**: decided 2026-10-13: `Atlantic/Canary` for the installation (and the twin and
    demos), `Europe/Stockholm` for the Malmö test bench (`configs/bench-malmo.example.yaml`).
 6. The original brief's `ACCEPTANCE_TEST_PLAN.md` was never supplied, so the milestone 1-4 IDs are

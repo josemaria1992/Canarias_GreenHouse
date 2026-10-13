@@ -327,3 +327,17 @@ accepted (10 GiB, 365 days, 60 s) and nothing was changed; the projection on the
 CP-00, with the owner's real irrigation schedule, decides whether the owner wants to raise the
 allowances into the 3.8 GiB left unallocated. `STORAGE_CAPACITY` warns if the 365-day projection
 exceeds the allowance.
+
+## Addendum 2026-10-13, evening: 80 points (owner decision)
+
+With the two IO 8CH modules (80 points, ADR-0016) the same worst-case workload measures 15.0 GiB at
+365 days, which exceeds the 10 GiB allowance above. The owner set **17 GiB** as the planning and
+warning budget for the 80-point installation (`db_budget_bytes: 18253611008` in `installation-80`
+and the bench and read-only examples; legacy configurations keep 10 GiB). Local backups and the
+monthly restore scratch move to the SD card (ADR-0012), so the eMMC table above no longer holds for
+80 points: of about 29.8 GiB, 17 GiB database, 1 GiB WAL allowance and the 4 GiB free-space warning
+leave about 7.8 GiB for OS, application, logs and filesystem overhead, to be measured at CP-00.
+Measured usage (15.0 GiB) and the planning budget (17 GiB) are different figures; nominal capacity
+is not usable capacity. The budget remains a warning and never permits pruning inside the 365-day
+window; 60 s complete snapshots, immediate events, SQLite and the copy counts are unchanged
+(`operations/measurements/2026-10-13-measurements.md`, section "80 points").

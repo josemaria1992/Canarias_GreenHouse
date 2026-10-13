@@ -3,7 +3,7 @@
 # Copy to configs/hardware-read-only.yaml and edit. Do not copy DEMO scaling or twin values here.
 schema_version: 1
 config_id: hw-ro-example
-config_version: "UNVERIFIED-0"
+config_version: "UNVERIFIED-1"            # 1: 17 GiB database budget (owner, 2026-10-13)
 profile: HARDWARE_READ_ONLY
 label: "REAL — READ ONLY (example, unverified)"
 site:
@@ -92,7 +92,7 @@ historian:
   recording_interval_s: 60               # 300 is allowed only when the owner explicitly asks for it
   retention_days: 365                    # rolling window; nothing inside it is deleted for space
   retention_provenance: APPROVED
-  db_budget_bytes: 10737418240           # provisional warning only: 80 points measured 15.0 GiB/year (proposal 17 GiB, owner to agree)
+  db_budget_bytes: 18253611008           # 17 GiB: owner's planning/warning budget for 80 points (2026-10-13); measured 15.0 GiB/year on the desktop; a warning only, never prunes inside the 365-day window
   free_space_warning_bytes: 4294967296   # 4 GiB free: WARNING
   free_space_reserve_bytes: 2147483648   # 2 GiB free: CRITICAL, new starts and ON refused
   snapshot_floor_bytes: 536870912        # 512 MiB free: periodic snapshots pause, events still written

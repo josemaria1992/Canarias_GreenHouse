@@ -1,7 +1,7 @@
 # SIMULATED full-installation fixture on the owner's six-module inventory of 2026-10-13: 80 virtual
 # points (2 x Relay (D) 26517 + 2 x AI 8CH 25821 + 2 x Modbus RTU IO 8CH 26244). The process model is
-# the same as installation-48; the 32 added channels are unallocated test points until the owner
-# confirms the proposed assignment (docs/model/signal_budget.md).
+# the same as installation-48; the 32 added channels stay unassigned test points (owner decision,
+# 2026-10-13; DO1 included): no binding until hardware and wiring are verified (docs/model/signal_budget.md).
 #
 # Installation facts (tanks, pumps, valves, channels, sectors) are the owner's answers of 2026-10-12.
 # Dynamics, chemistry, scaling spans and the point binding below are DEMO proposals: the binding is
@@ -9,7 +9,7 @@
 # stays empty. Nothing here is copied into a hardware profile.
 schema_version: 1
 config_id: installation-80
-config_version: "2026-10-13.80"
+config_version: "2026-10-13.80.1"   # .1: 17 GiB database budget (owner, 2026-10-13)
 profile: SIMULATED
 label: "SIMULATION — CONFIRMED SIX-MODULE INVENTORY, DEMO PROCESS MODEL (80 points)"
 site:
@@ -23,7 +23,7 @@ site:
     pumps: "2 main pumps on one shared VFD, 2 return pumps, 3 stock transfer pumps; no agitators"
     valves: "9 electric valve duties: 4 mains fill, 3 stock outlet, 2 sector"
     io: "2 x 26517 Relay (D), 2 x 25821 AI, 2 x 26244 IO 8CH: 16 AI + 32 DI + 32 DO"
-    storage: "80 points measured on the desktop: 15.0 GiB/year with every process in AUTO; the 10 GiB warning budget is provisional (proposal 17 GiB, owner to agree)"
+    storage: "80 points measured on the desktop: 15.0 GiB/year with every process in AUTO; database budget 17 GiB (owner 2026-10-13, planning/warning only); backups and restore drills on the SD card"
     physical_mapping: "TBD: requires the signal budget to be approved and the wiring verified"
 buses:
   - bus_id: bus_sim_1
@@ -304,3 +304,4 @@ historian:
   recording_interval_s: 60
   retention_days: 365
   retention_provenance: APPROVED
+  db_budget_bytes: 18253611008           # 17 GiB: owner's planning/warning budget for 80 points (2026-10-13); measured 15.0 GiB/year on the desktop; a warning only, never prunes inside the 365-day window

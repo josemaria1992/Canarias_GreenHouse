@@ -27,10 +27,18 @@ outside this public repository.
 | Recovery key escrow | a printed copy of the crypt password and salt in a sealed envelope | print it when the keys are generated; store it away from the controller (section 4) |
 | Copy policy | 7 daily on the card; 30 daily + 12 monthly in the cloud (confirmed) | an administrator confirms the same policy in Settings after activation; that confirmation is what lets the software prune |
 
-Space: 7 copies (about 3.5 GiB at one year) plus 10 GiB drill space plus 1 GiB headroom fit the
-64 GB card with room to spare. In the cloud, 42 copies need about 20 GiB at one year, counted
-against the **folder owner's** OneDrive quota, not the owner's. The folder owner's plan has 1 TB
-(owner, 2026-10-12), so the copies use about 2 % of it.
+Space, for the 80-point installation at a full year (desktop measurement with synthetic data,
+`measurements/2026-10-13-measurements.md`, section "80 points"): 7 copies plus one being written take
+about 6.6 GiB on the card, and the monthly drill about 19.9 GiB (the downloaded copy, the restored
+database plus 20 %, and 1 GiB headroom; above the 10 GiB minimum), about 26.5 GiB together on the
+64 GB card. In the cloud, 42 copies need about 34.4 GiB, counted against the **folder owner's**
+OneDrive quota, not the owner's. The folder owner's plan has 1 TB (owner, 2026-10-12), so the copies
+use about 3.4 % of it. These figures assume the synthetic data's compression (18.4 times smaller),
+which real data may not reach, so they are planning figures, not limits: every backup and drill
+checks the space it actually needs when it runs, and an upload the cloud refuses for quota stays
+queued (`NO_SPACE`, `NO_SCRATCH_SPACE` and `CLOUD_FULL` in section 7). The copy counts stay 7 local
+daily, 30 cloud daily and 12 cloud monthly. Card, upload and a cloud-sourced restore
+drill are activated and tested on the controller at commissioning (CP-00).
 
 ## 2. SD card
 
@@ -286,7 +294,7 @@ demonstrated**; the escrow test of section 4 and CP-00 cover them.
 
 ## 9. Not yet verified
 
-The USB reader and card on the CM4 (mount at boot, hot-plug, write speed, power loss), the 0.5 GiB
-daily upload over the site's connection, OneDrive token refresh over weeks, the escrow test, and a
+The USB reader and card on the CM4 (mount at boot, hot-plug, write speed, power loss), the daily upload
+(about 0.8 GiB at one year for 80 points, synthetic data) over the site's connection, OneDrive token refresh over weeks, the escrow test, and a
 replacement-controller recovery with the real envelope and account (section 8.1 says what was
 rehearsed instead). These belong to CP-00 and need the hardware and the owner's account.

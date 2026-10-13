@@ -211,21 +211,36 @@ The owner's one-day measurement (13.2 GiB/year) had no process workload; with it
 | 365 | 15.02 GiB | 42,048,000 | 3,205,992 | 546,957 | 8,508 | 5.2 MiB | 325.4 GiB |
 | 400 | 15.04 GiB | 42,048,000 | 3,206,975 | 546,960 | 8,509 | 6.4 MiB | 355.6 GiB |
 
-### Full-size space requirements derived from it (for the owner to agree)
+### Full-size space requirements derived from it (owner decision, 2026-10-13)
 
-| Where | What | Space at a full 365-day window |
-|---|---|---|
-| CM4 eMMC (CM4004032: 32 GB, about 29.8 GiB) | working database | 15.0 GiB |
-| | WAL, transient allowance (ADR-0008 R1; measured peak 6.4 MiB) | 1 GiB |
-| | free-space warning threshold (`free_space_warning_bytes`) kept free | 4 GiB |
-| | OS, application, logs | not measured: CP-00 (left over: about 9.8 GiB) |
-| SD card (64 GB ext4, about 58 GiB usable, inferred from the card size) | seven local daily backups plus one being written | 8 x 0.82 = 6.6 GiB |
-| | restore drill: downloaded cloud copy + restored database x 1.2 + 1 GiB headroom (the 10 GiB minimum is exceeded) | 0.82 + 18.05 + 1 = **19.9 GiB** |
-| | total | about 26.5 GiB, leaving about 31 GiB |
-| OneDrive folder | 30 daily + 12 monthly encrypted copies | 42 x 0.82 = 34.4 GiB |
+The owner set **17 GiB** (`db_budget_bytes: 18253611008`) as the planning and warning budget for the
+database of the 80-point installation, with local backups and the monthly restore scratch on the SD
+card. Measured and planned figures are kept apart below: the measurement is the desktop run above;
+the budget is the planning figure the warning is checked against. The budget is a warning only: it
+never permits deleting anything inside the 365-day window.
 
-Proposed (not applied): raise `db_budget_bytes` for 80-point profiles from 10 GiB to 17 GiB
-(measured 15.0 GiB plus about 13 %). Retention (365 days), cadence (60 s) and the SQLite format stay
-as they are. The drill preflight already sizes itself from the backup's database size, so the 19.9
-GiB is enforced without a configuration change. All of this is desktop evidence: the eMMC, the card
-and the OneDrive copy are measured on the CM4 at CP-00.
+| Where | What | Measured (desktop) | Planned |
+|---|---|---|---|
+| CM4 eMMC (CM4004032: 32 GB nominal, about 29.8 GiB; usable capacity after partitioning not yet measured) | working database at day 365 | 15.0 GiB | **17 GiB** budget |
+| | WAL, transient allowance (ADR-0008 R1) | peak 6.4 MiB | 1 GiB |
+| | free-space warning threshold (`free_space_warning_bytes`) kept free | | 4 GiB |
+| | OS, application, logs, filesystem overhead | not measured | what is left: 29.8 - 17 - 1 - 4 = **about 7.8 GiB**; CP-00 measures it |
+| SD card (64 GB nominal, ext4; usable capacity measured at CP-00) | seven local daily backups plus one being written | 8 x 0.82 = 6.6 GiB | about 6.6 GiB |
+| | restore drill: downloaded cloud copy + restored database x 1.2 + 1 GiB headroom (the 10 GiB minimum is exceeded) | 0.82 + 18.05 + 1 = 19.9 GiB | about 19.9 GiB |
+| | total | about 26.5 GiB | about 26.5 GiB |
+| OneDrive folder | 30 daily + 12 monthly encrypted copies | 42 x 0.82 = 34.4 GiB (synthetic data) | about 34.4 GiB of the folder owner's quota |
+
+Nominal capacities are not usable capacities: CP-00 measures the eMMC after the OS image, the card
+after formatting, and the real growth, before the layout is relied on. The compression (0.82 GiB, 18.4
+times smaller) comes from synthetic data and may not hold for real plant data, so none of the
+figures above is used as a fixed limit: the backup preflight estimates each copy from the live
+database and refuses if the card would fall below its reserve, the drill preflight sizes its scratch
+from the backup's database size and refuses without it, and an upload the cloud refuses for quota is
+recorded as `CLOUD_FULL` and retried, never reported as copied. A restore is never run on the eMMC, and a backup or drill never
+falls back to an SD directory that is not the mounted, enrolled card.
+
+Applied in this release: `db_budget_bytes: 18253611008` in `installation-80`, the Malmö bench and the
+hardware read-only examples (and their packaged copies); legacy configurations keep their budgets.
+Retention (365 days), cadence (60 s complete snapshots, events immediate), the SQLite format and the
+copy counts (7 local daily, 30 cloud daily, 12 cloud monthly) are unchanged. All of this is desktop
+evidence: the eMMC, the card and the OneDrive copy are measured on the CM4 at CP-00.
