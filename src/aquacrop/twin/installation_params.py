@@ -91,6 +91,32 @@ class InstallationFacts(_Strict):
     def channel_count(self) -> int:
         return sum(len(s.channels) for s in self.sectors)
 
+    def signal_catalogue(self, extra_flows=()) -> dict[str, set[str]]:
+        """Logical signals of this layout: requested states (actuator), switch/feedback observations
+        (digital) and measurements (analog). Which of them a point carries is the mapping's business."""
+        act = {f"drive.{self.shared_drive}.run"}
+        act |= {f"contactor.{p}.cmd" for p in self.main_pumps}
+        act |= {f"valve.{s.sector_id}.cmd" for s in self.sectors}
+        act |= {f"pump.{p}.cmd" for p in self.return_pumps}
+        act |= {f"pump.TP_{s}.cmd" for s in STOCKS}
+        act |= {f"valve.OUT_{s}.cmd" for s in STOCKS}
+        act |= {f"valve.FILL_{t}.cmd" for t in ("MAIN", *STOCKS)}
+        dig = {f"drive.{self.shared_drive}.running", f"drive.{self.shared_drive}.fault", "safety.chain_ok"}
+        dig |= {f"contactor.{p}.closed" for p in self.main_pumps}
+        dig |= {f"valve.{s.sector_id}.open_limit" for s in self.sectors}
+        dig |= {f"valve.{s.sector_id}.closed_limit" for s in self.sectors}
+        dig |= {f"valve.{v}.open_limit" for v in [f"OUT_{s}" for s in STOCKS] + [f"FILL_{t}" for t in ("MAIN", *STOCKS)]}
+        dig |= {f"pump.{p}.running" for p in self.return_pumps}
+        dig |= {f"pump.TP_{s}.running" for s in STOCKS}
+        dig |= {"tank.MAIN.high_high", "tank.MAIN.low_low", "tank.SUMP.high", "tank.SUMP.low"}
+        dig |= {f"tank.{s}.low" for s in STOCKS}
+        flows = {"FILL_MAIN", "RETURN", *(s.sector_id for s in self.sectors), *(f"TP_{s}" for s in STOCKS), *extra_flows}
+        ana = {f"tank.{t}.level" for t in TANKS}
+        ana |= {"main.ph", "main.ec", "main.temperature"}
+        ana |= {f"flow.{k}" for k in flows}
+        ana |= {f"pressure.{s.sector_id}" for s in self.sectors}
+        return {"actuator": act, "digital": dig, "analog": ana}
+
     def tank_capacity(self, tank: str) -> float:
         if tank == "MAIN":
             return self.main_tank_L
@@ -198,32 +224,10 @@ class InstallationTwin(_Strict):
 
     # ------------------------------------------------------------------ logical signal catalogue
     def actuator_signals(self) -> set[str]:
-        f = self.facts
-        sig = {f"drive.{f.shared_drive}.run"}
-        sig |= {f"contactor.{p}.cmd" for p in f.main_pumps}
-        sig |= {f"valve.{s.sector_id}.cmd" for s in f.sectors}
-        sig |= {f"pump.{p}.cmd" for p in f.return_pumps}
-        sig |= {f"pump.TP_{s}.cmd" for s in STOCKS}
-        sig |= {f"valve.OUT_{s}.cmd" for s in STOCKS}
-        sig |= {f"valve.FILL_{t}.cmd" for t in ("MAIN", *STOCKS)}
-        return sig
+        return self.facts.signal_catalogue()["actuator"]
 
     def digital_observations(self) -> set[str]:
-        f = self.facts
-        sig = {f"drive.{f.shared_drive}.running", f"drive.{f.shared_drive}.fault", "safety.chain_ok"}
-        sig |= {f"contactor.{p}.closed" for p in f.main_pumps}
-        sig |= {f"valve.{s.sector_id}.open_limit" for s in f.sectors}
-        sig |= {f"valve.{s.sector_id}.closed_limit" for s in f.sectors}
-        sig |= {f"valve.{v}.open_limit" for v in [f"OUT_{s}" for s in STOCKS] + [f"FILL_{t}" for t in ("MAIN", *STOCKS)]}
-        sig |= {f"pump.{p}.running" for p in f.return_pumps}
-        sig |= {f"pump.TP_{s}.running" for s in STOCKS}
-        sig |= {"tank.MAIN.high_high", "tank.MAIN.low_low", "tank.SUMP.high", "tank.SUMP.low"}
-        sig |= {f"tank.{s}.low" for s in STOCKS}
-        return sig
+        return self.facts.signal_catalogue()["digital"]
 
     def analog_observations(self) -> set[str]:
-        sig = {f"tank.{t}.level" for t in TANKS}
-        sig |= {"main.ph", "main.ec", "main.temperature"}
-        sig |= {f"flow.{k}" for k in self.dynamics.flow_span_L_min}
-        sig |= {f"pressure.{s.sector_id}" for s in self.facts.sectors}
-        return sig
+        return self.facts.signal_catalogue(extra_flows=self.dynamics.flow_span_L_min)["analog"]

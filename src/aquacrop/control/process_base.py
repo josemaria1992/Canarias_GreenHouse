@@ -265,6 +265,7 @@ class Process:
     def begin_stop(self, target: ControllerState, reason: str, actor: str) -> None:
         self._stop_target = target
         self.stopping = True
+        self.next_step, self.inhibit = "", None          # a stale plan must not outlive the stop
         if self.manual_op is not None:
             self.finish_manual("STOPPED", reason)
         self._to(target, "STOPPING", reason, actor)

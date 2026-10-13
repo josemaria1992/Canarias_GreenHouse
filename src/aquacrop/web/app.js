@@ -25,7 +25,19 @@
     return e;
   }
   const $ = id => document.getElementById(id);
-  function mount(id, ...kids) { const el = $(id); el.replaceChildren(...kids.flat()); return el; }
+  // A refresh that was already fetching when the user changed a field or a choice on this page does not
+  // rebuild it: that would put back the old value just before the user presses the button next to it.
+  const edits = { seq: 0, id: null };
+  document.addEventListener("change", e => {
+    const v = e.target && e.target.closest ? e.target.closest("section") : null;
+    if (v) { edits.seq += 1; edits.id = v.id; }
+  }, true);
+  let rendering = null;          // the edit count when the current refresh started
+  function mount(id, ...kids) {
+    const el = $(id);
+    if (rendering !== null && edits.seq !== rendering && edits.id === id) return el;
+    el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false)); return el;
+  }
   function toast(msg, bad) {
     const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
     t.style.background = bad ? "var(--bad)" : "";
@@ -108,29 +120,44 @@
   $("logout").addEventListener("click", async () => { try { await api("POST", "/api/auth/logout"); } catch (e) {} showLogin(); });
 
   // ---------------------------------------------------------------- routing / polling
+  function section(view) { return document.getElementById("v-" + view) ? "v-" + view : "v-plant"; }
+  function highlightNav() {
+    document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + S.view));
+  }
   function route() {
     S.view = (location.hash || "#overview").slice(1);
-    document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + S.view));
-    document.querySelectorAll(".view").forEach(v => v.classList.toggle("hidden", v.id !== "v-" + S.view));
+    S.rendered = null;
+    highlightNav();
+    const sec = section(S.view);
+    document.querySelectorAll(".view").forEach(v => v.classList.toggle("hidden", v.id !== sec));
     refresh();
   }
   window.addEventListener("hashchange", route);
 
-  let busy = false;
-  async function refresh() {
-    if (busy || $("app").classList.contains("hidden")) return;
-    busy = true;
+  let busy = false, again = false;
+  async function refresh(queue = true) {
+    if ($("app").classList.contains("hidden")) return;
+    if (busy) { again = again || queue; return; }   // a page change or an action runs right after the one in flight
+    busy = true; again = false;
+    rendering = edits.seq;
+    const view = S.view;
     try {
       S.status = await api("GET", "/api/status");
       S.lastOk = Date.now(); S.cfgVersion = S.status.config_version; S.tz = S.status.timezone;
       setStale(false);
       renderBanner();
       const ae = document.activeElement;   // don't rebuild a view while the user is typing in it
-      const typing = ae && ae.closest && ae.closest("#v-" + S.view) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
-      const fn = VIEWS[S.view]; if (fn && !typing) await fn();
+      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
+      const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
+      if (fn && !typing) await fn();
+      else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
+      if (S.view === view) S.rendered = view;
     } catch (e) {
       if (String(e.message) !== "not authenticated") setStale(true);
-    } finally { busy = false; }
+    } finally {
+      busy = false; rendering = null;
+      if (again) refresh();
+    }
   }
   function setStale(stale) {
     S.stale = stale;
@@ -142,19 +169,22 @@
     }
   }
   setInterval(() => { if (S.lastOk && Date.now() - S.lastOk > STALE_AFTER_MS) setStale(true); }, 1000);
-  setInterval(refresh, 1000);
+  setInterval(() => refresh(false), 1000);
 
   function renderBanner() {
     const st = S.status;
     const b = $("banner"); b.textContent = st.banner;
     b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
     const real = st.profile !== "SIMULATED";
-    document.querySelectorAll('#nav a[href="#twin"], #nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real));
+    document.querySelectorAll('#nav a[href="#twin"]').forEach(a => a.classList.toggle("hidden", real));
+    document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
     if (real) {
       $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${st.physical_writes}` +
         ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
+      if (window.AqPlant) window.AqPlant.buildNav();   // read-only process pages (ADR-0009 addendum)
       return;
     }
+    if (isInst() && window.AqPlant) window.AqPlant.buildNav();
     const t = st.twin, c = st.controller;
     const ctl = isInst() ? `processes ${c.state} · recipe ${c.recipe || "none active"}` : `controller ${c.state}/${c.phase}`;
     $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${ctl}` +
@@ -300,7 +330,8 @@
 
   async function hwOverview() {
     const st = S.status, al = await api("GET", "/api/alarms"), lease = st.bench_lease;
-    mount("v-overview",
+    const diag = window.AqPlant ? await window.AqPlant.hwDiagram().catch(() => null) : null;
+    mount("v-overview", diag,
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
           h("dt", null, "Profile"), h("dd", null, st.profile),
@@ -454,22 +485,8 @@
 
   VIEWS.overview = async function () {
     if (isReal()) return hwOverview();
+    if (isInst()) return window.AqPlant.overview();
     const st = S.status, tw = await api("GET", "/api/twin"), pl = tw.snapshot.plant;
-    if (isInst()) {
-      const al = await api("GET", "/api/alarms");
-      return mount("v-overview", h("div", { class: "grid" },
-        h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
-          h("dt", null, "Backend"), h("dd", null, st.profile, " ", pill("physical writes impossible", "ok")),
-          h("dt", null, "Recipe"), h("dd", null, st.controller.recipe || "none active"),
-          ...Object.entries(st.controller.processes).flatMap(([k, p]) => [h("dt", null, k), h("dd", null, procPill(p.state), " ", p.phase,
-            p.fault_reason ? " — " + p.fault_reason : p.inhibit ? " — " + p.inhibit : "")]),
-          h("dt", null, "Storage"), h("dd", null, st.storage.ok ? pill("ok", "ok") : pill("DEGRADED: " + st.storage.reason, "bad")),
-          h("dt", null, "Live control"), h("dd", null, st.live_control))),
-        instWaterCard(pl),
-        h("div", { class: "card" }, h("h2", null, `Active alarms (${al.open.length})`),
-          al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
-            h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"), h("td", null, o.acknowledged ? "ack" : "unack"))))) : h("p", { class: "muted" }, "None"))));
-    }
     const devRows = Object.entries(st.devices).map(([k, d]) => h("tr", null, h("td", null, k), h("td", null, d.bus_id + " @" + d.address),
       h("td", null, d.online ? pill("online", "ok") : pill("FAILED", "bad")), h("td", { class: "mono" }, d.last_error || ""),
       h("td", null, d.last_ok_utc ? age(d.last_ok_utc) : "never")));
@@ -678,24 +695,7 @@
     const end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000);
     const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
     const tr = await api("GET", "/api/trends?" + q);
-    // Records whose stamps an administrator quarantined are split into their own dashed grey series; neither
-    // half draws a line across the other, so a suspect stamp never joins a trusted trace.
-    const iSus = tr.columns.indexOf("timestamp_suspect");
-    const series = S.trendSel.flatMap(pid => {
-      const meta = S.allPoints.find(p => p.id === pid) || {}, rows = tr.series[pid] || [];
-      const trusted = [], suspect = [];
-      rows.forEach((r, i) => {
-        const sus = iSus >= 0 && !!r[iSus], t = Date.parse(r[0]), own = sus ? suspect : trusted;
-        // The server flags a gap between neighbouring rows of the merged list; where the other kind sits
-        // in between (same stamps can interleave), each half breaks only on a missed snapshot of its own.
-        const switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
-        const gap = switched ? (own.length === 0 || t - own[own.length - 1][0] > 150000) : !!r[8];
-        own.push([t, r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", gap]);
-      });
-      const unit = rows.map(r => r[5]).find(u => u) || "", name = `${pid}${unit ? " [" + unit + "]" : ""} (SIM)`;
-      return [{ name, digital: meta.kind !== "AI", points: trusted, dashed: false },
-        { name: name + " SUSPECT timestamps (quarantined)", digital: meta.kind !== "AI", points: suspect, suspect: true }];
-    });
+    const series = trendSeries(tr, S.trendSel, pid => ({ kind: (S.allPoints.find(p => p.id === pid) || {}).kind }));
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");
     const picker = h("select", { multiple: true, size: 8 }, S.allPoints.map(p => h("option", { value: p.id, selected: S.trendSel.includes(p.id) }, `${p.id}${p.label ? " — " + p.label : ""}`)));
@@ -716,6 +716,28 @@
     const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz });
     legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
   };
+
+  /** Chart series from an /api/trends answer. Records whose stamps an administrator quarantined are split into
+   * their own dashed grey series; neither half draws a line across the other, so a suspect stamp never joins a
+   * trusted trace. `metaOf(pid)` gives { kind: "AI" | other, label }. */
+  function trendSeries(tr, pids, metaOf) {
+    const iSus = tr.columns.indexOf("timestamp_suspect"), tag = isReal() ? "REAL" : "SIM";
+    return pids.flatMap(pid => {
+      const meta = metaOf(pid), rows = tr.series[pid] || [];
+      const trusted = [], suspect = [];
+      rows.forEach((r, i) => {
+        const sus = iSus >= 0 && !!r[iSus], t = Date.parse(r[0]), own = sus ? suspect : trusted;
+        // The server flags a gap between neighbouring rows of the merged list; where the other kind sits
+        // in between (same stamps can interleave), each half breaks only on a missed snapshot of its own.
+        const switched = i > 0 && (iSus >= 0 && !!rows[i - 1][iSus]) !== sus;
+        const gap = switched ? (own.length === 0 || t - own[own.length - 1][0] > 150000) : !!r[8];
+        own.push([t, r[1] == null ? null : (meta.kind === "AI" ? r[1] : r[1] > 0.5), r[3] === "GOOD" || r[3] === "OVERRIDDEN", gap]);
+      });
+      const unit = rows.map(r => r[5]).find(u => u) || "", name = `${meta.label || pid}${unit ? " [" + unit + "]" : ""} (${tag})`;
+      return [{ name, digital: meta.kind !== "AI", points: trusted, dashed: false },
+        { name: name + " SUSPECT timestamps (quarantined)", digital: meta.kind !== "AI", points: suspect, suspect: true }];
+    });
+  }
 
   // ------------------------------------------------ alarms/events
   VIEWS.alarms = async function () {
@@ -794,6 +816,10 @@
         return h("div", { class: "row" }, o, n, h("button", { class: "small", onclick: async () => { const r = await act("POST", "/api/auth/password", { old_password: o.value, new_password: n.value }); if (r) showLogin(); } }, "Change"));
       })()));
   };
+
+  // ---------------------------------------------------------------- shared with plant.js
+  window.AqUI = { h, $, mount, toast, can, fmtTime, age, num, qBadge, oBadge, pill, api, act, cbtn, S, VIEWS, trendSeries,
+                  refresh: () => refresh(), highlightNav, isReal, isInst };
 
   // ---------------------------------------------------------------- boot
   api("GET", "/api/auth/session").then(afterLogin).catch(() => showLogin());

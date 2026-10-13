@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased (2026-10-12): process pages and installation diagram
+
+Pre-hardware release, stage 3. Process control is simulation only; on a hardware profile the diagram
+and the process pages are read-only observation and every signal stays UNBOUND.
+
+### Added
+- A clickable installation diagram on the Overview: mains, stock tanks A, B and acid with their fill
+  and outlet valves and transfer pumps, the main tank with the proposed pH/EC probe point, both main
+  pumps with K1/K2 on the shared drive, sectors 1 and 2, the sump and the return pumps. Every value is
+  what the controllers read (value, unit, quality, age); requested state (outline) and observed
+  feedback (fill) are drawn apart, and missing feedback is shown as such. Parts open their page by
+  mouse or keyboard.
+- Process pages: Nutrients & acid (tabs for stock A, stock B and acid, with the active recipe's pH
+  target, EC target, A:B ratio or fixed volumes and dose bounds), Main tank, Main pumps, Sector 1,
+  Sector 2, Drainage and Recipes. Each page has the diagram with its own parts highlighted, its
+  measured and requested values, its alarms with Ack and what to do next, and a chart of the last
+  hour of its signals. Each process panel shows state, phase, waiting reason, next step, owned
+  equipment, outputs, last result, permissives and history, with AUTO, MANUAL, STOP and lockout
+  reset, bounded manual forms and stock acknowledgements. The recipe page lists versions with
+  validate, activate and roll back, and edits a new version from the server's form schema (choices
+  for enumerated fields, the irrigation sequence editor, validation issues).
+- On a hardware profile the Overview diagram and the process pages render read-only: parts only
+  navigate, controls are replaced by the reason they are not offered, unmapped values read "not
+  measured", and observations are labelled REAL or SIM (ADR-0009 addendum).
+- `GET /api/plant`: the installation as the controllers see it (every logical signal with its
+  binding, sample and age, the owner layout, the process summary, open alarms). Served on hardware
+  profiles too, read-only and all UNBOUND (ADR-0009 addendum).
+- `scripts/ui_check/`: browser checks in headless Chromium (every page, the diagram, the owner
+  walkthrough with a restart, viewer refusals, offline and reconnect, phone, tablet and PC
+  viewports, and the read-only pages on the hardware profile over the in-memory fake bus with zero
+  write frames), run by the new CI job `ui`, which keeps screenshots as an artifact.
+- Tests for the plant view on both profiles, the recipe form choices and the role table across
+  every process, stock and recipe mutation including forged requests.
+
+### Changed
+- Stopping a process clears its planned next step and inhibit, so a lockout no longer shows a stale
+  "next: stop S1 in ... s".
+- The interim installation Overview from stage 2 is replaced by the diagram page; the Control view
+  is hidden for the installation topology (its processes have their own pages).
+- `/api/plant` returns full alarm occurrences (latch and reset state included) so pages can say what
+  to do next.
+- The page refresh no longer undoes a choice made while it was fetching (for example a fault picked on
+  the twin page just before Apply), and a page change or an action that arrives during a refresh is
+  drawn right after it instead of at the next tick.
+- On a hardware profile a `NOT_CONFIGURED` drive adapter is shown UNBOUND like every other signal.
+
 ## Unreleased (2026-10-12): installation model and process controllers (ADR-0013, ADR-0014)
 
 Pre-hardware release, stages 1 and 2. Simulation only: no physical AUTO exists and no flag enables it.

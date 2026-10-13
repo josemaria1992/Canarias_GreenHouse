@@ -120,3 +120,32 @@ def test_database_of_another_profile_is_refused(tmp_path, fake_bus, cfg48):
     app.state.hist.close()
     with pytest.raises(ValueError, match="belongs to profile"):
         create_app(cfg.model_copy(update={"historian": cfg48.historian}), state_dir=tmp_path)
+
+
+def test_plant_view_is_read_only_and_unbound_on_a_hardware_profile(hw):
+    """The installation diagram on a real profile: every logical signal UNBOUND until a physical mapping
+    is approved, no process summary, and the process/recipe/stock mutations stay simulation-only."""
+    app, c, bus, *_ = hw
+    h = login(c, "admin1")
+    p = c.get("/api/plant").json()
+    assert p["read_only"] is True and p["processes"] is None and "UNBOUND" in p["mapping"]
+    assert p["signals"] and {s["binding"] for s in p["signals"].values()} == {"UNBOUND"}
+    assert all(s["point"] is None for s in p["signals"].values())
+    for path in ("/api/processes/IRRIGATION/state", "/api/recipes/rollback", "/api/stocks/A/acknowledge"):
+        assert c.post(path, json={"target": "AUTO", "reason": "x"}, headers=h).status_code == 409
+    assert bus.write_frames() == []
+
+
+def test_plant_view_leaves_a_not_configured_drive_adapter_unbound(tmp_path, fake_bus):
+    """A hardware profile may declare the shared drive's adapter as NOT_CONFIGURED (ADR-0013); the
+    diagram still shows its run signal UNBOUND, not as a bound adapter."""
+    from aquacrop.config.schema import InstallationConfig
+    data = fake_bus[0].model_dump(mode="json") | {"drive_adapters": [
+        {"adapter_id": "MAIN", "kind": "NOT_CONFIGURED", "signals": ["drive.MAIN.run"]}]}
+    app = create_app(InstallationConfig.model_validate(data), state_dir=tmp_path, bind_host="127.0.0.1")
+    app.state.accounts.create_user("admin1", PW["admin1"], Role.ADMIN)
+    with TestClient(app, base_url=ORIGIN) as c:
+        login(c, "admin1")
+        signals = c.get("/api/plant").json()["signals"]
+    assert signals["drive.MAIN.run"]["binding"] == "UNBOUND" and "adapter" not in signals["drive.MAIN.run"]
+    assert {s["binding"] for s in signals.values()} == {"UNBOUND"}
