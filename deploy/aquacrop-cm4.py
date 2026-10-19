@@ -33,7 +33,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-SUPPORTED_PY = ((3, 11), (3, 12), (3, 13))
+SUPPORTED_PY = ((3, 11), (3, 12), (3, 13), (3, 14))
 SERVICE = "aquacrop-greenhouse.service"
 UNITS = ("aquacrop-greenhouse.service", "aquacrop-backup.service", "aquacrop-backup.timer",
          "aquacrop-restore-drill.service", "aquacrop-restore-drill.timer")

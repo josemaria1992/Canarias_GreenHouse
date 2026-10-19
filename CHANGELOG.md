@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.3 (2026-10-19): corrections for a first-time operator
+
+The owner's first-time-operator review of 0.3.2 (2026-10-19, findings F-01 to F-09, CHANGES REQUESTED).
+Display, guidance and Windows start only. No control algorithm, production mapping, recipe limit, retention
+(365 d), cadence (60 s), storage budget (17 GiB), role or permission gate, bench lease policy, restart
+behaviour or hardware profile changed; physical AUTO still does not exist, the drive interface stays
+NOT_CONFIGURED, off-device backups stay disabled and the 32 added channels stay unassigned. Internal
+identifiers (process, alarm, point and recipe field ids) are unchanged and stay visible under Details.
+
+### Windows start (F-01, F-06)
+- The Windows release carries its own Python in `runtime/`: CPython 3.14.8 for 64-bit Windows, python.org's
+  build as published by the Python Software Foundation (NuGet package `python`, SHA-256 pinned in
+  `scripts/build_release.py`), with AquaCrop and the locked packages installed at build time.
+  `AquaCrop-Demo.cmd` uses it first and installs and downloads nothing; no Python is needed on the PC.
+  Python 3.14 joins the tested range (CI test matrix 3.11 to 3.14).
+- First administrator: the login name and password rules are shown with an example before typing; a name
+  or password that breaks them is explained and asked again (an accented name gets a suggestion, `José` ->
+  `jose`); a failed start names the data folder and log file actually in use. The account and password
+  rules are unchanged.
+
 ## 0.3.2 (2026-10-13): owner demo release and acceptance tour
 
 The owner's brief of 2026-10-13 18:56 UTC: a tested Windows/CM4 release ZIP and a guided acceptance tour.

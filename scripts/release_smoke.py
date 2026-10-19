@@ -8,11 +8,12 @@ backup and two history snapshots), records what the data folder holds (--record)
 earlier session (--compare: nothing lost, every process STOPPED) and stops the launcher with the console
 break, as Ctrl+C in its window.
 
-Used by CI for the cold start, the restart and the upgrade over the provisional 0.3.1 demo. The password
+Used by CI for the cold start, the restart and the upgrade over the earlier demos (0.3.1, then 0.3.2). With
+--hide-python the launcher sees no Python on the PC, as on an owner's PC without one. The password
 is random and kept in --secret (a temporary file, never uploaded). Simulation only; no hardware.
 
-    python scripts/release_smoke.py --launcher unpacked/aquacrop-0.3.2/AquaCrop-Demo.cmd --local T/cold \
-        --secret T/pw --first --record T/cold1.json --expect-version 0.3.2 --expect-release VERIFIED
+    python scripts/release_smoke.py --launcher unpacked/aquacrop-0.3.3/AquaCrop-Demo.cmd --local T/cold \
+        --secret T/pw --first --record T/cold1.json --expect-version 0.3.3 --expect-release VERIFIED
 """
 from __future__ import annotations
 
@@ -80,6 +81,9 @@ def main() -> int:
     ap.add_argument("--expect-version", required=True)
     ap.add_argument("--expect-release", choices=["VERIFIED", "NOT_A_RELEASE", "ANY"], default="VERIFIED")
     ap.add_argument("--log", type=Path, help="launcher console output (default next to --record)")
+    ap.add_argument("--hide-python", action="store_true",
+                    help="Windows: start the launcher as on a PC without Python: every Python folder is taken off PATH "
+                         "and py, python and python3 are replaced by stand-ins that fail and say so")
     a = ap.parse_args()
     a.local.mkdir(parents=True, exist_ok=True)
     checks: list[tuple[str, bool, str]] = []
@@ -94,6 +98,14 @@ def main() -> int:
     env = os.environ | {"LOCALAPPDATA": str(a.local), "XDG_DATA_HOME": str(a.local), "AQUACROP_NO_PAUSE": "1",
                         "PYTHONUTF8": "1"}
     env.pop("PYTHONPATH", None)
+    shim = "AQUACROP-SMOKE: a Python on the PC was called"
+    if a.hide_python:
+        stand_in = a.local / "no-python-here"
+        stand_in.mkdir(exist_ok=True)
+        for name in ("py", "python", "python3"):
+            (stand_in / f"{name}.cmd").write_text(f"@echo {shim} ({name}) & exit /b 9\r\n", encoding="ascii")
+        keep = [d for d in env.get("PATH", "").split(os.pathsep) if d and "python" not in d.lower()]
+        env["PATH"] = os.pathsep.join([str(stand_in)] + keep)
     launcher = str(a.launcher.resolve())
     cmd = (["cmd", "/c", launcher] if WIN else ["sh", launcher]) + ["--no-browser"]
     if a.first:
@@ -193,6 +205,10 @@ def main() -> int:
     with log.open("rb") as f:
         f.seek(offset)
         text = f.read().decode("utf-8", errors="replace")
+    if (a.launcher.parent / "runtime" / "python.exe").is_file():
+        check("started with the Python bundled in the release, no Python of the PC used",
+              "Using the Python bundled with this release" in text and shim not in text,
+              next((ln for ln in text.splitlines() if "Using the Python" in ln or shim in ln), "no line naming the Python"))
     check("stopped cleanly on the console break", "AquaCrop stopped cleanly" in text,
           next((ln for ln in text.splitlines() if "stopped cleanly" in ln), "no clean-stop line in the launcher output"))
     failed = [n for n, ok, _ in checks if not ok]

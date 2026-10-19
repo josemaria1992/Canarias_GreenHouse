@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2022, macos-14]
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
         include:
           - os: ubuntu-24.04-arm      # ARM64 Linux, closest hosted match to the CM4 (not a CM4)
             python: "3.11"
@@ -140,17 +140,18 @@ jobs:
         run: sh launchers/aquacrop-demo.sh --check-only
 
   release:
-    # DL-05: the release ZIP with offline wheelhouses for the Windows demo (py3.12) and the CM4 (aarch64, py3.11,
-    # Raspberry Pi OS Bookworm), its SHA-256 manifest and RELEASE.json. Two passes with the same wheel: pass 1 is
-    # extracted and started through its own aquacrop-demo.sh for Claude's browser rehearsal of the owner tour
-    # (UAT-01..16, headless Chromium, screenshots); pass 2 adds that illustrated guide and the wheelhouses, and the
-    # extracted result is checked by verify_release.py. Simulation only; owner results stay NOT RUN.
+    # DL-05: the release ZIP with the Python bundled for the Windows demo (runtime/: python.org's CPython 3.14 for
+    # 64-bit Windows, AquaCrop installed in it), the offline wheelhouse for the CM4 (aarch64, py3.11, Raspberry Pi
+    # OS Bookworm), its SHA-256 manifest and RELEASE.json. Two passes with the same wheel: pass 1 is extracted and
+    # started through its own aquacrop-demo.sh for Claude's browser rehearsal of the owner tour (UAT-01..16,
+    # headless Chromium, screenshots); pass 2 adds that illustrated guide, the Windows runtime and the wheelhouse,
+    # and the extracted result is checked by verify_release.py. Simulation only; owner results stay NOT RUN.
     needs: [test, wheel]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0              # the 0.3.1 fixture below is built from its own commit
+          fetch-depth: 0              # the earlier demos below are built from their own commits
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -173,12 +174,12 @@ jobs:
           VERSION=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$REL1/RELEASE.json")
           AQ_EXPECT_RELEASE="$VERSION" python scripts/ui_check/run_tour_rehearsal.py --out "$T/tour-evidence" \
             --launcher "$REL1/aquacrop-demo.sh"
-      - name: "Pass 2: same wheel and build time, with the illustrated guide and the wheelhouses"
+      - name: "Pass 2: same wheel and build time, with the illustrated guide, the Windows runtime and the wheelhouse"
         run: |
           T="$RUNNER_TEMP"; REL1=$(ls -d "$T"/x1/aquacrop-*)
           BUILT=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['built_utc'])" "$REL1/RELEASE.json")
           python scripts/build_release.py --out dist-release --wheel "$(ls "$REL1"/wheels/aquacrop_greenhouse-*.whl)" \
-            --built-utc "$BUILT" --owner-tour "$T/tour-evidence" --wheelhouse win_amd64:3.12 --wheelhouse aarch64:3.11
+            --built-utc "$BUILT" --owner-tour "$T/tour-evidence" --windows-runtime download --wheelhouse aarch64:3.11
           mkdir "$T/x2" && unzip -q dist-release/aquacrop-*.zip -d "$T/x2"
           REL2=$(ls -d "$T"/x2/aquacrop-*)
           python - "$REL1/RELEASE.json" "$REL2/RELEASE.json" <<'PY'
@@ -201,16 +202,18 @@ jobs:
           path: |
             dist-release/*.zip
             dist-release/*.zip.sha256
-      - name: Build the provisional 0.3.1 demo from its own commit (main at bcd6200), for the upgrade test
+      - name: Build the earlier demos from their own commits, for the upgrade test (0.3.1 main bcd6200, 0.3.2 3f542a6)
         run: |
           git worktree add "$RUNNER_TEMP/v031" bcd620094fdfadbe466a973f27d67b5592c600d9
-          cd "$RUNNER_TEMP/v031" && python scripts/build_release.py --out "$RUNNER_TEMP/old" --wheelhouse win_amd64:3.12
+          (cd "$RUNNER_TEMP/v031" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.1" --wheelhouse win_amd64:3.12)
+          git worktree add "$RUNNER_TEMP/v032" 3f542a623aaaca50818ba2d9368ce77bd0e16bb4
+          (cd "$RUNNER_TEMP/v032" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.2" --wheelhouse win_amd64:3.12)
       - uses: actions/upload-artifact@v4
         with:
-          name: release-0.3.1
+          name: release-earlier
           path: |
-            ${{ runner.temp }}/old/*.zip
-            ${{ runner.temp }}/old/*.zip.sha256
+            ${{ runner.temp }}/old/*/*.zip
+            ${{ runner.temp }}/old/*/*.zip.sha256
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -218,11 +221,14 @@ jobs:
           path: ${{ runner.temp }}/tour-evidence
 
   release-windows:
-    # DL-01 from the ZIP on Windows, through AquaCrop-Demo.cmd as the owner starts it: a cold start offline
-    # from the bundled wheelhouse (package index disabled) with the first administrator, sign-in, browser
-    # assets, version and release check, a clean stop and a restart that keeps the data; the installed-wheel
-    # check outside any source tree; and an upgrade over the provisional 0.3.1 demo (rebuilt from its commit
-    # bcd6200 in the release job), keeping accounts, recipes, history and backups. Simulation only.
+    # DL-01 and F-01 from the ZIP on Windows, through AquaCrop-Demo.cmd as the owner starts it, from a folder whose
+    # name has a space, brackets and an accent, as on a PC without Python: every Python folder is off PATH and py,
+    # python and python3 are stand-ins that fail if called. A cold start on the Python bundled in runtime/ (package
+    # index disabled) with the first administrator, sign-in, browser assets, version and release check, a clean
+    # stop and a restart that keeps the data; the installed-wheel check outside any source tree with the bundled
+    # Python; and an upgrade over the provisional 0.3.1 demo and then the 0.3.2 demo (rebuilt from their commits in
+    # the release job; they still use the PC's Python 3.12), keeping accounts, recipes, history and backups.
+    # The hosted runner has Python installed; it is hidden from the launcher, not removed. Simulation only.
     needs: release
     runs-on: windows-2022
     steps:
@@ -238,8 +244,8 @@ jobs:
         shell: bash
         run: |
           (cd new && sha256sum -c aquacrop-*.zip.sha256)
-          unzip -q new/aquacrop-*.zip -d unpacked
-          cd unpacked/aquacrop-* && sha256sum -c --quiet MANIFEST.sha256
+          unzip -q new/aquacrop-*.zip -d "trial é (1)"
+          cd "trial é (1)"/aquacrop-* && sha256sum -c --quiet MANIFEST.sha256
       - name: Launcher checks, offline
         shell: cmd
         env:
@@ -247,42 +253,46 @@ jobs:
           PIP_NO_INDEX: "1"
           LOCALAPPDATA: ${{ runner.temp }}\checks
         run: |
-          for /d %%D in (unpacked\aquacrop-*) do call "%%D\AquaCrop-Demo.cmd" --check-only || exit /b 1
-      - name: Cold start, first administrator, sign-in, clean stop; then a restart that keeps the data
+          for /d %%T in (trial*) do for /d %%D in ("%%T\aquacrop-*") do call "%%~fD\AquaCrop-Demo.cmd" --check-only || exit /b 1
+      - name: Cold start without a Python on PATH, first administrator, sign-in, clean stop; a restart keeps the data
         shell: bash
         env:
           PIP_NO_INDEX: "1"
         run: |
           T="$RUNNER_TEMP"; E="$T/evidence"; mkdir -p "$E"
-          L=$(ls -d unpacked/aquacrop-*)/AquaCrop-Demo.cmd
+          L=$(ls -d "$PWD"/trial*/aquacrop-*)/AquaCrop-Demo.cmd
           V=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$(dirname "$L")/RELEASE.json")
-          python scripts/release_smoke.py --launcher "$L" --local "$T/cold" --secret "$T/pw-cold" --first --seed \
-            --record "$E/cold-1.json" --expect-version "$V"
-          python scripts/release_smoke.py --launcher "$L" --local "$T/cold" --secret "$T/pw-cold" \
-            --compare "$E/cold-1.json" --record "$E/cold-2.json" --expect-version "$V"
-      - name: Installed-wheel check with the launcher's environment
+          python scripts/release_smoke.py --launcher "$L" --local "$T/José cold" --secret "$T/pw-cold" --first --seed \
+            --record "$E/cold-1.json" --expect-version "$V" --hide-python
+          python scripts/release_smoke.py --launcher "$L" --local "$T/José cold" --secret "$T/pw-cold" \
+            --compare "$E/cold-1.json" --record "$E/cold-2.json" --expect-version "$V" --hide-python
+      - name: Installed-wheel check with the bundled Python
         shell: bash
         run: |
-          PY=$(ls -d "$RUNNER_TEMP"/cold/AquaCrop/venv-aquacrop_greenhouse-*/Scripts/python.exe | head -n 1)
-          cp unpacked/aquacrop-*/check_installed_wheel.py "$RUNNER_TEMP/" && cd "$RUNNER_TEMP" && "$PY" check_installed_wheel.py
+          R=$(ls -d "$PWD"/trial*/aquacrop-*)
+          cp "$R/check_installed_wheel.py" "$RUNNER_TEMP/" && cd "$RUNNER_TEMP" && "$R/runtime/python.exe" -I check_installed_wheel.py
       - uses: actions/download-artifact@v4
         with:
-          name: release-0.3.1
+          name: release-earlier
           path: old
-      - name: Upgrade over the provisional 0.3.1 demo
+      - name: Upgrade over the provisional 0.3.1 demo, then the 0.3.2 demo
         shell: bash
         env:
           PIP_NO_INDEX: "1"
         run: |
           T="$RUNNER_TEMP"; E="$T/evidence"
-          (cd old && sha256sum -c aquacrop-*.zip.sha256)
-          unzip -q old/aquacrop-*.zip -d old-unpacked
-          OLD=$(ls -d old-unpacked/aquacrop-*)/AquaCrop-Demo.cmd; NEW=$(ls -d unpacked/aquacrop-*)/AquaCrop-Demo.cmd
+          for v in 0.3.1 0.3.2; do
+            (cd old/$v && sha256sum -c aquacrop-*.zip.sha256) && unzip -q old/$v/aquacrop-*.zip -d old-unpacked-$v
+          done
+          O1=$(ls -d old-unpacked-0.3.1/aquacrop-*)/AquaCrop-Demo.cmd; O2=$(ls -d old-unpacked-0.3.2/aquacrop-*)/AquaCrop-Demo.cmd
+          NEW=$(ls -d "$PWD"/trial*/aquacrop-*)/AquaCrop-Demo.cmd
           V=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$(dirname "$NEW")/RELEASE.json")
-          python scripts/release_smoke.py --launcher "$OLD" --local "$T/upgrade" --secret "$T/pw-up" --first --seed \
+          python scripts/release_smoke.py --launcher "$O1" --local "$T/upgrade" --secret "$T/pw-up" --first --seed \
             --record "$E/upgrade-0.3.1.json" --expect-version 0.3.1 --expect-release ANY
+          python scripts/release_smoke.py --launcher "$O2" --local "$T/upgrade" --secret "$T/pw-up" \
+            --compare "$E/upgrade-0.3.1.json" --record "$E/upgrade-0.3.2.json" --expect-version 0.3.2
           python scripts/release_smoke.py --launcher "$NEW" --local "$T/upgrade" --secret "$T/pw-up" \
-            --compare "$E/upgrade-0.3.1.json" --record "$E/upgrade-new.json" --expect-version "$V"
+            --compare "$E/upgrade-0.3.2.json" --record "$E/upgrade-new.json" --expect-version "$V" --hide-python
       - uses: actions/upload-artifact@v4
         if: always()
         with:

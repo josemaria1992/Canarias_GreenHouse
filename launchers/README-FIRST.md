@@ -17,46 +17,53 @@ fixtures.
 - Windows (PowerShell): `Get-FileHash .\aquacrop-<version>.zip -Algorithm SHA256` and compare.
 - Linux: `sha256sum -c MANIFEST.sha256` inside the extracted folder.
 
-## 2. Before the first start (Windows): 64-bit Python 3.12 with the py launcher
+## 2. Nothing to install
 
-The bundled offline packages are for **64-bit Python 3.12**. Install it once from python.org; a Python
-that came with another program (for example a coding assistant) or from the Microsoft Store is not
-what the launcher looks for.
+The Windows release carries its own Python: the folder `runtime` holds Python 3.14.8 for 64-bit Windows,
+the official build of python.org (published by the Python Software Foundation), with AquaCrop already
+installed in it. You do **not** install Python, and it does not matter whether the PC has a Python or
+not: the launcher uses only its own. Nothing is downloaded.
 
-1. Open <https://www.python.org/downloads/windows/>, choose the latest **Python 3.12** release and its
-   **Windows installer (64-bit)**.
-2. Run it. Leave the option at the bottom of the first page that installs the **py launcher** ticked,
-   then choose **Install Now**. Adding python.exe to PATH is not needed.
-3. Check: open Command Prompt and type `py --list`. A line with `3.12` must appear.
-
-(Reference: "Using Python on Windows", <https://docs.python.org/3.12/using/windows.html>.)
+Pictures of every step below are at the start of the illustrated guide, `owner-tour/index.html`,
+section *Starting AquaCrop*.
 
 ## 3. Start the demo
 
-1. Extract the ZIP (right-click, *Extract All…*) to a folder that is **not** synced by OneDrive, for
-   example `C:\AquaCrop\aquacrop-<version>`. Use the whole folder; do not start it from inside the ZIP.
-2. Double-click `AquaCrop-Demo.cmd`.
-   - The first start prepares a private Python environment under `%LOCALAPPDATA%\AquaCrop` from the
-     bundled `wheelhouse-win_amd64-py312` folder. No internet is needed. This takes a minute or two.
-   - It lists its checks: release, Python, packages, pages, configuration `installation-80`, data
-     folder, port.
-   - **First start only**: "create the administrator account (there is no default password)". Type a
-     user name (Enter keeps `admin`), then a password of at least 12 characters, twice. The password
-     is not shown while you type.
-3. The browser opens at <http://127.0.0.1:8000/>. Sign in. The blue banner says
-   `SIMULATION — DEMO MODEL`.
-4. Follow the tour: `owner-tour/index.html` (illustrated, offline) or `docs/operator/walkthrough.md`.
-   Record results in `owner-checklist.csv`; report findings with `owner-feedback-template.md`.
+1. Before extracting: right-click the ZIP, **Properties**, tick **Unblock** at the bottom (if it is
+   there), **OK**. This avoids a Windows security question on every start.
+2. Right-click the ZIP, **Extract All…**, and choose a folder that is **not** synced by OneDrive, for
+   example `C:\AquaCrop`. Use the whole extracted folder; do not start anything from inside the ZIP.
+3. Open the extracted folder `aquacrop-<version>` and double-click **`AquaCrop-Demo.cmd`**.
+   - If Windows asks "Do you want to run this file?" or shows "Windows protected your PC", the file
+     came from the internet: choose **Run** (or **More info**, then **Run anyway**). Unblocking the ZIP
+     (step 1) avoids it.
+   - A black window opens. Its first line is `Using the Python bundled with this release`. It lists
+     its checks: release, Python, packages, pages, configuration `installation-80`, data folder, port.
+4. **First start only**, in the same window: create the administrator account. There is no default
+   password.
+   - **Login name**: 2 to 32 characters, letters, digits and `. _ -`; no spaces or accents. Example:
+     `jose`. Press Enter to accept the name shown in brackets. If a name cannot be used, the window
+     says why and suggests one (for `José` it suggests `jose`).
+   - **Password**: at least 12 characters, and it must not contain the login name. Three or more
+     unrelated words joined by dashes make a good password. **Nothing appears while you type it**;
+     that is normal. Type it twice. If it cannot be used, the window says why and asks again.
+5. The browser opens at <http://127.0.0.1:8000/>. Sign in with the login name and password. The blue
+   banner says `SIMULATION — DEMO MODEL`.
+6. In the browser, open **Getting started** (first item of the menu): four short tasks. Then follow
+   the tour: `owner-tour/index.html` (illustrated, offline) or `docs/operator/walkthrough.md`. Record
+   results with `owner-tour/results.html` (it saves a file you send back) or in `owner-checklist.csv`;
+   report findings with `owner-feedback-template.md`.
 
 AquaCrop is served on this PC only (127.0.0.1). It never opens a serial port in this mode.
 
 ## 4. Which build is running
 
 - In the browser: **Settings**, card **Versions**. *Release* shows the version, source commit, build
-  time and **wheel verified** when the installed program is exactly the one in this folder. *Config*
+  time and **wheel verified** when the program in `runtime` is exactly the one this folder was built
+  with. *Python* shows 3.14.8 and the `runtime` folder. *Config*
   shows `installation-80@…`, *Inventory* `6 modules: 16 AI + 32 DI + 32 DO = 80 points`.
 - In the launcher window: the line `AquaCrop <version>, release <version>, source commit …: VERIFIED`.
-- If it says **MISMATCH** (the environment does not belong to this folder) or **MISSING** (`RELEASE.json`
+- If it says **MISMATCH** (the program does not belong to this folder) or **MISSING** (`RELEASE.json`
   is gone), extract the whole ZIP again into a new folder and start from there.
 
 ## 5. Where your data is
@@ -66,9 +73,10 @@ AquaCrop is served on this PC only (127.0.0.1). It never opens a serial port in 
 | Accounts, history, recipes, stock acknowledgements | `%LOCALAPPDATA%\AquaCrop\demo\installation-80.sqlite3` |
 | Local backups (and any pre-migration safety copy) | `%LOCALAPPDATA%\AquaCrop\demo\backups\` |
 | Log file | `%LOCALAPPDATA%\AquaCrop\demo\logs\aquacrop-launch.log` |
-| Program environments (no data) | `%LOCALAPPDATA%\AquaCrop\venv-aquacrop_greenhouse-<version>-…-<12 hex digits>` |
+| The program and its Python (no data) | the extracted release folder, `runtime` |
 
-Nothing is written into the extracted release folder. Type `%LOCALAPPDATA%\AquaCrop` in the Explorer
+Your data is never written into the release folder. When a start fails, the last lines of the window
+name the data folder and the log file actually in use. Type `%LOCALAPPDATA%\AquaCrop` in the Explorer
 address bar to open the folder. Never delete the `demo` folder: it is your data.
 
 ## 6. Stop and start again
@@ -78,17 +86,17 @@ address bar to open the folder. Never delete the `demo` folder: it is your data.
 - Start again: double-click `AquaCrop-Demo.cmd`. It does not ask for the administrator again. Every
   process starts STOPPED; nothing restarts by itself.
 
-## 7. Upgrading from an earlier demo (for example a provisional 0.3.1)
+## 7. Upgrading from an earlier demo (0.3.1 or 0.3.2)
 
 1. Optional but sensible: in the old version, Settings, *Create backup now*.
-2. Stop the old version. Extract the new ZIP into a **new** folder and double-click its
-   `AquaCrop-Demo.cmd`.
-3. The launcher names each environment after the exact program file (its SHA-256), so it always
-   prepares a new environment for a new build; the old environment is left as it is (it holds no
-   data; you can delete old `venv-…` folders later).
+2. Stop the old version (Ctrl+C in its window). Extract the new ZIP into a **new** folder and
+   double-click its `AquaCrop-Demo.cmd`.
+3. The new release runs on its own `runtime`; the Python 3.12 that 0.3.1 or 0.3.2 needed is no longer
+   used, and you may keep or uninstall it. The old program environments under
+   `%LOCALAPPDATA%\AquaCrop\venv-…` hold no data; you can delete them later.
 4. The same data folder is used: your accounts, history and recipes are kept. If a release changes
    the database format, AquaCrop first writes a full safety copy to `demo\backups\pre-migrate-…`
-   (0.3.1 to 0.3.2 does not change it).
+   (0.3.1 and 0.3.2 to 0.3.3 do not change it).
 5. Check Settings, Versions: the new version and **wheel verified**.
 
 ## 8. A separate trial data folder
@@ -100,18 +108,21 @@ release folder:
 AquaCrop-Demo.cmd --state-dir "%LOCALAPPDATA%\AquaCrop\demo-trial"
 ```
 
-It asks for a first administrator for that folder. Run only one AquaCrop at a time (they share the
+It asks for a first administrator for that folder, and a failed start names that folder and its
+log file. Run only one AquaCrop at a time (they share the
 browser's sign-in cookie). To return to the normal data, start `AquaCrop-Demo.cmd` without options.
 
 ## 9. If something goes wrong
 
 | Message | What to do |
 |---|---|
-| `AquaCrop needs Python 3.11, 3.12 or 3.13 (64-bit), and none was found` | Install Python 3.12 (64-bit) as in section 2, then start again |
+| `This folder has no bundled Python (runtime)` | The folder is incomplete: extract the whole ZIP again into a new folder |
+| `"José" cannot be used: it contains a space, an accent…` | Press Enter to take the suggested login name, or type another one without spaces or accents |
+| `That password cannot be used: …` | The reason follows (too short, or it contains the login name): type another password |
 | `[FAIL] port 8000 on 127.0.0.1 is free` followed by "another program (or AquaCrop already running) uses it" | Another AquaCrop window is still open: close it and start again. Or start with `AquaCrop-Demo.cmd --port 8010` and open <http://127.0.0.1:8010/> |
 | `MISMATCH` or `MISSING` in the release check | The program or `RELEASE.json` does not match this folder: extract the whole ZIP into a new folder and start from there |
-| `Installation failed; the incomplete environment was removed` | Extract the ZIP again (a file is missing or blocked, for example by antivirus) and start again |
 | `requirements.lock is missing` / `Cannot find the AquaCrop wheel` | You started a single file: extract the whole ZIP |
+| Windows asks "Do you want to run this file?" on every start | Unblock the ZIP before extracting (section 3, step 1), extract again into a new folder |
 | The browser does not open | Open <http://127.0.0.1:8000/> yourself |
 | "Access is denied" (WinError 5) while running the developer test suite inside a OneDrive folder | OneDrive locks files while syncing. Use a folder outside OneDrive. The demo itself keeps its data in `%LOCALAPPDATA%` |
 
@@ -120,8 +131,8 @@ browser's sign-in cookie). To return to the normal data, start `AquaCrop-Demo.cm
 ## 10. macOS or Linux
 
 `./aquacrop-demo.sh` does the same (data in `~/.local/share/aquacrop/demo` or
-`~/Library/Application Support/AquaCrop/demo`). There is no offline package set for these; it installs
-the locked packages from the internet on the first start.
+`~/Library/Application Support/AquaCrop/demo`) with a Python 3.11 to 3.14 already on the computer. There
+is no bundled Python for these; it installs the locked packages from the internet on the first start.
 
 ## 11. Controller (CM4)
 

@@ -1,10 +1,11 @@
 """DL-08: check an extracted release folder before it is handed over, with the Python that will run it.
 
-    python scripts/verify_release.py --release unpacked/aquacrop-0.3.2 [--zip dist/aquacrop-0.3.2.zip] \
+    python scripts/verify_release.py --release unpacked/aquacrop-0.3.3 [--zip dist/aquacrop-0.3.3.zip] \
         [--python <venv python with the release wheel installed>] [--json out.json]
 
 Checks: the ZIP's SHA-256 file and every MANIFEST.sha256 entry; RELEASE.json (version, wheel SHA-256, targets,
-wheelhouses present); the configs in the folder are byte-identical to the copies inside the wheel; the normal
+wheelhouses present); the bundled Windows Python is the pinned python.org build with AquaCrop and every locked
+package installed in it; the configs in the folder are byte-identical to the copies inside the wheel; the normal
 demo installation-80 has six modules (2 Relay (D), 2 AI 8CH, 2 IO 8CH) with 16 AI + 32 DI + 32 DO, 60 s
 snapshots, 365 days, the 17 GiB budget, and no plant signal bound to the added IO 8CH channels; the owner
 checklist and guide carry every case NOT RUN; nothing forbidden (databases, keys, rclone.conf) is shipped.
@@ -88,8 +89,26 @@ def main() -> int:
     check("RELEASE.json wheel SHA-256", wheel.is_file() and sha(wheel) == info["wheel"]["sha256"], info["wheel"]["file"])
     check("RELEASE.json says no physical verification", info.get("physical_verification") is False, info.get("evidence"))
     houses = sorted(p.name for p in rel.glob("wheelhouse-*") if p.is_dir())
-    check("wheelhouses for Windows py3.12 and CM4 aarch64 py3.11", {"wheelhouse-win_amd64-py312", "wheelhouse-aarch64-py311"} <= set(houses)
+    check("offline wheelhouse for the CM4 (aarch64, Python 3.11)", "wheelhouse-aarch64-py311" in houses
           and houses == sorted(info.get("wheelhouses", [])), houses)
+    # F-01: the Windows demo runs on the Python bundled in runtime/, with AquaCrop and the locked packages in it
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from build_release import WINDOWS_RUNTIME, lock_for
+    rt, wr = rel / "runtime", info.get("windows_runtime") or {}
+    check(f"bundled Windows Python {WINDOWS_RUNTIME['python']} (pinned python.org build)",
+          (rt / "python.exe").is_file() and (rt / "python314.dll").is_file() and wr.get("python") == WINDOWS_RUNTIME["python"]
+          and wr.get("nupkg_sha256") == WINDOWS_RUNTIME["sha256"], f"{wr.get('python')} from {str(wr.get('source'))[:60]}…")
+    site = rt / "Lib" / "site-packages"
+    marker = (rt / "aquacrop-wheel.sha256").read_text(encoding="ascii").strip() if (rt / "aquacrop-wheel.sha256").is_file() else ""
+    dists = [d.name.removesuffix(".dist-info").rsplit("-", 1) for d in site.glob("*.dist-info")] if site.is_dir() else []
+    have = {n.lower().replace("_", "-") + "==" + v for n, v in dists}
+    pyv = ".".join(WINDOWS_RUNTIME["python"].split(".")[:2])
+    want = {ln.split(" ")[0].lower().replace("_", "-") for ln in lock_for((rel / "requirements.lock").read_text(encoding="utf-8"),
+            "win_amd64", pyv).splitlines() if "==" in ln and not ln[0].isspace() and not ln.startswith("#")}
+    want.add(f"aquacrop-greenhouse=={info['version']}")
+    check("AquaCrop and every locked package installed in the bundled Python", want <= have and marker == info["wheel"]["sha256"],
+          f"{len(want & have)} of {len(want)} packages; wheel marker {'matches' if marker == info['wheel']['sha256'] else 'DIFFERS'}"
+          + (f"; missing {sorted(want - have)[:4]}" if want - have else ""))
     for f in ("AquaCrop-Demo.cmd", "README-FIRST.md", "acceptance-manifest.json", "requirements.lock", "owner-checklist.csv",
               "owner-feedback-template.md", "docs/operator/walkthrough.md", "deploy/aquacrop-cm4.py", "check_installed_wheel.py"):
         check(f"ships {f}", (rel / f).is_file())

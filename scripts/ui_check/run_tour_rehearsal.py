@@ -10,7 +10,7 @@ This is Claude's rehearsal, not the owner's acceptance: every owner result stays
 the tour. Nothing here touches hardware.
 
     python scripts/ui_check/run_tour_rehearsal.py --out tour-evidence
-    python scripts/ui_check/run_tour_rehearsal.py --out tour-evidence --launcher /path/to/aquacrop-0.3.2/aquacrop-demo.sh
+    python scripts/ui_check/run_tour_rehearsal.py --out tour-evidence --launcher /path/to/aquacrop-0.3.3/aquacrop-demo.sh
 """
 from __future__ import annotations
 
