@@ -2,8 +2,9 @@
 // the tour's numbered steps through the screen (the buttons and fields the owner uses), checks what the tour
 // says should happen, also through the API, and saves the screenshots the illustrated guide shows.
 //
-// Driven by run_tour_rehearsal.py. Phase "main": UAT-01 to UAT-14 and the layout part of UAT-16. Phase "after"
-// (a restarted launcher on the same state): UAT-15, then the loss-of-connection part of UAT-16.
+// Driven by run_tour_rehearsal.py. Phase "main": the sign-in and Getting started pictures, UAT-01 to UAT-14 and
+// the layout part of UAT-16. Phase "after" (a restarted launcher on the same state): UAT-15, then the
+// loss-of-connection part of UAT-16.
 // This is not the owner's acceptance and not physical verification.
 "use strict";
 const fs = require("fs");
@@ -54,13 +55,16 @@ function watch(p) {
   p.on("dialog", d => { const a = prompts.shift(); d.type() === "prompt" ? d.accept(a == null ? "tour rehearsal" : a) : d.accept(); });
   return errs;
 }
-async function login(p, user, pass) {
+async function loginPage(p, user) {
   for (let i = 0; i < 120; i++) { try { await p.goto(BASE + "/"); break; } catch (e) { await p.waitForTimeout(250); } }
   try { await p.waitForSelector("input[name=username]", { timeout: 15000 }); }
   catch (e) {
     await p.screenshot({ path: path.join(OUT, `login-${user}-error.png`) }).catch(() => null);
     throw new Error(`login page for ${user} not shown: ` + await p.evaluate(() => ["login-view", "pwchange-view", "app"].map(i => i + ":" + (document.getElementById(i) || {}).className).join(" ")).catch(x => String(x)));
   }
+}
+async function login(p, user, pass) {
+  await loginPage(p, user);
   await p.fill("input[name=username]", user);
   await p.fill("input[name=password]", pass);
   await p.keyboard.press("Enter");
@@ -78,23 +82,56 @@ async function show(p, view) {
   await p.waitForTimeout(400);
 }
 const text = p => p.evaluate(() => (document.querySelector("section.view:not(.hidden)") || document.body).innerText);
+const allText = p => p.evaluate(() => (document.querySelector("section.view:not(.hidden)") || document.body).textContent);
 const toastText = p => p.evaluate(() => { const t = document.getElementById("toast"); return t && !t.classList.contains("hidden") ? t.textContent : ""; });
 const clearToast = p => p.evaluate(() => { const t = document.getElementById("toast"); if (t) { t.classList.add("hidden"); t.textContent = ""; } });
 async function lastToast(p, ms = 5000) { return until(p, () => toastText(p), ms, 100); }
-// a button inside the card whose heading is `title` (process panels, stock rows)
-async function cardButton(p, title, label) {
-  const card = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: title }) }).first();
-  await card.locator("button", { hasText: new RegExp("^" + label.replace(/[()]/g, "\\$&") + "$") }).first().click();
-  return card;
+const esc = s => String(s).replace(/[.*+?^${}()|[\]\\×]/g, "\\$&");
+const exact = s => new RegExp("^" + esc(s) + "$");
+// the card of a process (its heading is the process name: Watering, Main tank refill, ...)
+const card = (p, pid) => p.locator(`section.view:not(.hidden) .card.proc[data-process="${pid}"]`).first();
+async function procButton(p, pid, label) {
+  const c = card(p, pid);
+  await c.locator("button", { hasText: exact(label) }).first().click();
+  return c;
 }
 async function viewButton(p, label) {
-  await p.locator("section.view:not(.hidden) button", { hasText: new RegExp("^" + label.replace(/[()×]/g, "\\$&") + "$") }).first().click();
+  await p.locator("section.view:not(.hidden) button", { hasText: exact(label) }).first().click();
 }
-// a button in the recipe list row of `ref` ("ACTIVE" picks the active recipe's row)
+// a labelled field of a card's Run once form
+const runOnceField = (c, label) => c.locator(".subcard label", { hasText: new RegExp("^" + esc(label)) }).first().locator("input, select").first();
+// the text of a definition row (dt label, dd value), also inside a closed Details
+const ddText = (p, label) => p.evaluate(l => {
+  const dt = [...document.querySelectorAll("section.view:not(.hidden) dt")].find(x => x.textContent.trim() === l);
+  return dt && dt.nextElementSibling ? dt.nextElementSibling.textContent.replace(/\s+/g, " ").trim() : "";
+}, label);
+// the recipe list row of `ref` ("ACTIVE" picks the row marked In use)
+function recipeRow(p, ref) {
+  return ref === "ACTIVE" ? p.locator("section.view:not(.hidden) tr", { has: p.locator("span.pill", { hasText: exact("In use") }) }).first()
+    : p.locator("section.view:not(.hidden) tr", { has: p.locator("div.mono", { hasText: new RegExp("^" + esc(ref) + " ·") }) }).first();
+}
 async function recipeButton(p, ref, label) {
-  const row = ref === "ACTIVE" ? p.locator("section.view:not(.hidden) tr", { has: p.locator("span.pill", { hasText: /^ACTIVE$/ }) })
-    : p.locator("section.view:not(.hidden) tr", { has: p.locator("strong", { hasText: new RegExp("^" + ref + "$") }) });
-  await row.first().locator("button", { hasText: new RegExp("^" + label + "$") }).click();
+  await recipeRow(p, ref).locator("button", { hasText: exact(label) }).first().click();
+}
+const editorButton = (p, label) => p.locator("section.view:not(.hidden) .card.editor button", { hasText: exact(label) }).first().click();
+// a section of the recipe editor (Main tank levels, Refill, Watering, ...), opened if it is closed
+async function openSection(p, title) {
+  const d = p.locator("section.view:not(.hidden) .card.editor details.section", { has: p.locator(":scope > summary", { hasText: exact(title) }) }).first();
+  if (!(await d.evaluate(e => e.open))) await d.locator(":scope > summary").click();
+  return d;
+}
+// "Use these settings" on a checked recipe's row: open it, write why, press the button
+async function useRecipe(p, ref, reason) {
+  const row = recipeRow(p, ref);
+  await row.locator("summary", { hasText: exact("Use these settings") }).click();
+  await row.locator("input[type=text]").first().fill(reason);
+  await row.locator("button", { hasText: exact("Use these settings") }).click();
+}
+async function restorePrevious(p, reason) {
+  await show(p, "recipes");
+  await p.locator("section.view:not(.hidden) summary", { hasText: exact("Restore previous settings") }).click();
+  await p.fill("#rollback-reason", reason);
+  await viewButton(p, "Restore previous settings");
 }
 const pathL = (b, k) => Number(((b.paths || {})[k] || {}).delivered_L || 0).toFixed(1) * 1;
 const procs = async p => (await get(p, "/api/processes")).processes;
@@ -126,14 +163,24 @@ async function untilSim(p, fn, simLimit, wallMs = 240000) {
   const t0 = await simS(p);
   return until(p, async () => (await fn()) || ((await simS(p)) - t0 > simLimit ? "SIM_LIMIT" : null), wallMs, 500);
 }
+const TANK = { A: ["Fertiliser tank A", "tank A"], B: ["Fertiliser tank B", "tank B"], ACID: ["Acid tank", "the acid tank"] };
+const stockRow = (p, s) => p.locator("section.view:not(.hidden) tr", { has: p.locator("td > strong", { hasText: exact(TANK[s][0]) }) }).first();
+const stockStatus = async (p, s) => ((await get(p, "/api/processes")).stocks[s] || {}).status;
+// Nutrients & acid, Fertiliser and acid tanks: "Confirm tank A is prepared", what was prepared, "Confirm prepared"
 async function ackStocks(p, stocks) {
   await show(p, "nutrients");
   for (const s of stocks) {
-    prompts.push("tour: prepared by hand (simulation)");
-    const row = p.locator("section.view:not(.hidden) tr", { has: p.locator("td", { hasText: new RegExp("^" + s + "$") }) }).first();
-    await row.locator("button", { hasText: "Acknowledge prepared" }).click();
-    await p.waitForTimeout(600);
+    if (await stockStatus(p, s) === "PREPARED") continue;      // already confirmed: the row offers "Mark ... not ready" instead
+    const row = stockRow(p, s);
+    await row.locator("summary", { hasText: exact(`Confirm ${TANK[s][1]} is prepared`) }).click();
+    await row.locator("input[type=text]").first().fill("tour: prepared by hand (simulation)");
+    await row.locator("button", { hasText: exact("Confirm prepared") }).click();
+    await until(p, async () => await stockStatus(p, s) === "PREPARED", 8000);
   }
+}
+async function stockTab(p, label) {
+  await p.locator("section.view:not(.hidden) .tabs button", { hasText: exact(label) }).click();
+  await p.waitForTimeout(800);
 }
 async function ioOverride(p, point, raw, reason) {
   await show(p, "io");
@@ -149,23 +196,37 @@ async function ioClear(p, point) {
   await row.locator("button", { hasText: "Clear" }).click();
   await p.waitForTimeout(800);
 }
+// Digital Twin, Simulated faults: the row of `kind` (Valve, Pump drive, ...): which one, the fault, Apply
 async function applyFault(p, kind, ident, fault) {
   await show(p, "twin");
-  const row = p.locator("section.view:not(.hidden) .row", { has: p.locator("span", { hasText: new RegExp("^" + kind + "$") }) }).first();
-  const sels = row.locator("select");
-  await sels.nth(0).selectOption(ident);
-  await sels.nth(1).selectOption(fault || "");
-  await row.locator("button", { hasText: "Apply" }).click();
+  await p.selectOption(`#fault-${kind}-what`, ident);
+  await p.selectOption(`#fault-${kind}-fault`, fault || "");
+  await p.locator("section.view:not(.hidden) .row", { has: p.locator(`#fault-${kind}-what`) }).first().locator("button", { hasText: exact("Apply") }).click();
   await p.waitForTimeout(800);
 }
+const unseen = async p => (await get(p, "/api/alarms")).open.filter(o => !o.closed && !o.acknowledged).length;
+// Alarms, Problems now: "Mark as seen" on every problem, one at a time
 async function ackAll(p) {
   await show(p, "alarms");
-  const btns = p.locator("section.view:not(.hidden) button", { hasText: /^Ack$/ });
-  const n = await btns.count();
-  for (let i = 0; i < n; i++) { await btns.first().click(); await p.waitForTimeout(500); }
+  let n = 0;
+  for (let i = 0; i < 30; i++) {
+    const b = p.locator("section.view:not(.hidden) button:visible", { hasText: exact("Mark as seen") }).first();
+    if (!(await b.count())) break;
+    const before = await unseen(p);
+    await b.click();
+    n++;
+    await until(p, async () => (await unseen(p)) < before, 5000);
+    await p.waitForTimeout(1200);              // the page redraws once a second
+  }
   return n;
 }
-const alarms = async p => (await get(p, "/api/alarms")).open || (await get(p, "/api/alarms"));
+const clearStopButton = (p, pid) => card(p, pid).locator("button", { hasText: exact("Clear stop after fixing the problem") }).first();
+// the lockout card's step 3, once the page says it is available
+async function clearStop(p, pid, page) {
+  await show(p, page);
+  await until(p, async () => (await clearStopButton(p, pid).count()) && !(await clearStopButton(p, pid).isDisabled()), 20000, 500);
+  await clearStopButton(p, pid).click();
+}
 
 // ------------------------------------------------------------------------------------------------- cases
 const CASES = {};
@@ -174,10 +235,15 @@ CASES["UAT-01"] = async (p) => {
   const banner = await p.locator("#banner").innerText();
   check("SIMULATION banner", /SIMULATION/.test(banner), banner);
   const st = await get(p, "/api/status");
-  const line = await p.locator("#statusline").innerText();
-  check("status line names version and config", line.includes("AquaCrop " + st.software_version) && line.includes("installation-80@"), line);
+  const plain = await until(p, async () => { const t = await p.locator("#status-plain").innerText(); return /Main tank \d+%/.test(t) && t; }, 10000) || await p.locator("#status-plain").innerText();
+  check("plain status line: Digital Twin, watering, main tank, last reading", /^Digital Twin · Watering stopped · Main tank \d+% · Last reading \d+ seconds? ago/.test(plain), plain);
+  await p.locator("#status-more").click();
+  await p.waitForTimeout(300);
+  const line = await p.locator("#status-tech").innerText();
+  check("Details under the status line names version and config", (await p.locator("#status-tech").isVisible()) && line.includes("AquaCrop " + st.software_version) && line.includes("installation-80@"), line.replace(/\n/g, " | ").slice(0, 300));
   await show(p, "overview");
   await shot(p, "UAT-01-overview");
+  await p.locator("#status-more").click();                       // Hide details
   await show(p, "settings");
   const t = await text(p);
   const rel = (t.match(/Release\n(.*)/) || [])[1] || "";
@@ -189,19 +255,26 @@ CASES["UAT-01"] = async (p) => {
 };
 
 CASES["UAT-02"] = async (p) => {
-  const targets = [["Stock A", "nutrients"], ["Main tank", "main-tank"], ["Main pump MP1", "main-pumps"], ["Sector S1", "sector-S1"],
-    ["Sector S2", "sector-S2"], ["Sump", "drainage"]];
+  const targets = [["Fertiliser A", "nutrients"], ["Main tank", "main-tank"], ["Main pump 1 (selector K1)", "main-pumps"], ["Sector 1", "sector-S1"],
+    ["Sector 2", "sector-S2"], ["Drainage tank", "drainage"]];
   for (const [label, view] of targets) {
     await show(p, "overview");
-    await p.locator(`section.view:not(.hidden) svg.diagram g.hot[aria-label^="${label}"]`).first().click();
+    await p.locator(`section.view:not(.hidden) svg.diagram g.hot[aria-label^="${label}:"]`).first().click();
     const ok = await until(p, () => p.evaluate(v => location.hash === "#" + v && window.AqUI.S.rendered === v, view), 8000);
     await p.waitForTimeout(500);
     check(`diagram part "${label}" opens ${view}`, ok, ok ? "opened" : await p.evaluate(() => location.hash));
     await shot(p, `UAT-02-${view}`);
   }
   await show(p, "main-tank");
-  const t = await text(p);
-  check("values carry unit, quality and age", /12000 L GOOD SIM \d+\.\d s/.test(t) && /pH\n6\.\d\d pH GOOD SIM/.test(t), (t.match(/Level\n(.*)/) || [])[1]);
+  const lvl = await ddText(p, "Water level");
+  const ph = await ddText(p, "Acidity (pH)");
+  const phTitle = await p.evaluate(() => {
+    const dt = [...document.querySelectorAll("section.view:not(.hidden) dt")].find(x => x.textContent.trim() === "Acidity (pH)");
+    const r = dt && dt.nextElementSibling.querySelector(".reading");
+    return r ? r.title : "";
+  });
+  check("values carry unit, quality and age", /^12,000 L Reading valid \d+ seconds? ago/.test(lvl) && /^6\.\d+ pH \d+ seconds? ago/.test(ph) && /Reading valid/.test(phTitle),
+    `Water level: ${lvl} · Acidity (pH): ${ph} (hover: ${phTitle})`);
   const lay = (await get(p, "/api/plant")).layout;
   check("layout matches the confirmed installation", lay.main_pumps.length === 2 && lay.return_pumps.length === 2 &&
     lay.sectors.map(s => s.channels.length).join("/") === "6/7" && !lay.agitators, JSON.stringify({ mp: lay.main_pumps, rp: lay.return_pumps, sectors: lay.sectors.map(s => s.channels.length) }));
@@ -211,12 +284,15 @@ CASES["UAT-03"] = async (p) => {
   await resetRun(p);
   await speed(p, 10);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   const s1 = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); return x.phase === "IRRIGATE" && JSON.stringify(x).includes('"S1"') && x; }, 120);
   await show(p, "main-pumps");
   await shot(p, "UAT-03-irrigating-S1");
-  const t1 = await text(p);
-  check("sector 1 with MP1, requested and observed apart", s1 && s1 !== "SIM_LIMIT" && /K1 \(MP1\)\nrequested ON .*observed closed/.test(t1), (t1.match(/K1 \(MP1\)\n(.*)/) || [])[1]);
+  const lead = await card(p, "IRRIGATION").locator(".lead").innerText();
+  const valve = await p.locator("section.view:not(.hidden) tr", { has: p.locator("td > strong", { hasText: exact("Sector 1") }) }).first().locator("td").nth(1).innerText();
+  const k1 = await ddText(p, "Selector K1 (main pump 1)");
+  check("sector 1 with main pump 1, asked and reported apart", s1 && s1 !== "SIM_LIMIT" && /^Automatic watering: Sector 1 with main pump 1/.test(lead) &&
+    /^asked: open · reports: open/.test(valve) && /^asked: on · reports: closed/.test(k1), `${lead} · Sector 1 valve: ${valve} · Selector K1: ${k1}`);
   const changeover = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); return x.phase !== "IRRIGATE" && x.phase !== "IDLE" && x.phase; }, 400);
   await show(p, "main-pumps");
   await shot(p, "UAT-03-changeover");
@@ -224,19 +300,21 @@ CASES["UAT-03"] = async (p) => {
   const s2 = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); return x.phase === "IRRIGATE" && JSON.stringify(x).includes('"S2"') && x; }, 120);
   await show(p, "sector-S2");
   await shot(p, "UAT-03-irrigating-S2");
-  check("then sector 2 with MP2", s2 && s2 !== "SIM_LIMIT", s2 && s2.phase);
+  check("then sector 2 with main pump 2", s2 && s2 !== "SIM_LIMIT", s2 && s2.phase);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "STOP");
+  await procButton(p, "IRRIGATION", "Stop watering");
   const stopped = await untilSim(p, async () => (await proc(p, "IRRIGATION")).state === "STOPPED" && (await proc(p, "IRRIGATION")).outputs_on.length === 0, 120);
-  check("STOP ends with every output off", stopped === true, JSON.stringify((await proc(p, "IRRIGATION")).outputs_on));
+  check("Stop watering ends with every output off", stopped === true, JSON.stringify((await proc(p, "IRRIGATION")).outputs_on));
   const hist = ((await proc(p, "IRRIGATION")).history || []).map(t => t.to_phase);
   const order = ["SELECT", "OPEN", "LEAD", "START", "VERIFY_FLOW", "IRRIGATE", "STOP_DRIVE"];
   let k = 0; for (const ph of hist) if (ph === order[k]) k++;
   check("transition history: valve opens and leads before the drive starts; drive stopped before changeover", k === order.length, hist.join(" > "));
   await show(p, "main-pumps");
-  const icard = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Irrigation" }) }).first();
-  await icard.locator("details > summary", { hasText: "Transition history" }).click();
+  const icard = card(p, "IRRIGATION");
+  await icard.locator("details > summary", { hasText: /^Details: checks before starting/ }).click();
   await p.waitForTimeout(600);
+  const histTxt = await icard.locator("details.tech").innerText();
+  check("the card's Details show the history of this process", /History of this process/.test(histTxt) && /STOP_DRIVE/.test(histTxt), (histTxt.match(/History of this process[^\n]*/) || [""])[0]);
   await icard.screenshot({ path: path.join(OUT, "UAT-03-transition-history.png") });
   const log = (await proc(p, "IRRIGATION")).cycles || [];
   check("cycle log", log.length >= 1 && log[0].sector === "S1" && log[0].pump === "MP1" && Math.abs(log[0].irrigated_s - 300) < 2,
@@ -247,30 +325,34 @@ CASES["UAT-04"] = async (p) => {
   await resetRun(p);
   await speed(p, 10);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "MANUAL");
+  await procButton(p, "IRRIGATION", "Manual mode");
   await until(p, async () => (await proc(p, "IRRIGATION")).state === "MANUAL", 10000);
   await show(p, "main-pumps");
-  const card = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Irrigation" }) }).first();
-  const sels = card.locator("select");
-  await sels.nth(0).selectOption("MP2"); await sels.nth(1).selectOption("S1");
-  await card.locator("input[placeholder=seconds]").fill("99999");
+  const c = card(p, "IRRIGATION");
+  await runOnceField(c, "Sector").selectOption("S1");
+  await runOnceField(c, "Main pump").selectOption("MP2");
+  await runOnceField(c, "Watering time (s)").fill("99999");
   await clearToast(p);
-  await card.locator("button", { hasText: "Run one step" }).click();
+  await c.locator("button", { hasText: exact("Run once") }).click();
   const refused = await lastToast(p);
-  check("an out-of-bounds duration is refused with the reason", /duration|bound|max|allowed/i.test(refused), refused);
+  check("an out-of-bounds watering time is refused with the reason", /^The run time must be between 1 and 1,800 seconds\.$/.test(refused), refused);
   await p.waitForTimeout(5500);
-  await card.locator("input[placeholder=seconds]").fill("60");
-  await card.locator("button", { hasText: "Run one step" }).click();
+  await runOnceField(c, "Sector").selectOption("S1");
+  await runOnceField(c, "Main pump").selectOption("MP2");
+  await runOnceField(c, "Watering time (s)").fill("60");
+  await c.locator("button", { hasText: exact("Run once") }).click();
   await p.waitForTimeout(500);
   const running = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); return x.phase === "IRRIGATE" && x.outputs_on.includes("drive.MAIN.run") && x; }, 60);
   await show(p, "main-pumps");
   await shot(p, "UAT-04-manual-MP2-S1");
-  check("manual step: MP2 on sector 1", running && running !== "SIM_LIMIT" && running.outputs_on.includes("contactor.MP2.cmd") && running.outputs_on.includes("valve.S1.cmd") && !running.outputs_on.includes("contactor.MP1.cmd"), JSON.stringify(running && running.outputs_on));
+  const lead = await card(p, "IRRIGATION").locator(".lead").innerText();
+  check("Run once: main pump 2 on sector 1", running && running !== "SIM_LIMIT" && running.outputs_on.includes("contactor.MP2.cmd") && running.outputs_on.includes("valve.S1.cmd") && !running.outputs_on.includes("contactor.MP1.cmd") &&
+    /^Running once: Sector 1 with main pump 2, 60 s/.test(lead), `${lead} · ${JSON.stringify(running && running.outputs_on)}`);
   await show(p, "main-pumps");
   await clearToast(p);
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   const autoRefused = await lastToast(p);
-  check("AUTO is refused while the MANUAL step runs, with the reason", /MANUAL/.test(autoRefused) && (await proc(p, "IRRIGATION")).state === "MANUAL", autoRefused);
+  check("Start automatic watering is refused while Run once runs, with the reason", /^Automatic mode starts only when the process is stopped \(now: Manual mode\)\. Press Stop first\.$/.test(autoRefused) && (await proc(p, "IRRIGATION")).state === "MANUAL", autoRefused);
   // a raw output command is refused while the process controllers own the installation
   await show(p, "io");
   const row = p.locator("section.view:not(.hidden) tr", { has: p.locator("td.mono", { hasText: /^relay_A\.DO3$/ }) }).first();
@@ -279,58 +361,54 @@ CASES["UAT-04"] = async (p) => {
   const raw = await lastToast(p);
   check("raw relay command refused on the installation", /REJECTED|refused|process/i.test(raw), raw);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "STOP");
+  await procButton(p, "IRRIGATION", "Stop watering");
   const stopped = await untilSim(p, async () => (await proc(p, "IRRIGATION")).state === "STOPPED" && (await proc(p, "IRRIGATION")).outputs_on.length === 0, 120);
+  await show(p, "main-pumps");
   await shot(p, "UAT-04-stopped");
-  check("STOP during the manual step runs the stop sequence to all off", stopped === true, (await proc(p, "IRRIGATION")).phase);
+  const lead2 = await card(p, "IRRIGATION").locator(".lead").innerText();
+  check("Stop watering during Run once runs the stop sequence to all off", stopped === true && lead2 === "Watering is stopped.", `${(await proc(p, "IRRIGATION")).phase} · ${lead2}`);
 };
 
 CASES["UAT-05"] = async (p) => {
   await resetRun(p);
   await speed(p, 10);
-  // 1. a value out of range is saved as a draft but Validate refuses it and says why
+  // 1. a value out of range: Check settings saves the draft, refuses it and says why beside the field
   await show(p, "recipes");
-  await recipeButton(p, "ACTIVE", "Edit as next version");
-  await p.waitForTimeout(800);
-  const field = (label) => p.locator("section.view:not(.hidden) tr", { has: p.locator("td", { hasText: label }) }).first().locator("input, select").first();
-  await field("Refill trigger level").fill("25000");
-  await viewButton(p, "Save draft");
-  await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.status === "DRAFT"), 8000);
-  await show(p, "recipes");
-  await recipeButton(p, "demo-sim@v2", "Validate");
+  await recipeButton(p, "ACTIVE", "Change settings");
+  await p.waitForSelector("#rf-main-refill_trigger_L", { timeout: 8000 });
+  await p.fill("#rf-main-refill_trigger_L", "25000");
+  await editorButton(p, "Check settings");
   await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.status === "DRAFT" && r.issues && r.issues.length), 8000);
-  await show(p, "recipes");
-  let t = await text(p);
-  check("Validate refuses the out-of-range value and says why", /Validation issues/.test(t) && /refill_trigger_L/.test(t),
-    (t.match(/[^\n]*refill_trigger_L[^\n]*/) || [""])[0].slice(0, 200));
+  const err = await until(p, () => p.evaluate(() => { const e = document.querySelector('[data-path="main.refill_trigger_L"] .error'); return e && e.textContent; }), 8000);
+  const kept = await p.inputValue("#rf-main-refill_trigger_L").catch(() => "");
+  check("Check settings refuses the out-of-range value, says why beside the field and keeps it", /Refill starts below: at most 20000 L/.test(err || "") && kept === "25000", `${err} (field still reads ${kept})`);
   await shot(p, "UAT-05-invalid");
-  // 2. irrigation runs on the active version while the draft is corrected
+  // 2. watering runs on the version in use while the draft is corrected
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   await untilSim(p, async () => (await proc(p, "IRRIGATION")).phase === "IRRIGATE", 120);
   await show(p, "recipes");
-  await recipeButton(p, "demo-sim@v2", "Edit draft");
-  await p.waitForTimeout(800);
-  await field("Refill trigger level").fill("8000");
-  await p.locator("section.view:not(.hidden) details > summary", { hasText: /^Irrigation$/ }).click();
-  await p.waitForTimeout(1500);                      // the section stays open across the page refresh
-  const seqRow = p.locator("section.view:not(.hidden) details[open] tr", { has: p.locator("td", { hasText: /^1$/ }) }).first();
-  await seqRow.locator("input").first().fill("120");
+  await p.waitForSelector("#rf-main-refill_trigger_L", { timeout: 8000 });        // the changes stay open on the page
+  await p.fill("#rf-main-refill_trigger_L", "8000");
+  await openSection(p, "Watering");
+  await p.waitForTimeout(500);
+  const s0 = await p.inputValue("#seq-0-sector");
+  await p.fill("#seq-0-time", "120");
   await shot(p, "UAT-05-editing-sequence");
-  await viewButton(p, "Save draft");
-  await p.waitForTimeout(1000);
+  await editorButton(p, "Check settings");
+  await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.ref === "demo-sim@v2" && r.status === "VALIDATED"), 8000);
+  await until(p, () => p.locator("section.view:not(.hidden) .card.editor .done", { hasText: "demo-sim@v2 passed the check" }).count(), 8000);
+  check("the corrected draft passes the check", (await get(p, "/api/recipes")).recipes.some(r => r.ref === "demo-sim@v2" && r.status === "VALIDATED"), `first step ${s0}; ${(await get(p, "/api/recipes")).recipes.map(r => r.ref + ":" + r.status).join(", ")}`);
   await show(p, "recipes");
-  await recipeButton(p, "demo-sim@v2", "Validate");
-  await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.status === "VALIDATED"), 8000);
-  await show(p, "recipes");
-  prompts.push("tour: shorter sector 1 (synthetic)");
-  await recipeButton(p, "demo-sim@v2", "Activate");
+  await useRecipe(p, "demo-sim@v2", "tour: shorter sector 1 (synthetic)");
   await until(p, async () => (await get(p, "/api/recipes")).active === "demo-sim@v2", 8000);
   await show(p, "recipes");
+  await editorButton(p, "Discard changes");
+  await p.waitForTimeout(800);
   await shot(p, "UAT-05-activated");
   const r = await get(p, "/api/recipes");
   const v2 = r.recipes.find(x => x.ref === "demo-sim@v2");
-  check("new version active, sector 1 120 s", r.active === "demo-sim@v2" && v2 && v2.body.irrigation.sequence[0].duration_s === 120 && v2.body.main.refill_trigger_L === 8000,
+  check("new version in use, sector 1 120 s", r.active === "demo-sim@v2" && v2 && v2.body.irrigation.sequence[0].duration_s === 120 && v2.body.main.refill_trigger_L === 8000,
     `${r.active} ${v2 && JSON.stringify(v2.body.irrigation.sequence)}`);
   const cur = await proc(p, "IRRIGATION");
   check("running step keeps its latched version", cur.recipe === "demo-sim@v1", cur.recipe);
@@ -339,33 +417,31 @@ CASES["UAT-05"] = async (p) => {
   const short = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); const c = (x.cycles || []).find(c => c.recipe === "demo-sim@v2" && c.sector === "S1"); return c; }, 900);
   check("sector 1 now irrigates 120 s", short && short !== "SIM_LIMIT" && Math.abs(short.irrigated_s - 120) < 2, JSON.stringify(short));
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "STOP");
+  await procButton(p, "IRRIGATION", "Stop watering");
   await untilSim(p, async () => (await proc(p, "IRRIGATION")).state === "STOPPED", 120);
-  await show(p, "recipes");
-  prompts.push("tour: back to the DEMO preset");
-  await viewButton(p, "Roll back to the previous version");
+  await restorePrevious(p, "tour: back to the DEMO preset");
   await until(p, async () => (await get(p, "/api/recipes")).active === "demo-sim@v1", 8000);
   await show(p, "recipes");
   await shot(p, "UAT-05-rolled-back");
-  check("rollback re-activates demo-sim@v1", (await get(p, "/api/recipes")).active === "demo-sim@v1", (await get(p, "/api/recipes")).active);
+  check("Restore previous settings puts demo-sim@v1 back in use", (await get(p, "/api/recipes")).active === "demo-sim@v1", (await get(p, "/api/recipes")).active);
 };
 
 CASES["UAT-06"] = async (p) => {
   // EC_TARGET with the DEMO recipe
   await twinPreset(p, "tour_low_main");
-  await ackStocks(p, ["Stock A", "Stock B"]);
+  await ackStocks(p, ["A", "B"]);
   await show(p, "main-tank");
-  await cardButton(p, "Main-tank refill", "AUTO");
+  await procButton(p, "REFILL", "Switch on automatic refill");
   await speed(p, 60);
   const dosing = await untilSim(p, async () => { const x = await proc(p, "REFILL"); return x.phase === "BATCH" && x; }, 120);
   await show(p, "nutrients");
   await shot(p, "UAT-06-ec-target-batch");
   check("batch starts: water and A/B", dosing && dosing !== "SIM_LIMIT", dosing && dosing.phase);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   const irrDuring = await untilSim(p, async () => { const i = await proc(p, "IRRIGATION"), r = await proc(p, "REFILL"); return i.phase === "IRRIGATE" && r.phase === "BATCH" && "IRRIGATE during refill BATCH"; }, 300);
-  check("irrigation runs on its own permissives during the refill", irrDuring === "IRRIGATE during refill BATCH", irrDuring);
-  await cardButton(p, "Irrigation", "STOP");
+  check("watering runs on its own checks during the refill", irrDuring === "IRRIGATE during refill BATCH", irrDuring);
+  await procButton(p, "IRRIGATION", "Stop watering");
   const done = await untilSim(p, async () => { const x = await proc(p, "REFILL"); return x.last_result && x.last_result.result && x; }, 7200, 300000);
   await show(p, "main-tank");
   await shot(p, "UAT-06-ec-target-done");
@@ -373,40 +449,45 @@ CASES["UAT-06"] = async (p) => {
   check("EC_TARGET batch completes at the final level with measured A/B", lr.result === "COMPLETED" && /EC_TARGET_REACHED/.test(lr.nutrients || "") && lr.end_level_L >= 14990,
     `${lr.result} ${lr.nutrients} end ${Math.round(lr.end_level_L || 0)} L, A ${(lr.delivered_a_L || 0).toFixed(1)} L, B ${(lr.delivered_b_L || 0).toFixed(1)} L`);
   await show(p, "main-tank");
-  await cardButton(p, "Main-tank refill", "STOP");
+  await procButton(p, "REFILL", "Stop refill");
   await untilSim(p, async () => (await proc(p, "REFILL")).state === "STOPPED", 120);
   // FIXED_VOLUMES: a new recipe through the editor
   await show(p, "recipes");
-  await recipeButton(p, "ACTIVE", "Copy to new recipe");
+  await recipeButton(p, "ACTIVE", "Copy to a new recipe");
+  await p.waitForSelector("#rf-recipe-id", { timeout: 8000 });
+  await p.fill("#rf-recipe-id", "tour-fixed");
+  await p.fill("#rf-recipe-name", "Tour FIXED_VOLUMES (synthetic)");
+  await p.check("#rf-refill-endpoint_mode-FIXED_ADDITIONS");          // "Add a set amount of water"
   await p.waitForTimeout(800);
-  const field = (label) => p.locator("section.view:not(.hidden) tr", { has: p.locator("td", { hasText: label }) }).first().locator("input, select").first();
-  const idName = p.locator("section.view:not(.hidden) label", { hasText: "Recipe id" }).locator("input");
-  await idName.fill("tour-fixed");
-  await p.locator("section.view:not(.hidden) label", { hasText: "Name" }).locator("input").fill("Tour FIXED_VOLUMES (synthetic)");
-  await field("Refill endpoint").selectOption("FIXED_ADDITIONS");
-  await field("Final operating level").fill("");
-  await field("Mains water addition").fill("1000");
-  await field("Nutrient mode").selectOption("FIXED_VOLUMES");
-  await field("Stock A addition").fill("15");
-  await field("Stock B addition").fill("15");
-  await field("EC validation minimum").fill("1.4");
-  await field("EC validation maximum").fill("2.2");
-  await field("EC validation settling window").fill("600");
-  await viewButton(p, "Save draft");
-  await p.waitForTimeout(1000);
-  await show(p, "recipes");
-  const row = p.locator("section.view:not(.hidden) tr", { hasText: "tour-fixed@v1" }).first();
-  await row.locator("button", { hasText: /^Validate$/ }).click();
+  await p.check("#rf-refill-nutrient_mode-FIXED_VOLUMES");            // "Add set amounts of nutrients"
   await p.waitForTimeout(800);
-  prompts.push("tour: FIXED_VOLUMES exercise (synthetic)");
+  const labels = await p.evaluate(() => ["FIXED_ADDITIONS", "FIXED_VOLUMES"].map(m => {
+    const r = document.querySelector(`input[type=radio][value="${m}"]:checked`);
+    return r ? document.querySelector(`label[for="${r.id}"]`).textContent : "not chosen";
+  }));
+  await p.fill("#rf-refill-water-target_L", "1000");
+  await p.fill("#rf-refill-fixed-a_L", "15");
+  await p.fill("#rf-refill-fixed-b_L", "15");
+  await p.fill("#rf-refill-fixed-ec_min_mS_cm", "1.4");
+  await p.fill("#rf-refill-fixed-ec_max_mS_cm", "2.2");
+  const refill = await openSection(p, "Refill");
+  await refill.locator("details.advanced > summary", { hasText: /^Advanced settings: timing and tolerances/ }).click();
+  await p.fill("#rf-refill-fixed-validation_settle_s", "600");
+  await editorButton(p, "Check settings");
+  const ok = await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.ref === "tour-fixed@v1" && r.status === "VALIDATED"), 8000);
+  const tf = (await get(p, "/api/recipes")).recipes.find(r => r.ref === "tour-fixed@v1");
+  check("the new recipe, made with the two plain choices, passes the check", ok && labels.join(" / ") === "Add a set amount of water / Add set amounts of nutrients",
+    `${labels.join(" / ")} · ${tf ? tf.status + (tf.issues && tf.issues.length ? " " + JSON.stringify(tf.issues).slice(0, 200) : "") : "no draft"}`);
   await show(p, "recipes");
-  await p.locator("section.view:not(.hidden) tr", { hasText: "tour-fixed@v1" }).first().locator("button", { hasText: /^Activate$/ }).click();
-  await p.waitForTimeout(1000);
+  await useRecipe(p, "tour-fixed@v1", "tour: FIXED_VOLUMES exercise (synthetic)");
+  await until(p, async () => (await get(p, "/api/recipes")).active === "tour-fixed@v1", 8000);
   await show(p, "recipes");
+  await editorButton(p, "Discard changes");
+  await p.waitForTimeout(800);
   await shot(p, "UAT-06-fixed-recipe");
   await twinPreset(p, "tour_low_main");
   await show(p, "main-tank");
-  await cardButton(p, "Main-tank refill", "AUTO");
+  await procButton(p, "REFILL", "Switch on automatic refill");
   await speed(p, 60);
   const fdone = await untilSim(p, async () => { const x = await proc(p, "REFILL"); return x.last_result && x.last_result.result && x; }, 7200, 300000);
   await show(p, "nutrients");
@@ -416,54 +497,55 @@ CASES["UAT-06"] = async (p) => {
     Math.abs(pathL(fl, "A") - 15) < 1 && Math.abs(pathL(fl, "B") - 15) < 1 && Math.abs(pathL(fl, "WATER") - 1000) < 30,
     `${fl.result} ${fl.nutrients} water ${pathL(fl, "WATER")} L, A ${pathL(fl, "A")} L, B ${pathL(fl, "B")} L (measured)`);
   await show(p, "main-tank");
-  await cardButton(p, "Main-tank refill", "STOP");
+  await procButton(p, "REFILL", "Stop refill");
   await untilSim(p, async () => (await proc(p, "REFILL")).state === "STOPPED", 120);
-  await show(p, "recipes");
-  prompts.push("tour: back to the DEMO preset");
-  await viewButton(p, "Roll back to the previous version");
-  await p.waitForTimeout(1000);
+  await restorePrevious(p, "tour: back to the DEMO preset");
+  await until(p, async () => (await get(p, "/api/recipes")).active === "demo-sim@v1", 8000);
   const r2 = await get(p, "/api/recipes");
   const a2 = r2.recipes.find(x => x.status === "ACTIVE");
-  check("rollback returns to demo-sim@v1", a2 && a2.ref === "demo-sim@v1", a2 && a2.ref);
+  check("Restore previous settings returns to demo-sim@v1", a2 && a2.ref === "demo-sim@v1", a2 && a2.ref);
   await speed(p, 1);
 };
 
 CASES["UAT-07"] = async (p) => {
   await resetRun(p);
-  await ackStocks(p, ["Stock A"]);
+  await ackStocks(p, ["A"]);
   await show(p, "nutrients");
-  let t = await text(p);
-  check("stock A shows PREPARED", /Stock A\t3000 L[^\n]*\tPREPARED/.test(t) || /Stock A[\s\S]{0,80}PREPARED/.test(t), (t.match(/Stock A\t[^\n]*/) || [""])[0]);
-  await cardButton(p, "Stock A water fill", "MANUAL");
+  await stockTab(p, "Fertiliser tank A");
+  let pill = await stockRow(p, "A").locator("span.pill").first().innerText();
+  check("fertiliser tank A shows Prepared", pill === "Prepared" && await stockStatus(p, "A") === "PREPARED", `${pill} (${await stockStatus(p, "A")})`);
+  await procButton(p, "STOCK_FILL_A", "Manual mode");
   await until(p, async () => (await proc(p, "STOCK_FILL_A")).state === "MANUAL", 10000);
   await show(p, "nutrients");
-  const card = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Stock A water fill" }) }).first();
-  await card.locator("input[placeholder=litres]").fill("3100");
-  await card.locator("button", { hasText: /^Fill$/ }).click();
+  const c = card(p, "STOCK_FILL_A");
+  await runOnceField(c, "Fill up to (L)").fill("3100");
+  await c.locator("button", { hasText: exact("Run once") }).click();
   await speed(p, 10);
   const filled = await untilSim(p, async () => { const x = await proc(p, "STOCK_FILL_A"); return x.last_result && x; }, 600);
   await show(p, "nutrients");
   await shot(p, "UAT-07-fill-invalidates");
-  t = await text(p);
-  check("filling with water invalidates the preparation", /INVALIDATED/.test(t), (t.match(/Stock A\t[^\n]*\n[^\n]*/) || [""])[0]);
-  check("manual fill completed to 3,100 L", filled && filled.last_result && /COMPLETED/.test(JSON.stringify(filled.last_result)), JSON.stringify(filled && filled.last_result).slice(0, 160));
-  await cardButton(p, "Stock A water fill", "STOP");
+  pill = await stockRow(p, "A").locator("span.pill").first().innerText();
+  const rowTxt = await stockRow(p, "A").innerText();
+  check("filling with water means the tank must be prepared again", pill === "Needs preparing again" && /Tank A needs preparing again before dosing\./.test(rowTxt) && await stockStatus(p, "A") === "INVALIDATED",
+    `${pill}: ${(rowTxt.match(/Tank A needs[^\n]*/) || [""])[0]} (${await stockStatus(p, "A")})`);
+  check("Run once filled to 3,100 L", filled && filled.last_result && /COMPLETED/.test(JSON.stringify(filled.last_result)), JSON.stringify(filled && filled.last_result).slice(0, 160));
+  await procButton(p, "STOCK_FILL_A", "Stop filling tank A");
   await speed(p, 1);
 };
 
 CASES["UAT-08"] = async (p) => {
   await twinPreset(p, "tour_ph_high");
-  await ackStocks(p, ["Acid"]);
+  await ackStocks(p, ["ACID"]);
   await show(p, "nutrients");
-  await p.locator(".tabs button", { hasText: "Acid" }).click();
-  await p.waitForTimeout(500);
+  await stockTab(p, "Acid tank");
   const t0 = await text(p);
-  check("pH target, step, settling and limits shown", /pH target \(adjustable\)/.test(t0), (t0.match(/pH target[^\n]*\n[^\n]*/) || [""])[0]);
-  await cardButton(p, "Acid pH dosing", "AUTO");
+  check("acidity (pH) target, dose, wait and limits shown", /Acidity \(pH\) target\n[^\n]*acid is added above/.test(t0) && /Acid in each dose/.test(t0) && /Wait after a dose/.test(t0) && /Most acid in 24 hours/.test(t0),
+    (t0.match(/Acidity \(pH\) target\n[^\n]*/) || [""])[0].replace("\n", ": "));
+  await procButton(p, "ACID", "Switch on automatic acid dosing");
   await speed(p, 60);
   await untilSim(p, async () => (await proc(p, "ACID")).phase === "SETTLING", 120);
   await show(p, "nutrients");
-  await p.locator(".tabs button", { hasText: "Acid" }).click();
+  await stockTab(p, "Acid tank");
   await shot(p, "UAT-08-settling");
   const done = await untilSim(p, async () => { const x = await proc(p, "ACID"); return x.last_result && x.last_result.result && x; }, 9000, 300000);
   const lr = done && done.last_result || {};
@@ -472,19 +554,22 @@ CASES["UAT-08"] = async (p) => {
   await ioOverride(p, "analog_A.AI6", 0, "tour: pH probe open circuit");
   const inh = await untilSim(p, async () => { const x = await proc(p, "ACID"); return /pH/.test(x.inhibit || "") && x.inhibit; }, 60);
   await show(p, "nutrients");
+  await stockTab(p, "Acid tank");
   await shot(p, "UAT-08-ph-unusable");
-  check("an unusable pH probe inhibits dosing with the reason", typeof inh === "string" && inh !== "SIM_LIMIT", inh);
+  const waiting = await card(p, "ACID").innerText();
+  check("an unusable pH probe holds dosing with the reason", typeof inh === "string" && inh !== "SIM_LIMIT" && /Waiting\n/.test(waiting), `${inh} · card: ${(waiting.match(/Waiting\n[^\n]*/) || [""])[0].replace("\n", ": ")}`);
   await ioClear(p, "analog_A.AI6");
   await show(p, "nutrients");
-  await cardButton(p, "Acid pH dosing", "STOP");
+  await stockTab(p, "Acid tank");
+  await procButton(p, "ACID", "Stop acid dosing");
 };
 
 CASES["UAT-09"] = async (p) => {
   await twinPreset(p, "tour_sump_high");
   await show(p, "drainage");
-  await cardButton(p, "Drainage return", "AUTO");
+  await procButton(p, "RETURN", "Switch on automatic return");
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   await speed(p, 60);
   const r1 = await untilSim(p, async () => { const x = await proc(p, "RETURN"); return x.outputs_on.length && x; }, 120);
   await show(p, "drainage");
@@ -496,20 +581,20 @@ CASES["UAT-09"] = async (p) => {
   await speed(p, 1);
   await twinPreset(p, "tour_main_full_sump_high");
   await show(p, "drainage");
-  await cardButton(p, "Drainage return", "AUTO");
+  await procButton(p, "RETURN", "Switch on automatic return");
   const hold = await untilSim(p, async () => (await proc(p, "RETURN")).phase === "HOLD", 60);
   await show(p, "drainage");
   await shot(p, "UAT-09-hold-main-full");
   const al = await get(p, "/api/alarms");
   check("destination full: HOLD with alarm", hold === true && JSON.stringify(al).includes("SUMP_HIGH_MAIN_FULL"), (await proc(p, "RETURN")).phase);
-  await cardButton(p, "Drainage return", "STOP");
+  await procButton(p, "RETURN", "Stop return pump");
 };
 
 CASES["UAT-10"] = async (p) => {
   await resetRun(p);
   await speed(p, 10);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   await untilSim(p, async () => (await proc(p, "IRRIGATION")).phase === "IRRIGATE", 120);
   await speed(p, 1);
   await applyFault(p, "drive", "MAIN", "TRIP");
@@ -517,50 +602,53 @@ CASES["UAT-10"] = async (p) => {
   await show(p, "main-pumps");
   await shot(p, "UAT-10-drive-trip");
   const x = await proc(p, "IRRIGATION");
-  check("drive trip: lockout with the cause", lock === true, `${x.fault_reason}: ${x.fault_detail}`);
+  const lead = await card(p, "IRRIGATION").locator(".lead").innerText();
+  check("drive trip: stopped because of a problem, with the cause", lock === true && /^Watering stopped because of a problem/.test(lead), `${lead} (${x.fault_reason}: ${x.fault_detail})`);
   await show(p, "main-pumps");
-  await clearToast(p);
-  await cardButton(p, "Irrigation", "Reset lockout");
-  const t1 = await lastToast(p);
-  check("reset refused while the fault is present / unacknowledged", /refus|still|acknowledg|active|fault/i.test(t1), t1);
+  const clr = clearStopButton(p, "IRRIGATION");
+  const why = await card(p, "IRRIGATION").locator("ol.steps > li", { has: p.locator("button", { hasText: exact("Clear stop after fixing the problem") }) }).first().innerText();
+  const disabled = await clr.isDisabled();
+  const refused = await api(p, "/api/processes/IRRIGATION/reset", "POST");
+  check("Clear stop is not available while the fault is present or not yet seen, and says why", disabled && /Not available yet: /.test(why) && refused.status === 409,
+    `${why.replace(/\n/g, " ").trim()} · direct request: HTTP ${refused.status} ${JSON.stringify(refused.body).slice(0, 120)}`);
   await applyFault(p, "drive", "MAIN", "");
   const n = await ackAll(p);
   await shot(p, "UAT-10-acknowledged");
   const after = await proc(p, "IRRIGATION");
-  check("acknowledging restarts nothing", after.state === "FAULT_LOCKOUT", `${n} alarm(s) acknowledged; Irrigation ${after.state}`);
-  await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "Reset lockout");
+  check("Mark as seen restarts nothing", after.state === "FAULT_LOCKOUT", `${n} problem(s) marked as seen; Watering ${after.state}`);
+  await clearStop(p, "IRRIGATION", "main-pumps");
   const st = await until(p, async () => (await proc(p, "IRRIGATION")).state === "STOPPED", 10000);
-  check("reset returns to STOPPED, not running", st === true, (await proc(p, "IRRIGATION")).state);
-  await cardButton(p, "Irrigation", "AUTO");
+  check("Clear stop after fixing the problem returns to stopped, not running", st === true, (await proc(p, "IRRIGATION")).state);
+  await show(p, "main-pumps");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   const again = await untilSim(p, async () => (await proc(p, "IRRIGATION")).state === "AUTO", 30);
   check("deliberate restart", again === true, (await proc(p, "IRRIGATION")).state);
-  await cardButton(p, "Irrigation", "STOP");
+  await procButton(p, "IRRIGATION", "Stop watering");
   await untilSim(p, async () => (await proc(p, "IRRIGATION")).state === "STOPPED", 120);
   // valve fault
   await resetRun(p);
   await applyFault(p, "valve", "S1", "STUCK_CLOSED");
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   const vl = await untilSim(p, async () => (await proc(p, "IRRIGATION")).state === "FAULT_LOCKOUT", 60);
   await show(p, "sector-S1");
   await shot(p, "UAT-10-valve-stuck");
   const v = await proc(p, "IRRIGATION");
+  const vlead = await card(p, "IRRIGATION").locator(".lead").innerText();
   const drv = (await get(p, "/api/twin")).snapshot.plant.drive;
-  check("valve does not open: lockout, the drive never ran", vl === true && !drv.run_requested, `${v.fault_reason}: ${v.fault_detail}`);
+  check("valve does not open: stopped because of a problem, the drive never ran", vl === true && !drv.run_requested && /valve for Sector 1 did not open/.test(vlead), `${vlead} (${v.fault_reason}: ${v.fault_detail})`);
   await applyFault(p, "valve", "S1", "");
   await ackAll(p);
-  await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "Reset lockout");
+  await clearStop(p, "IRRIGATION", "main-pumps");
   await until(p, async () => (await proc(p, "IRRIGATION")).state === "STOPPED", 10000);
 };
 
 CASES["UAT-11"] = async (p) => {
-  // invalid: main level loop open during irrigation
+  // invalid: main level loop open during watering
   await resetRun(p);
   await speed(p, 10);
   await show(p, "main-pumps");
-  await cardButton(p, "Irrigation", "AUTO");
+  await procButton(p, "IRRIGATION", "Start automatic watering");
   await untilSim(p, async () => (await proc(p, "IRRIGATION")).phase === "IRRIGATE", 120);
   await speed(p, 1);
   await ioOverride(p, "analog_A.AI1", 0, "tour: main level loop open");
@@ -568,13 +656,14 @@ CASES["UAT-11"] = async (p) => {
   await show(p, "main-tank");
   await shot(p, "UAT-11-invalid-level");
   const a = await proc(p, "IRRIGATION");
-  check("INVALID main level locks irrigation out", inv === true, `${a.fault_reason}: ${a.fault_detail}`);
+  const lvl = await ddText(p, "Water level");
+  check("main level outside the allowed range stops watering", inv === true && /Reading outside the allowed range/.test(lvl), `Water level: ${lvl} · ${a.fault_reason}: ${a.fault_detail}`);
   await ioClear(p, "analog_A.AI1");
   // unavailable: one module stops answering
   await resetRun(p);
   await show(p, "io");
-  const card = p.locator("section.view:not(.hidden) .card", { has: p.locator("h3", { hasText: /^analog_B/ }) }).first();
-  await card.locator("button", { hasText: "Simulate timeout" }).click();
+  const c = p.locator("section.view:not(.hidden) .card", { has: p.locator("h3", { hasText: /^analog_B/ }) }).first();
+  await c.locator("button", { hasText: "Simulate timeout" }).click();
   await p.waitForTimeout(2500);
   await show(p, "io");
   await shot(p, "UAT-11-module-timeout");
@@ -598,18 +687,25 @@ CASES["UAT-11"] = async (p) => {
   // the corrected EC boundary
   const before = (await get(p, "/api/recipes"));
   const act = (before.recipes.find(x => x.status === "ACTIVE") || {}).ref;
-  check("DEMO recipe active before the EC boundary preset", act === "demo-sim@v1", act);
+  check("DEMO recipe in use before the EC boundary preset", act === "demo-sim@v1", act);
   await speed(p, 1);
+  const since = (await get(p, "/api/status")).freshness.server_utc;
   await twinPreset(p, "tour_ec_lost_at_valve_opening");
   const stopped = await untilSim(p, async () => { const x = await proc(p, "REFILL"); return /EC unavailable/.test(JSON.stringify(x)) && x; }, 60);
   await show(p, "nutrients");
   await shot(p, "UAT-11-ec-boundary");
   check("EC lost at the last opening scan: step STOPPED with the reason", stopped && stopped !== "SIM_LIMIT", (JSON.stringify(stopped).match(/STOPPED \(EC unavailable[^"]*/) || [""])[0]);
+  // Alarms & events: the problem and, under Details, the commands sent to the equipment
   await show(p, "alarms");
+  for (const s of ["Commands sent to the equipment (including refused ones)", "Event log (newest first)"])
+    await p.locator("section.view:not(.hidden) details > summary", { hasText: exact(s) }).click();
+  await p.waitForTimeout(800);
   await shot(p, "UAT-11-audit");
-  const at = await text(p);
-  const pumpOn = /relay_B\.DO1\tTrue|relay_B\.DO2\tTrue|pump\.TP_A[^\n]*ON|pump\.TP_B[^\n]*ON/.test(at);
-  check("command audit: no transfer pump A/B ON", !pumpOn && /REFILL_EC_UNAVAILABLE/.test(at), pumpOn ? "a TP ON row is listed" : "no TP_A/TP_B ON rows; REFILL_EC_UNAVAILABLE listed");
+  const at = await allText(p);
+  const cmds = (await get(p, "/api/commands/history?limit=2000")).filter(x => x.intent_utc >= since);
+  const pumpOn = cmds.filter(x => x.desired && /TP_A|TP_B|relay_B\.DO1|relay_B\.DO2/.test(x.target));
+  check("command audit: no transfer pump A/B ON", !pumpOn.length && /REFILL_EC_UNAVAILABLE/.test(at),
+    pumpOn.length ? `${pumpOn.length} TP ON command(s) since the preset` : `no TP_A/TP_B ON among ${cmds.length} commands since the preset; REFILL_EC_UNAVAILABLE listed`);
   await ioClear(p, "analog_A.AI7");
   const t0 = await simS(p);
   await untilSim(p, async () => false, 60, 90000);
@@ -659,7 +755,7 @@ CASES["UAT-12"] = async (p) => {
   await show(p, "io");
   await shot(p, "UAT-12-twin-unassigned");
   const t = await text(p);
-  check("back in plant mode the added channels read UNASSIGNED", /digital_A\.DI1[^\n]*UNASSIGNED/.test(t) && /digital_B\.DI8[^\n]*UNASSIGNED/.test(t), (t.match(/digital_A\.DI1[^\n]*/) || [""])[0]);
+  check("back in plant mode the added channels read Unused channel", /digital_A\.DI1[^\n]*Unused channel/.test(t) && /digital_B\.DI8[^\n]*Unused channel/.test(t), (t.match(/digital_A\.DI1[^\n]*/) || [""])[0]);
   const mapping = (await get(p, "/api/settings")).config.virtual_mapping.map(m => m.point);
   check("no plant signal bound to digital_A/digital_B", !mapping.some(x => x.startsWith("digital_")), `${mapping.length} bindings, none on digital_A/B`);
 };
@@ -670,31 +766,36 @@ CASES["UAT-13"] = async (p) => {
     const tr = await get(p, `/api/trends?points=analog_A.AI1&start=${encodeURIComponent(s0.toISOString())}&end=${encodeURIComponent(e.toISOString())}`);
     return (tr.series["analog_A.AI1"] || []).length; };
   await until(p, async () => (await rows()) >= 2, 180000, 5000);
-  await show(p, "trends");
-  const sel = p.locator("section.view:not(.hidden) select[multiple]").first();
-  await sel.selectOption(["analog_A.AI1", "analog_A.AI2"]);
-  await p.waitForTimeout(2500);
-  await shot(p, "UAT-13-trends");
-  const t = await p.evaluate(() => document.querySelector("section.view:not(.hidden)").textContent);
-  check("chart has units and time zone", /\[L\]/.test(t) && /Atlantic\/Canary/.test(t), ((t.match(/Atlantic\/Canary \(\w+\)/) || [""])[0] + " · " + (t.match(/analog_A\.AI1 \[\w+\]/) || [""])[0]));
-  const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), p.locator("section.view:not(.hidden) a", { hasText: "Export CSV" }).click()]);
+  await show(p, "history");
+  await viewButton(p, "Last hour");
+  await p.waitForTimeout(800);
+  // tick each reading unless it is already ticked (the page redraws once a second, so retry until it holds)
+  for (const id of ["#h-analog-A-AI1", "#h-analog-A-AI2"])
+    await until(p, async () => (await p.isChecked(id)) || (await p.click(id, { timeout: 3000 }).catch(() => null), false), 15000, 1200);
+  await p.waitForTimeout(2000);
+  const names = await p.evaluate(() => ["h-analog-A-AI1", "h-analog-A-AI2"].map(i => document.querySelector(`label[for="${i}"]`).textContent));
+  await shot(p, "UAT-13-history");
+  const t = await allText(p);
+  check("chart has plain names, units and time zone", /Main tank water level \[L\]/.test(t) && /Atlantic\/Canary/.test(t) && names.every(n => /analog_A\.AI\d/.test(n)),
+    ((t.match(/Atlantic\/Canary \(\w+\)/) || [""])[0] + " · " + (t.match(/Main tank water level \[\w+\]/) || [""])[0] + " · ticked: " + names.join(", ")));
+  const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), p.locator("section.view:not(.hidden) a", { hasText: exact("Download readings") }).click()]);
   const f = path.join(OUT, "UAT-13-export.csv");
   await dl.saveAs(f);
   const csv = fs.readFileSync(f, "utf8");
   const last = csv.trim().split(/\r?\n/).slice(-1)[0];
-  check("export ends with COMPLETE/TRUNCATED and names the range", /COMPLETE|TRUNCATED/.test(last) && /range|from|to/i.test(csv.split(/\r?\n/).slice(0, 6).join(" ")), last.slice(0, 120));
+  check("Download readings ends with COMPLETE/TRUNCATED and names the range", /COMPLETE|TRUNCATED/.test(last) && /range|from|to/i.test(csv.split(/\r?\n/).slice(0, 6).join(" ")), `${dl.suggestedFilename()}: ${last.slice(0, 120)}`);
 };
 
 CASES["UAT-14"] = async (p, b) => {
   await show(p, "settings");
   const users = [["tour-viewer", "viewer"], ["tour-operator", "operator"]];
   for (const [u, role] of users) {
-    const card = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Users and roles" }) }).first();
-    const inputs = card.locator(".row input");
+    const c = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Users and roles" }) }).first();
+    const inputs = c.locator(".row input");
     await inputs.nth(0).fill(u);
     await inputs.nth(1).fill("tour first password 1");
-    await card.locator(".row select").first().selectOption(role);
-    await card.locator("button", { hasText: "Create user" }).click();
+    await c.locator(".row select").first().selectOption(role);
+    await c.locator("button", { hasText: "Create user" }).click();
     await p.waitForTimeout(1000);
     await show(p, "settings");
   }
@@ -717,15 +818,15 @@ CASES["UAT-14"] = async (p, b) => {
     await signedIn(q);
     check(`${role}: first sign-in asks for a new password`, mustChange, mustChange ? "password change required first" : "no change asked");
     await show(q, "main-pumps");
-    const auto = q.locator("section.view:not(.hidden) .card", { has: q.locator("h2", { hasText: "Irrigation" }) }).first().locator("button", { hasText: /^AUTO$/ });
-    const disabled = await auto.isDisabled();
-    const title = await auto.getAttribute("title");
+    const start = card(q, "IRRIGATION").locator("button", { hasText: exact("Start automatic watering") });
+    const disabled = await start.isDisabled();
+    const title = await start.getAttribute("title");
     await q.locator("section.view:not(.hidden)").screenshot({ path: path.join(OUT, `UAT-14-${role}-main-pumps.png`) });
-    if (role === "viewer") check("viewer: controls disabled, the required permission named", disabled && /permission/.test(title || ""), title);
-    else check("operator: AUTO available", !disabled, `disabled=${disabled}`);
+    if (role === "viewer") check("viewer: controls disabled, the account needed named", disabled && /needs an operator or administrator account/.test(title || ""), title);
+    else check("operator: Start automatic watering available", !disabled, `disabled=${disabled}`);
     if (role === "operator") {
       const r = await api(q, "/api/recipes/demo-sim/1/activate", "POST", { reason: "operator tries" });
-      check("operator: activating a recipe is refused (administrator only)", r.status === 403, `HTTP ${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
+      check("operator: putting a recipe in use is refused (administrator only)", r.status === 403, `HTTP ${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
       const u2 = await api(q, "/api/users", "POST", { username: "x-test", password: "abcdefghijklmn", role: "viewer" });
       check("operator: creating accounts is refused", u2.status === 403, `HTTP ${u2.status}`);
     }
@@ -733,15 +834,28 @@ CASES["UAT-14"] = async (p, b) => {
   }
 };
 
+const PROCESS_PAGES = ["overview", "main-pumps", "sector-S1", "sector-S2", "main-tank", "nutrients", "drainage", "recipes", "alarms", "history", "twin"];
 CASES["UAT-16a"] = async (p, b) => {
   for (const [w, hgt, name] of [[390, 844, "phone"], [820, 1180, "tablet"]]) {
     const ctx = await b.newContext({ viewport: { width: w, height: hgt } });
     const q = await ctx.newPage(); watch(q);
     await login(q, USER, PASS); await signedIn(q);
-    for (const v of ["overview", "main-pumps", "nutrients", "alarms"]) {
+    const wide = [];
+    for (const v of PROCESS_PAGES) {
       await show(q, v);
-      await shot(q, `UAT-16-${name}-${v}`);
+      const over = await q.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (over > 0) wide.push(`${v} +${over}px`);
+      if (v === "main-pumps" && w === 390) {
+        await q.evaluate(() => window.scrollTo(0, 0));
+        await q.waitForTimeout(300);
+        const stop = q.locator("section.view:not(.hidden) .stopbar button.stop", { hasText: exact("Stop watering") });
+        const box = await stop.boundingBox().catch(() => null);
+        check(`${name} ${w}px: Stop watering visible in the first screen of Watering`, box && (await stop.isVisible()) && box.y >= 0 && box.y + box.height <= hgt,
+          box ? `stop bar button at y ${Math.round(box.y)}-${Math.round(box.y + box.height)} of ${hgt} px` : "no stop bar button");
+      }
+      if (["overview", "main-pumps", "nutrients", "alarms"].includes(v)) await shot(q, `UAT-16-${name}-${v}`);
     }
+    check(`${name} ${w}px: no page wider than the screen on any process page`, wide.length === 0, wide.join(", ") || `${PROCESS_PAGES.length} pages: scrollWidth <= innerWidth`);
     const scrollX = await q.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check(`${name} ${w}px: no page-wide horizontal scroll`, scrollX <= 1, `overflow ${scrollX}px`);
     await ctx.close();
@@ -766,9 +880,22 @@ async function main() {
   const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, acceptDownloads: true });
   const p = await ctx.newPage();
   const errs = watch(p);
-  await login(p, USER, PASS);
-  await signedIn(p);
   if (PHASE === "main") {
+    // the pictures of "Starting AquaCrop": the sign-in page, then Getting started (the first-time operator's four tasks)
+    current = "START";
+    await loginPage(p, USER);
+    await p.waitForTimeout(500);
+    await shot(p, "START-login", false);
+    await login(p, USER, PASS);
+    await signedIn(p);
+    await show(p, "start");
+    await p.evaluate(() => document.querySelectorAll("section.view:not(.hidden) img").forEach(i => { i.loading = "eager"; }));
+    await until(p, () => p.evaluate(() => [...document.querySelectorAll("section.view:not(.hidden) img")].every(i => i.complete && i.naturalWidth > 0)), 10000);
+    const tasks = await p.locator("section.view:not(.hidden) .start-task h2").allInnerTexts();
+    check("Getting started: four tasks with pictures", tasks.join(" | ") === "1. Read the tank level | 2. Water one sector | 3. Stop watering | 4. Recover from a simulated problem" &&
+      await p.evaluate(() => [...document.querySelectorAll("section.view:not(.hidden) .start-task img")].filter(i => i.naturalWidth > 0).length) === 4, tasks.join(" | "));
+    await shot(p, "START-getting-started");
+    current = "";
     await runCases(p, b, ["UAT-01", "UAT-02", "UAT-03", "UAT-04", "UAT-05", "UAT-06", "UAT-07", "UAT-08", "UAT-09", "UAT-10",
       "UAT-11", "UAT-12", "UAT-13", "UAT-14", "UAT-16a"]);
     // UAT-15, before the restart: a local backup and a known state to compare
@@ -782,6 +909,8 @@ async function main() {
     fs.writeFileSync(path.join(OUT, "before-restart.json"), JSON.stringify({ users: (await get(p, "/api/settings")).users,
       recipes: await get(p, "/api/recipes"), stocks: ((await get(p, "/api/plant")).processes || {}).stocks || null }));
   } else {
+    await login(p, USER, PASS);
+    await signedIn(p);
     current = "UAT-15";
     const before = JSON.parse(fs.readFileSync(path.join(OUT, "before-restart.json"), "utf8"));
     const now = { users: (await get(p, "/api/settings")).users, recipes: await get(p, "/api/recipes") };
@@ -791,7 +920,7 @@ async function main() {
     check("recipes kept", refs(before.recipes) === refs(now.recipes), refs(now.recipes).slice(0, 160));
     const ps = await procs(p);
     check("every process starts STOPPED", Object.values(ps).every(x => x.state === "STOPPED"), Object.entries(ps).map(([k, v]) => `${k} ${v.state}`).join(", "));
-    await show(p, "trends");
+    await show(p, "history");
     await shot(p, "UAT-15-after-restart");
     // UAT-16: loss of connection while the page is open
     current = "UAT-16b";
@@ -802,7 +931,7 @@ async function main() {
     await shot(p, "UAT-16-connection-lost");
     check("STALE banner when the server is gone", !!stale, await p.locator("#stale").innerText().catch(() => ""));
     await clearToast(p);
-    await p.locator("section.view:not(.hidden) button", { hasText: /^AUTO$/ }).first().click({ timeout: 3000 }).catch(() => null);
+    await card(p, "IRRIGATION").locator("button", { hasText: exact("Start automatic watering") }).click({ timeout: 3000 }).catch(() => null);
     const tt = await lastToast(p, 3000);
     check("a command is not sent while stale", /stale|not sent/i.test(tt) || !tt, tt || "button inactive");
   }

@@ -156,6 +156,8 @@
     MAIN_HIGH_HIGH_SWITCH: ["The main tank very high level switch is active", "Stop all water going into the main tank and check the level."],
     MAIN_LOW_LOW_SWITCH: ["The main tank very low level switch is active", "Fill the main tank; watering cannot run."],
     SUMP_HIGH_SWITCH: ["The drainage tank high level switch is active", "Start the drainage return."],
+    SUMP_HIGH_MAIN_FULL: ["The drainage tank is high while the main tank is full, so the return pump waits",
+      "Find out why the main tank is full (the refill stop level, or a fill valve stuck open) and reduce the drainage from watering. Do not force the return pump on."],
     SUMP_LOW_SWITCH: ["The drainage tank low level switch is active", "Nothing to do: the return pump cannot run dry."],
     DRIVE_FAULT_INPUT: ["The pump drive reports a fault", "Find and fix the cause at the pump drive, then reset the drive there."],
     SAFETY_CHAIN_OPEN: ["The safety circuit is open", "Find out why the safety circuit opened (for example an emergency stop) and close it."],
@@ -175,7 +177,10 @@
     HISTORY_CLOCK_BEHIND: ["The clock is behind the stored history", "An administrator checks the date and time under Settings."],
     HISTORY_QUARANTINE_REVIEW_DUE: ["Quarantined history needs a review", "An administrator reviews it under Settings."],
   };
-  /** An open alarm as a problem: { title, cause, fix, equipment, proc, page }. */
+  // alarms that a simulated fault on the Digital Twin page can cause (a level alarm cannot)
+  const SIM_FAULT_RULES = new Set(["DRIVE_FAULT_INPUT", "SAFETY_CHAIN_OPEN", "ACQUISITION_STALE", "AI_SIGNAL_INVALID", "DEVICE_COMM",
+                                   "DRIVE_COMM", "FLOW_PLAUSIBILITY"]);
+  /** An open alarm as a problem: { title, cause, fix, equipment, proc, page, simFault }. */
   function problem(o) {
     const target = String(o.target || ""), rule = String(o.rule_id || "");
     if (rule.startsWith("PROC_") && target.startsWith("process.")) {
@@ -183,18 +188,21 @@
       const detail = String(o.message || "").split(": ").slice(2).join(": ");
       const w = whoIn(detail), f = FAULT[reason];
       const [what, fix] = f ? f(w) : [lower(reason.replace(/_/g, " ")), "See the details below."];
-      return { title: `${p.name} stopped: ${what}`, cause: what, fix, equipment: w ? cap(equip(w)) : null, proc: pid, page: p.page, latchedProcess: true };
+      return { title: `${p.name} stopped: ${what}`, cause: what, fix, equipment: w ? cap(equip(w)) : null, proc: pid, page: p.page, latchedProcess: true, simFault: true };
     }
     const r = RULE[rule], name = target.startsWith("process.") ? proc(target.slice(8)).name : null;
     const pageOf = { MAIN: "#main-tank", SUMP: "#drainage", STOCK: "#nutrients", ACID: "#nutrients", DRIVE: "#main-pumps", SAFETY: "#main-pumps", REFILL: "#main-tank" };
     const key = Object.keys(pageOf).find(k => rule.startsWith(k));
-    if (r) return { title: r[0] + (name ? ` (${name})` : ""), cause: lower(r[0]), fix: r[1], equipment: null, proc: null, page: key ? pageOf[key] : null };
-    return { title: plain(o.message || rule), cause: plain(o.message || rule), fix: "See the details below.", equipment: null, proc: null, page: null };
+    const simFault = SIM_FAULT_RULES.has(rule);
+    if (r) return { title: r[0] + (name ? ` (${name})` : ""), cause: lower(r[0]), fix: r[1], equipment: null, proc: null, page: key ? pageOf[key] : null, simFault };
+    return { title: plain(o.message || rule), cause: plain(o.message || rule), fix: "See the details below.", equipment: null, proc: null, page: null, simFault };
   }
   const SEVERITY = { CRITICAL: "Serious", WARNING: "Warning", INFO: "Information" };
 
   // ------------------------------------------------------------------ messages from the controllers
   const n0 = x => Number(x).toLocaleString("en-GB", { maximumFractionDigits: 1 });
+  /** A reading with exactly `d` decimals and thousands separators (pH 6.19, 0.35 bar, 12,345.0 L). */
+  const fixed = (x, d) => Number(x).toLocaleString("en-GB", { minimumFractionDigits: d, maximumFractionDigits: d });
   const PHRASES = [
     [/^batch latches when the main level falls to ([\d.]+) L \(now ([\d.]+) L\)$/, (m, a, b) => `Refill starts when the main tank falls to ${n0(a)} L (now ${n0(b)} L).`],
     [/^batch latches if the level stays at or below ([\d.]+) L for (.*)$/, (m, a, b) => `Refill starts if the main tank stays at or below ${n0(a)} L for ${b}`],
@@ -209,8 +217,38 @@
     [/^no active recipe$/, () => "No settings (recipe) in use: use one on the Recipes page."],
     [/^mixing\/settling: (.*)$/, (m, a) => `Waiting for the water to mix: ${a}`],
     [/^24 h acid limit reached \(([\d.]+) of ([\d.]+) L\)$/, (m, a, b) => `The most acid allowed in 24 hours is reached (${a} of ${b} L).`],
-    [/^pH unavailable/, () => "No usable acidity (pH) reading."],
+    [/^pH unavailable.*$/, () => "No usable acidity (pH) reading."],
+    [/^main tank full \(([\d.]+) L\): return held until it is below ([\d.]+) L.*$/,
+      (m, a, b) => `The main tank is full (${n0(a)} L): the return pump waits until it is below ${n0(b)} L.`],
   ];
+  // a refused command, in plain words (the controller's own text stays in the audit and the API)
+  const REFUSALS = [
+    [/^AUTO only from STOPPED \(current (\w+)\).*$/, (m, a) => `Automatic mode starts only when the process is stopped (now: ${state(a)}). Press Stop first.`],
+    [/^MANUAL only from STOPPED \(current (\w+)[^)]*\).*$/, (m, a) => `Manual mode starts only when the process is stopped (now: ${state(a)}). Press Stop first.`],
+    [/^in FAULT_LOCKOUT.*$/, () => "Stopped because of a problem: mark the problem as seen and clear the stop first."],
+    [/^stop sequence still running$/, () => "The equipment is still stopping. Try again in a moment."],
+    [/^duration must be 1\.\.([\d.]+) s.*$/, (m, a) => `The run time must be between 1 and ${n0(a)} seconds.`],
+    [/^duration_s is required.*$/, () => "Enter a run time in seconds."],
+    [/^volume_L is required.*$/, () => "Enter an amount in litres."],
+    [/^volume must be 0\.\.([\d.]+) L.*$/, (m, a) => `The amount must be between 0 and ${n0(a)} L (the room left below the refill stop level).`],
+    [/^a manual operation is already running; stop it first$/, () => "Something is already running in manual mode: stop it first."],
+    [/^bounded manual operations need MANUAL \(current (\w+)\)$/, (m, a) => `Switch to Manual mode first (now: ${state(a)}).`],
+    [/^no active recipe.*$/, () => "No settings (recipe) in use: use one on the Recipes page."],
+    [/^(virtual )?outputs still (commanded )?ON.*$/, () => "Some equipment is still switched on: stop it before starting automatic mode."],
+    [/^a manual (\w+) transfer is limited to ([\d.]+) L.*$/, (m, a, b) => `A manual transfer from ${a === "WATER" ? "the water supply" : "fertiliser tank " + a} is limited to ${n0(b)} L by the recipe.`],
+    [/^stock (\w+) not ready: (.*)$/, (m, a, b) => `${TANK[a] || "Tank " + a} is not confirmed as prepared: ${lower(plain(b))}`],
+    [/^a manual acid dose is limited to the recipe dose step ([\d.]+) L$/, (m, a) => `A manual acid dose is limited to ${a} L (the recipe's dose step).`],
+    [/^24 h acid limit ([\d.]+) L would be exceeded \(([\d.]+) L dosed\)$/, (m, a, b) => `That would pass the most acid allowed in 24 hours (${a} L; ${b} L added so far).`],
+    [/^main high-high switch active$/, () => "The main tank very high level switch is active."],
+    [/^drive fault input still active.*$/, () => "The pump drive still reports a fault: reset it at the drive."],
+    [/^safety chain still open$/, () => "The safety circuit is still open."],
+    [/^pH unavailable$/, () => "No usable acidity (pH) reading."],
+  ];
+  function refusal(text) {
+    const t = String(text == null ? "" : text).trim();
+    for (const [re, fn] of REFUSALS) if (re.test(t)) return t.replace(re, fn);
+    return plain(t);
+  }
   /** A controller's message in plain words: known sentences rephrased, signal ids and sectors named. */
   function plain(text) {
     let t = String(text == null ? "" : text).trim();
@@ -222,5 +260,5 @@
   }
 
   window.AqWords = { TANK, PROC, proc, state, phase, equip, signal, signalGroup, GROUP_ORDER, quality, QUALITY_HELP, HELP,
-                     problem, SEVERITY, plain, sectorName, n0, cap };
+                     problem, SEVERITY, plain, refusal, sectorName, n0, fixed, cap };
 })();

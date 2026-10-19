@@ -299,6 +299,24 @@ Delivery issues found while rehearsing, with the cases an owner would repeat aft
 `operator/owner-tour/issues.md`. Claude's answers to the owner's review questions, for the owner to
 judge: `operator/owner-tour/review-notes.md`.
 
+## Owner first-time-operator review of 0.3.2 (19 October 2026, F-01 to F-09)
+
+The owner's verdict was CHANGES REQUESTED. The rows below say what 0.3.3 changes and which automated
+check covers it. They are software checks and Claude's rehearsal, not owner results: the owner decides
+whether each finding is fixed, and every owner case stays **NOT RUN** until the owner runs it again.
+
+| Finding | 0.3.3 | Automated evidence |
+|---|---|---|
+| F-01 one tested Windows route, no Python to install | `runtime/` with CPython 3.14.8 (pinned NuGet SHA-256), AquaCrop installed at build time | CI job `release-windows`: cold start with every Python off PATH and `py` hidden, from a folder with a space, brackets and an accent; restart; upgrade over 0.3.1 and 0.3.2. `test_release_info.py` (launcher paths) |
+| F-02 status, what runs, next step and Stop first; diagram folded; motor details under Technical details | process card first on every process page | `ui_check` "F-02 process page *", "F-02 motor registers and selectors under Technical details", "UI-05 viewport *" (Stop position per page and width) |
+| F-03 plain words, a plain status line, the Digital Twin explained, ids under Details | owner's 14 Oct display names (`web/words.js`) | `ui_check` "F-03 plain status line", "F-03 every action named in plain words", "F-03 Getting started"; tour rehearsal START and UAT-01 |
+| F-04 recipe editor in four steps, only the chosen way's fields, problems beside the field | labels, units, ranges and examples per field; Advanced settings | `ui_check` "F-04 every recipe field has a name", "F-04 only the chosen way's fields are shown", "F-04 a problem shows beside its field and the typed value stays", "UI-03 recipe edited and activated"; tour UAT-05, UAT-06 |
+| F-05 problems with a headline, equipment, one next step, a link to the process; separate actions; never starts equipment | recovery steps on the Alarms page and the process card; the reason a step is unavailable (`reset_blocker`, `fault_present`, read-only) | `ui_check` "F-05 the problem in plain words with its next steps", "F-05 from the problem to its process and back to work", "UI-03 reset needs acknowledgement"; `test_installation_pc.py::test_pc12_the_page_says_why_a_reset_is_not_available_yet_and_it_matches_reset` |
+| F-06 first administrator: rules and example first, retry keeping the input, the real folders reported | launcher prompt | `test_first_admin.py` (accented name, short password, different repeats, cancel, `--password-stdin` reasons, trial folder and log named on failure); tour rehearsal "first start in a terminal" |
+| F-07 History with grouped human names, Today / Yesterday / Last 7 days, Download readings | History page | `ui_check` "F-07 History: grouped readings with plain names", "UI-03 export", "OP-03 Today and a year range on the History page" |
+| F-08 tank preparation in plain words; the synthetic preparation on the Digital Twin page | Nutrients & acid, Digital Twin | `ui_check` "F-08 tank preparation in plain words"; tour UAT-07 |
+| F-09 narrow screens: menu, stacked cards, Stop near the top, the diagram as its own view | layout | `ui_check` "UI-05 viewport phone 390px / tablet 820px / pc 1366px" (no sideways page scroll, Stop position), "F-09 keyboard only: water one sector once and stop it"; tour UAT-16a |
+
 ## Milestone 5: hardware arrival
 
 | ID | Status | Evidence |

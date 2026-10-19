@@ -24,8 +24,10 @@ the official build of python.org (published by the Python Software Foundation), 
 installed in it. You do **not** install Python, and it does not matter whether the PC has a Python or
 not: the launcher uses only its own. Nothing is downloaded.
 
-Pictures of every step below are at the start of the illustrated guide, `owner-tour/index.html`,
-section *Starting AquaCrop*.
+The illustrated guide, `owner-tour/index.html`, starts with these steps (section *Starting
+AquaCrop*), with the text the launcher window prints on a first start and pictures of the browser
+screens. The Windows dialogs (Properties, Extract All, the security question) are described in words
+below, not photographed: this build was not rehearsed on a Windows desktop with a camera.
 
 ## 3. Start the demo
 
@@ -42,7 +44,7 @@ section *Starting AquaCrop*.
 4. **First start only**, in the same window: create the administrator account. There is no default
    password.
    - **Login name**: 2 to 32 characters, letters, digits and `. _ -`; no spaces or accents. Example:
-     `jose`. Press Enter to accept the name shown in brackets. If a name cannot be used, the window
+     `jose`. The window suggests a name in brackets, e.g. `[admin]`; press Enter to accept it. If a name cannot be used, the window
      says why and suggests one (for `José` it suggests `jose`).
    - **Password**: at least 12 characters, and it must not contain the login name. Three or more
      unrelated words joined by dashes make a good password. **Nothing appears while you type it**;
@@ -51,8 +53,11 @@ section *Starting AquaCrop*.
    banner says `SIMULATION — DEMO MODEL`.
 6. In the browser, open **Getting started** (first item of the menu): four short tasks. Then follow
    the tour: `owner-tour/index.html` (illustrated, offline) or `docs/operator/walkthrough.md`. Record
-   results with `owner-tour/results.html` (it saves a file you send back) or in `owner-checklist.csv`;
-   report findings with `owner-feedback-template.md`.
+   results in `owner-tour/results.html`. That page keeps nothing by itself: press **Download
+   results** and send the downloaded file. A first-time operator who tries the four Getting started
+   tasks records them in the separate part at the bottom of the same page, so their results stay apart
+   from yours. `owner-checklist.csv` is the same list for a spreadsheet; report findings with
+   `owner-feedback-template.md`.
 
 AquaCrop is served on this PC only (127.0.0.1). It never opens a serial port in this mode.
 
@@ -84,7 +89,7 @@ address bar to open the folder. Never delete the `demo` folder: it is your data.
 - Stop: press **Ctrl+C** in the launcher window, or close the window. It prints "AquaCrop stopped
   cleanly".
 - Start again: double-click `AquaCrop-Demo.cmd`. It does not ask for the administrator again. Every
-  process starts STOPPED; nothing restarts by itself.
+  process starts stopped; nothing restarts by itself.
 
 ## 7. Upgrading from an earlier demo (0.3.1 or 0.3.2)
 

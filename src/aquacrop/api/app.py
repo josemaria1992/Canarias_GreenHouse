@@ -1037,7 +1037,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 w.writerow([f"# COMPLETE: {len(rows)} rows"])
             yield buf.getvalue()
 
-        headers = {"Content-Disposition": "attachment; filename=aquacrop-samples.csv",
+        headers = {"Content-Disposition": "attachment; filename=aquacrop-readings.csv",
                    "X-Truncated": "true" if more else "false"}
         if more:
             headers["X-Next-After-Id"] = str(rows[-1]["id"])

@@ -1,4 +1,12 @@
-# Handover: AquaCrop platform 0.3.2, the owner demo release (2026-10-13)
+# Handover: AquaCrop platform 0.3.3, the owner demo release (2026-10-19)
+
+**0.3.3, corrections for a first-time operator (2026-10-19):** the owner reviewed 0.3.2 as a first-time
+operator (F-01 to F-09, CHANGES REQUESTED). The Windows ZIP now carries its own Python (`runtime/`,
+CPython 3.14.8), the first administrator is guided, the pages use the owner's plain names (process card
+and Stop first, problems with their next step and a link to the process, History, fertiliser tank
+preparation, narrow screens, Getting started), and the tour has a result form that saves only by
+download. What changed per finding: `operator/owner-tour/issues.md`. Display, guidance and Windows start
+only; internal ids, roles, algorithms and limits unchanged. Owner results NOT RUN.
 
 **0.3.2, owner demo and acceptance tour (2026-10-13):** the release ZIP is what the owner runs on a
 Windows PC (`README-FIRST.md` inside it). The normal demo is `installation-80` (six modules, 80
@@ -98,7 +106,7 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
-The figures in this section are those of 0.3.0; the results of 0.3.2 (tests, `demo verify`, the
+The figures in this section are those of 0.3.0; the results of 0.3.3 (tests, `demo verify`, the
 browser check, the installed wheel, the release check, the Windows cold start, restart and upgrade
 over 0.3.1, and the CM4 staging) are in the verification report delivered with the ZIP.
 
@@ -116,8 +124,9 @@ item: `ACCEPTANCE.md`.
 
 ## Launch (desktop)
 
-From the release ZIP on Windows: install 64-bit Python 3.12 with the py launcher, then double-click
-`AquaCrop-Demo.cmd` (`README-FIRST.md`, `installation/desktop.md`). It serves `installation-80`. From a
+From the release ZIP on Windows: double-click `AquaCrop-Demo.cmd`; the ZIP carries its own Python
+(`runtime/`, CPython 3.14.8 for 64-bit Windows), so nothing is installed first (`README-FIRST.md`,
+`installation/desktop.md`). It serves `installation-80`. From a
 source checkout:
 
 ```text

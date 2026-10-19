@@ -116,7 +116,7 @@ def test_prerequisite_failures_are_reported_and_start_nothing(tmp_path, monkeypa
     blocked = tmp_path / "a file"
     blocked.write_text("x")
     _, failed = launcher.prerequisites("installation-48", blocked / "state", _free_port())
-    assert any("state folder" in f for f in failed)
+    assert any("data folder" in f for f in failed)
     # the command itself exits 2 and writes nothing when a check fails
     from aquacrop.cli import main
     with socket.socket() as busy:

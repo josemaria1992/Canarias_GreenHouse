@@ -107,7 +107,7 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
         ok = True
     except OSError as e:
         ok, why = False, str(e)
-    chk(ok, f"state folder writable: {state_dir}", "" if ok else f"{why}; choose another folder with --state-dir")
+    chk(ok, f"data folder writable: {state_dir}", "" if ok else f"{why}; choose another folder with --state-dir")
     if ok:
         free = shutil.disk_usage(state_dir).free
         chk(free >= MIN_FREE_BYTES, f"free disk space {free / 2**30:.1f} GiB",
@@ -280,7 +280,7 @@ def _launch(args, state_dir: Path) -> int:
         logging.getLogger(name).addHandler(handler)
     log = logging.getLogger("aquacrop.launch")
     log.setLevel(logging.INFO)
-    print(f"  state folder: {state_dir}\n  log file:     {log_path}")
+    print(f"  data folder: {state_dir}\n  log file:    {log_path}")
     if not first_admin(cfg, state_dir, username=args.username, password_stdin=args.password_stdin):
         log.warning("first administrator not created; nothing started")
         return 3
@@ -317,7 +317,7 @@ def _launch(args, state_dir: Path) -> int:
         for lk in locks:
             lk.release()
     log.info("stopped cleanly")
-    print("AquaCrop stopped cleanly; the history and accounts are kept in the state folder.")
+    print("AquaCrop stopped cleanly; the history and accounts are kept in the data folder.")
     return 0
 
 

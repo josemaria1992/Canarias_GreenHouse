@@ -6,6 +6,10 @@ throwaway state folder and a random first administrator, runs tour_rehearsal.cjs
 restarts the launcher, runs phase "after" (persistence), then stops the server while the page is open for the
 loss-of-connection case. Screenshots, the exported CSV and rehearsal.json go to --out.
 
+On Linux and macOS the first start is answered in a terminal (a pseudo-terminal, as a person would type): a
+login name with an accent, a refused password and the accepted one. Its console text, with the throwaway
+folder shown as <data folder>, is saved as first-start.txt for the guide's "Starting AquaCrop" section.
+
 This is Claude's rehearsal, not the owner's acceptance: every owner result stays NOT RUN until the owner runs
 the tour. Nothing here touches hardware.
 
@@ -23,6 +27,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -40,6 +45,71 @@ def start(args, state: Path, port: int, log: Path, password: str | None) -> subp
                          start_new_session=True)
     p.stdin.write((password or "") + "\n")
     p.stdin.close()
+    return p
+
+
+def start_in_terminal(args, state: Path, port: int, log: Path, password: str, transcript: Path) -> subprocess.Popen:
+    """The first start answered at the launcher's own prompts in a pseudo-terminal: "José" is refused with a
+    suggestion, then "owner"; a too-short password is refused, then the real one is typed twice. The password is
+    never echoed, so the console text is safe to show."""
+    import fcntl
+    import pty
+    import termios
+    cmd = (["sh", str(args.launcher)] if args.launcher else [args.python, "-m", "aquacrop", "launch"])
+    cmd += ["--state-dir", str(state), "--port", str(port), "--no-browser", "--username", "owner"]
+    master, slave = pty.openpty()
+
+    def own_terminal():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, preexec_fn=own_terminal, close_fds=True)
+    os.close(slave)
+    seen = bytearray()
+    answers = [(b"Login name [", "Jos\u00e9"), (b"Login name [", "owner"), (b"Password: ", "short"),
+               (b"Password: ", password), (b"Repeat the password: ", password)]
+    lock = threading.Lock()
+
+    def pump():
+        with log.open("ab") as f:
+            while True:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    return
+                if not chunk:
+                    return
+                f.write(chunk)
+                f.flush()
+                with lock:
+                    seen.extend(chunk)
+    threading.Thread(target=pump, daemon=True).start()
+    pos = 0
+    for prompt, answer in answers:
+        end = time.monotonic() + 120
+        while True:
+            with lock:
+                i = seen.find(prompt, pos)
+            if i >= 0:
+                pos = i + len(prompt)
+                break
+            if time.monotonic() > end or p.poll() is not None:
+                raise SystemExit(f"the launcher did not ask {prompt!r}; see {log}")
+            time.sleep(0.1)
+        time.sleep(0.2)
+        os.write(master, (answer + "\n").encode("utf-8"))
+    end = time.monotonic() + 60
+    while time.monotonic() < end:
+        with lock:
+            if b"AquaCrop is running" in seen:
+                break
+        time.sleep(0.2)
+    with lock:
+        text = seen.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    shown = text.split("AquaCrop is running")[0] + "AquaCrop is running" + text.split("AquaCrop is running", 1)[1].split("\n", 2)[0] \
+        if "AquaCrop is running" in text else text
+    for folder in {str(state), str(state.resolve())}:
+        shown = shown.replace(folder, "<data folder>")
+    transcript.write_text(shown.rstrip() + "\n", encoding="utf-8")
     return p
 
 
@@ -63,7 +133,7 @@ def main() -> int:
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    for old in (*out.glob("*.png"), *out.glob("*.jpg"), *out.glob("rehearsal*.json"), out / "launcher.log"):
+    for old in (*out.glob("*.png"), *out.glob("*.jpg"), *out.glob("rehearsal*.json"), out / "launcher.log", out / "first-start.txt"):
         old.unlink(missing_ok=True)
     state = Path(tempfile.mkdtemp(prefix="aquacrop-tour-"))
     password = secrets.token_urlsafe(18)          # throwaway first administrator in a throwaway state folder
@@ -80,7 +150,10 @@ def main() -> int:
     try:
         for phase in ("main", "after"):
             flag.unlink(missing_ok=True)
-            proc = start(args, state, port, log, password if phase == "main" else None)
+            if phase == "main" and os.name == "posix":
+                proc = start_in_terminal(args, state, port, log, password, out / "first-start.txt")
+            else:
+                proc = start(args, state, port, log, password if phase == "main" else None)
             try:
                 wait_healthy(base, proc, timeout=300)
                 node = subprocess.Popen([args.node, str(HERE / "tour_rehearsal.cjs"), phase], env=env)
@@ -96,6 +169,14 @@ def main() -> int:
                 {"id": f"phase {phase}", "ok": False, "detail": "no results written"}]
         results.append({"id": "launcher stops cleanly on Ctrl+C", "ok": all(c == 0 for c in codes),
                         "detail": f"exit codes {codes}"})
+        fs = out / "first-start.txt"
+        if fs.exists():
+            t = fs.read_text(encoding="utf-8")
+            want = ['"José" cannot be used', 'Try "jose"', "That password cannot be used: password must be at least 12",
+                    "Administrator 'owner' created", "AquaCrop is running"]
+            results.append({"id": "first start in a terminal: accented name and short password explained, asked again",
+                            "ok": all(w in t for w in want) and password not in t,
+                            "detail": "; ".join(w for w in want if w not in t) or "all prompts answered; password never shown"})
     finally:
         shutil.rmtree(state, ignore_errors=True)
         flag.unlink(missing_ok=True)

@@ -128,6 +128,14 @@ def main() -> int:
               and "http://" not in g.replace("http://127.0.0.1", "") and "<script" not in g, f"{len(imgs)} images")
         check("guide's rehearsal record is Claude's, owner results NOT RUN", reh.get("owner_results") == "NOT RUN" and reh.get("failed") == 0,
               f"{reh.get('passed')} passed, {reh.get('failed')} failed")
+        form = rel / "owner-tour" / "results.html"
+        f = form.read_text(encoding="utf-8") if form.is_file() else ""
+        check("result form: 16 owner cases preset NOT RUN, first-time operator tasks apart, saved only by download",
+              f.count('value="NOT RUN" checked') == 16 and f.count('value="Not tried" checked') == 4 and 'id="download"' in f
+              and "This page keeps nothing" in f and "http://" not in f and "https://" not in f and "Your result: ☐" not in g
+              and g.count('href="results.html#UAT-') == 16, f"{f.count('value=' + chr(34) + 'NOT RUN' + chr(34) + ' checked')} owner cases")
+        check("guide starts with the start steps and a recorded first start", 'id="starting-aquacrop"' in g and 'class="console"' in g
+              and ("Administrator &#x27;owner&#x27; created" in g or "Administrator 'owner' created" in g))
     probe = json.loads(subprocess.run([a.python, "-I", "-c", PROBE], check=True, capture_output=True, text=True, cwd=rel.parent).stdout)
     check("installed package is the release version", probe["version"] == info["version"], probe["version"])
     diff = [n for n, hx in probe["configs"].items() if not (rel / "configs" / n).is_file() or (rel / "configs" / n).read_bytes().hex() != hx]

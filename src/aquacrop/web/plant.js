@@ -35,8 +35,9 @@
     if (!r.bound) return r.txt;
     if (r.adapter) return r.txt;
     if (r.v == null) return r.txt;
+    if (r.q === "INVALID" || r.q === "UNAVAILABLE") return "—";      // a number outside the allowed range is not shown as a value
     if (typeof r.v === "boolean") return words ? (r.v ? words[0] : words[1]) : (r.v ? "on" : "off");
-    return W.n0(Number(r.v).toFixed(d == null ? 1 : d)) + (r.unit ? " " + r.unit : "");
+    return W.fixed(r.v, d == null ? 1 : d) + (r.unit ? " " + r.unit : "");
   }
   /** One reading: value with unit and its age; the quality in plain words when it is not valid (always with
    * `loud`, for the main readings of a page); the channel it comes from on hover. */
@@ -45,7 +46,8 @@
     if (!r.bound) return h("span", { class: "muted", title: r.why || "" }, r.txt);
     if (r.adapter) return h("span", null, h("strong", null, fmtVal(r, d, words)), " ", h("span", { class: "muted" }, "(over the drive's data link)"));
     const good = r.q === "GOOD";
-    return h("span", { class: "reading", title: `${W.signal(name)} · channel ${r.point}${r.label ? " — " + r.label : ""}${good ? " · " + W.quality("GOOD") : ""}` },
+    const got = r.q === "INVALID" && r.v != null && typeof r.v !== "boolean" ? ` · value received: ${W.fixed(r.v, d == null ? 1 : d)}${r.unit ? " " + r.unit : ""}` : "";
+    return h("span", { class: "reading", title: `${W.signal(name)} · channel ${r.point}${r.label ? " — " + r.label : ""}${good ? " · " + W.quality("GOOD") : ""}${got}` },
       h("strong", null, fmtVal(r, d, words)), " ",
       good && !loud ? null : [qBadge(r.q || "UNAVAILABLE", r.age), " "], r.origin && r.origin !== "SIMULATED" ? [oBadge(r.origin), " "] : null,
       r.age != null && r.q !== "STALE" ? h("span", { class: "muted small" }, U.ago(r.age)) : null,
@@ -254,7 +256,10 @@
   function blockerText(b) {
     if (!b) return "";
     if (b === "acknowledge the fault alarm before reset") return "mark the problem as seen first (step 1)";
-    if (b.startsWith("fault condition still present: ")) return "the problem is still there: " + W.plain(b.slice(31)).replace(/^./, c => c.toLowerCase());
+    if (b.startsWith("fault condition still present: ")) {
+      const raw = b.slice(31), known = W.refusal(raw);
+      return (known !== W.plain(raw) ? "" : "the problem is still there: ") + known.replace(/^./, c => c.toLowerCase());
+    }
     if (b === "stop sequence still running") return "the equipment is still stopping";
     if (b.startsWith("outputs still commanded ON") || b.startsWith("equipment still reports activity")) return "some equipment still reports that it is running";
     return W.plain(b).replace(/^./, c => c.toLowerCase());
@@ -269,13 +274,13 @@
     steps.push(h("li", null, seen ? [h("span", { class: "done" }, "✓ Marked as seen"), h("span", { class: "muted" }, ` by ${o.ack_user || "?"}`)]
       : [pbtn("Mark as seen", () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "marked as seen"), "", "alarm_ack"),
         h("span", { class: "muted" }, " This only records that you have seen it; it changes nothing on the equipment.")]));
-    const gone = pv ? !(pv.reset_blocker || "").startsWith("fault condition still present") : !o.active;
+    const gone = pv ? !pv.fault_present : !o.active;
     steps.push(h("li", null, h("strong", null, "Fix the problem: "), pb.fix,
-      sim ? h("span", { class: "muted" }, " In the Digital Twin, a simulated fault is removed on the ", h("a", { href: "#twin" }, "Digital Twin"), " page.") : null,
+      sim && pb.simFault ? h("span", { class: "muted" }, " In the Digital Twin, a simulated fault is removed on the ", h("a", { href: "#twin" }, "Digital Twin"), " page.") : null,
       gone ? h("span", { class: "muted" }, " The program no longer sees the problem; check the equipment yourself before starting again.")
         : h("span", { class: "warn-t" }, " The program still sees the problem.")));
     if (pv && pv.state === "FAULT_LOCKOUT") {
-      const why = pv.reset_blocker;
+      const why = pv.fault_present ? "fault condition still present: " + pv.fault_present : pv.reset_blocker;   // the cause first, then the rest
       steps.push(h("li", null, pbtn("Clear stop after fixing the problem", () => act("POST", `/api/processes/${pid}/reset`, undefined,
         `${w.name}: stop cleared; it stays stopped until you start it`), "ghost", "lockout_reset", why ? "Not yet: " + blockerText(why) : null),
         why ? h("span", { class: "muted" }, ` Not available yet: ${blockerText(why)}.`) : h("span", { class: "muted" }, " Ready. Clearing the stop does not start anything.")));
@@ -477,9 +482,12 @@
   /** On a hardware profile the controls are replaced by the reason they are not offered. */
   function noControl(P, what) {
     return h("div", { class: "card" }, h("h2", null, what || "Process control"),
-      h("p", null, pill("NOT AVAILABLE", "warn"), ` This is a ${S.status.profile} profile: this release has no process controller on real equipment (ADR-0009), `,
-        "so starting, stopping, Run once, tank confirmations and recipes are not offered here."),
-      h("p", { class: "muted" }, "Physical control needs an approved physical mapping, verified calibration, a commissioned profile and the owner's authorization. " + P.mapping + "."));
+      h("p", null, pill("Read only", "warn"), " Real equipment, read only: this release does not control real equipment, ",
+        "so starting, stopping, Run once, tank confirmations and recipes are not offered here. The readings below are only shown."),
+      h("p", { class: "muted" }, "No wiring has been approved yet, so no reading is connected (\u201cnot measured\u201d). Controlling the real ",
+        "equipment needs approved wiring, checked sensors, a commissioned controller and the owner's written permission."),
+      h("details", { class: "inline" }, h("summary", null, "Details"),
+        h("p", { class: "muted small" }, `Profile ${S.status.profile} (ADR-0009: no process controller on real equipment). ${P.mapping}.`)));
   }
   async function load() {
     const P = await api("GET", "/api/plant");

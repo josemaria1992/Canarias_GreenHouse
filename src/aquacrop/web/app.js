@@ -75,8 +75,8 @@
     }
     return el;
   }
-  function toast(msg, bad) {
-    const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
+  function toast(msg, bad, raw) {
+    const t = $("toast"); t.textContent = msg; t.title = raw && raw !== msg ? raw : ""; t.classList.remove("hidden");
     t.style.background = bad ? "var(--bad)" : "";
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), 5000);
   }
@@ -136,7 +136,7 @@
       document.querySelectorAll("section [data-dirty]").forEach(f => { delete f.dataset.dirty; });   // done: the form starts afresh
       refresh(); return r;
     }
-    catch (e) { toast(String(e.message || e), true); return null; }
+    catch (e) { const raw = String(e.message || e); toast(W.refusal(raw), true, raw); return null; }
   }
   function rid() { return "ui_" + crypto.getRandomValues(new Uint32Array(4)).join("").slice(0, 24); }
   function cmd(target, desired) {

@@ -1,8 +1,9 @@
 # Owner demo release: delivery issues
 
 Issues found by Claude while preparing and rehearsing the owner tour of 0.3.2 (`../walkthrough.md`), all
-fixed in 0.3.2 before the owner's first run. Each keeps its ID if it comes back. Owner findings get
-their own IDs (F-01, F-02, …) in `feedback-template.md`; none exist yet, because no owner case has run.
+fixed in 0.3.2 before the owner's first run. Each keeps its ID if it comes back. Owner findings have
+their own IDs (F-01, F-02, …); the first nine, from the owner's first-time-operator review of 0.3.2, are
+listed at the end with what 0.3.3 changed for each.
 
 "Repeat" names the owner cases to run again after a fix. All owner results are NOT RUN, so nothing needs
 repeating yet; the column says what a later fix to the same area would affect.
@@ -30,3 +31,24 @@ repeating yet; the column says what a later fix to the same area would affect.
 
 Not changed, by design: no control algorithm, production mapping, recipe value, retention, cadence or
 storage budget was changed to make the demo look successful.
+
+## Owner findings: first-time-operator review of 0.3.2 (2026-10-19)
+
+The owner's verdict was CHANGES REQUESTED. 0.3.3 answers each finding as below; the owner decides whether
+it is fixed. The owner's acceptance results stay NOT RUN until the owner runs the cases again.
+
+| ID | Finding | What 0.3.3 changes | Repeat |
+|---|---|---|---|
+| F-01 (P1) | README-FIRST asked for a "latest Python 3.12 installer" that python.org no longer publishes; no single tested route | The Windows ZIP carries its own Python (`runtime/`, CPython 3.14.8 for 64-bit Windows from python.org's NuGet package, SHA-256 pinned): double-click `AquaCrop-Demo.cmd`, nothing to install or download. CI starts it with every Python hidden from PATH, in a folder with a space, brackets and an accent, and upgrades over 0.3.1 and 0.3.2. The Windows dialogs are described in words in README-FIRST, not photographed | UAT-01, UAT-15 |
+| F-02 | Stop off-screen on the Main pumps page; status buried under the diagram | Each process page opens with the process card: state, what runs, what happens next, the checks before starting and its Stop near the top. The diagram is folded by default; motor registers, contactors and selectors are under Technical details. The software Stop is not called an emergency stop | UAT-02, UAT-03, UAT-04 |
+| F-03 | Engineering vocabulary everywhere | The owner's display names from 14 Oct; a plain status line on every page; what the Digital Twin is; version, configuration, ids and phases under Details. Internal ids, audit and permissions unchanged | all |
+| F-04 | Recipe editor: unlabelled inputs, raw enums | Choose how to refill, set amounts or targets, check changes, use these settings. Only the chosen way's fields; timing and tolerances under Advanced settings; label, unit, range and example per field; a problem beside its field with the typed value kept; when changes take effect. Activation stays administrator-only, the rules and limits are unchanged | UAT-05, UAT-06 |
+| F-05 | Alarms hard to act on | Plain headline, equipment, one next step and a link to the process; Mark as seen, Clear stop after fixing the problem and Start are separate; an unavailable step says why; marking or clearing never starts equipment; code, target and audit under Details | UAT-10, UAT-11 |
+| F-06 | First administrator: `José` ended the launcher; rules not stated; wrong log path | Rules and an example before typing; a refused name or password is explained and asked again, keeping what was accepted (`José` suggests `jose`); a failed start names the data folder and log file in use. Account rules unchanged | UAT-01, UAT-14 |
+| F-07 | Trends hard to use | History: grouped checkboxes with human names (addresses as secondary labels), Today / Yesterday / Last 7 days, Download readings; units, timestamps, gaps and the complete-export check kept | UAT-13 |
+| F-08 | Stock preparation wording; a synthetic action among real ones | "Confirm tank A is prepared" / "Mark tank A not ready" with what each means; "needs preparing again before dosing" after a water fill; adding simulated fertiliser is on the Digital Twin page | UAT-06, UAT-07 |
+| F-09 | Narrow screens | Menu button, stacked cards, the current process and its Stop near the top, the whole diagram as its own view with "Scroll sideways to see the whole greenhouse"; no page-wide sideways scroll | UAT-16 |
+
+Also added: Getting started in the app (four pictured tasks for a first-time operator) and
+`owner-tour/results.html`, which saves results only when Download results is pressed and keeps a
+first-time operator's tasks apart from the owner's cases.

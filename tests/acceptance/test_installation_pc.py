@@ -206,7 +206,10 @@ def test_pc12_the_page_says_why_a_reset_is_not_available_yet_and_it_matches_rese
     rt.process_request("op", "IRRIGATION", CS.AUTO)
     rt.run_for(30)
     rt.set_actuator_fault("op", "drive", "MAIN", "TRIP")
-    rt.run_for(15)
+    rt.run_for(1)
+    v = irr.view()                                                  # the fault is reported while the stop runs
+    assert v["state"] == "FAULT_LOCKOUT" and "drive fault input still active" in (v["fault_present"] or "")
+    rt.run_for(14)
     assert irr.state == CS.FAULT_LOCKOUT
     why = irr.view()["reset_blocker"]
     assert why and "drive fault input still active" in why            # the cause is still there
@@ -214,6 +217,7 @@ def test_pc12_the_page_says_why_a_reset_is_not_available_yet_and_it_matches_rese
     assert not ok and why in msg
     rt.set_actuator_fault("op", "drive", "MAIN", None)
     rt.run_for(10)
+    assert irr.view()["fault_present"] is None
     assert irr.view()["reset_blocker"] == "acknowledge the fault alarm before reset"
     ok, msg = rt.process_reset("op", "IRRIGATION")
     assert not ok and msg == "acknowledge the fault alarm before reset"

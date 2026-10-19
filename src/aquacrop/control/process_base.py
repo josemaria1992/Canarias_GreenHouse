@@ -368,6 +368,14 @@ class Process:
             return "acknowledge the fault alarm before reset"
         return None
 
+    def fault_present(self) -> str | None:
+        """While locked out: the fault condition the reset checks, if it is still there (even while the stop
+        sequence runs), else None. Read-only, for the recovery steps on the page."""
+        if self.state != ControllerState.FAULT_LOCKOUT or self._ctx is None:
+            return None
+        ok, why = self.fault_cleared(self._ctx)
+        return None if ok else why
+
     def view(self) -> dict:
         return {"process": self.pid, "title": self.title, "state": self.state.value, "phase": self.phase,
                 "phase_since_s": self.phase_since, "fault_reason": self.fault_reason, "fault_detail": self.fault_detail,
@@ -376,7 +384,7 @@ class Process:
                 "next": self.next_step, "outputs_on": sorted(self.on), "stopping": self.stopping,
                 "resources": self.sup.arbiter.held_by(self.pid), "last_result": self.last_result,
                 "auto_capable": self.auto_capable, "counters": self.counters,
-                "reset_blocker": self.reset_blocker(),
+                "reset_blocker": self.reset_blocker(), "fault_present": self.fault_present(),
                 "history": [t.__dict__ for t in self.history[-25:]]}
 
 
