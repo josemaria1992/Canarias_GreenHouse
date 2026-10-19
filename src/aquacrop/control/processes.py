@@ -27,6 +27,8 @@ def _fmt(v: float | None, unit: str = "") -> str:
 class Irrigation(Process):
     pid = "IRRIGATION"
     title = "Irrigation"
+    checkable_faults = Process.checkable_faults | {"OBSERVATION_UNAVAILABLE", "SAFETY_CHAIN_OPEN", "DRIVE_FAULT",
+                                                   "MAIN_LOW_LOW"}
     ACTIVE = ("SELECT", "OPEN", "LEAD", "START", "VERIFY_FLOW", "IRRIGATE", "STOP_DRIVE", "STOP_SETTLE", "CLOSE",
               "DESELECT")
 
@@ -921,6 +923,7 @@ class Refill(_PathProcess):
 class Acid(_PathProcess):
     pid = "ACID"
     title = "Acid pH dosing"
+    checkable_faults = Process.checkable_faults | {"PH_UNDERSHOOT"}
 
     def __init__(self, sup):
         super().__init__(sup)
@@ -1173,6 +1176,7 @@ class Acid(_PathProcess):
 class Return(Process):
     pid = "RETURN"
     title = "Drainage return"
+    checkable_faults = Process.checkable_faults | {"SAFETY_CHAIN_OPEN", "SUMP_DRY_RUN"}
 
     def __init__(self, sup):
         super().__init__(sup)

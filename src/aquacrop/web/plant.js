@@ -274,11 +274,16 @@
     steps.push(h("li", null, seen ? [h("span", { class: "done" }, "✓ Marked as seen"), h("span", { class: "muted" }, ` by ${o.ack_user || "?"}`)]
       : [pbtn("Mark as seen", () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "marked as seen"), "", "alarm_ack"),
         h("span", { class: "muted" }, " This only records that you have seen it; it changes nothing on the equipment.")]));
-    const gone = pv ? !pv.fault_present : !o.active;
+    // R33-03: passing the reset checks shows the cause is gone only when those checks can see it while stopped
+    // (a drive fault input, the safety circuit); a valve that did not open or a missing flow shows only on the next try
+    const present = pv ? !!pv.fault_present : o.active;
+    const unseen = pv && pv.state === "FAULT_LOCKOUT" && pv.fault_checkable === false && !present;
     steps.push(h("li", null, h("strong", null, "Fix the problem: "), pb.fix,
       sim && pb.simFault ? h("span", { class: "muted" }, " In the Digital Twin, a simulated fault is removed on the ", h("a", { href: "#twin" }, "Digital Twin"), " page.") : null,
-      gone ? h("span", { class: "muted" }, " The program no longer sees the problem; check the equipment yourself before starting again.")
-        : h("span", { class: "warn-t" }, " The program still sees the problem.")));
+      present ? h("span", { class: "warn-t" }, " The program still sees the problem.")
+        : unseen ? h("span", { class: "muted", "data-check": "not-checkable" }, ` The program cannot check this while ${w.name.toLowerCase()} is stopped: `,
+          "it shows again only if it happens at the next start. Check ", pb.equipment ? pb.equipment.replace(/^./, c => c.toLowerCase()) : "the equipment", " yourself before clearing the stop.")
+        : h("span", { class: "muted" }, " The program no longer sees the problem; check the equipment yourself before starting again.")));
     if (pv && pv.state === "FAULT_LOCKOUT") {
       const why = pv.fault_present ? "fault condition still present: " + pv.fault_present : pv.reset_blocker;   // the cause first, then the rest
       steps.push(h("li", null, pbtn("Clear stop after fixing the problem", () => act("POST", `/api/processes/${pid}/reset`, undefined,
@@ -389,12 +394,17 @@
     return h("div", { class: "subcard" }, h("h3", null, "Run once"), h("p", { class: "muted" }, what + " The same safety checks apply as in automatic mode."), h("div", { class: "row" }, kids));
   }
   /** On a narrow screen the page's main process and its Stop stay at the top of the screen (F-09). */
-  function stopbar(PR, pid) {
-    if (!PR || !PR.processes[pid] || !can("process_control")) return null;
-    const pv = PR.processes[pid], w = W.proc(pid);
-    return h("div", { class: "stopbar", role: "region", "aria-label": `${w.name}: state and stop` },
-      h("span", null, h("strong", null, w.name), " ", statePill(pv.state)),
-      h("button", { class: "cmd danger stop", onclick: () => setState(pid, "STOPPED", `${w.name}: stop requested`) }, w.stop));
+  /** The pinned bar of narrow screens: each process of the page as it is shown (on Nutrients & acid, the chosen
+   * tank's processes), with its state and its own Stop, which sends the stop of that process. */
+  function stopbar(PR, pids) {
+    if (!PR || !can("process_control")) return null;
+    const rows = pids.filter(pid => PR.processes[pid]).map(pid => {
+      const pv = PR.processes[pid], w = W.proc(pid);
+      return h("div", { class: "stoprow", "data-proc": pid },
+        h("span", null, h("strong", null, w.name), " ", statePill(pv.state)),
+        h("button", { class: "cmd danger stop", "data-proc": pid, onclick: () => setState(pid, "STOPPED", `${w.name}: stop requested`) }, w.stop));
+    });
+    return rows.length ? h("div", { class: "stopbar", role: "region", "aria-label": "State and stop of " + pids.map(p => W.proc(p).name).join(", ") }, rows) : null;
   }
   function summary(r) {
     // a readable line (the full record is in the batch table and Alarms & events)
@@ -499,7 +509,7 @@
    * next step, the page's other problems, its own cards, the collapsed diagram and the last hour. */
   async function page(P, PR, def, top, cards, tech) {
     const [tc, draw] = trendCard(P, def.trend);
-    mount("v-plant", stopbar(PR, def.procs[0]), PR ? top : noControl(P), problemsCard(P, PR, def), cards,
+    mount("v-plant", stopbar(PR, def.stops || [def.procs[0]]), PR ? top : noControl(P), problemsCard(P, PR, def), cards,
       tech ? h("details", { class: "card tech" }, h("summary", null, h("strong", null, "Technical details")), tech) : null,
       pageDiagram(P, def), tc);
     await draw();
@@ -630,7 +640,9 @@
       ac.dose ? ["Dose", `${ac.dose.state}: ${num(ac.dose.delivered_L, 2)} of ${num(ac.dose.target_L, 2)} L`] : null]),
       (ac.batches || []).length ? [h("h3", null, "Acid batches"), table(["Batch"], ac.batches.slice().reverse().map(b => h("tr", null, h("td", { class: "mono" }, summary(b)))))] : null,
       h("p", { class: "muted" }, "Acid lowers pH only; no base dosing exists. Falling below the stop margin stops acid dosing with a problem.")] : null;
-    await page(P, PR, PAGE_DEF.nutrients, top, cards, tech);
+    // the pinned Stop follows the chosen tank: refill or acid dosing, and that tank's own water fill
+    const stops = [tab === "ACID" ? "ACID" : "REFILL", "STOCK_FILL_" + tab];
+    await page(P, PR, { ...PAGE_DEF.nutrients, stops }, top, cards, tech);
   }
   function refillBatchCard(PR) {
     const rf = PR.processes.REFILL, batch = rf.batch, paths = batch ? Object.values(rf.paths || {}) : [];
@@ -839,14 +851,14 @@
     const field = f => {
       shown.add(f.path);
       const cur = getp(E.body, f.path), id = fid(f.path), err = issueAt[f.path], help = id + "-help";
-      const range = f.options && f.options.length ? "" : `allowed ${f.min_exclusive ? "more than" : "from"} ${f.min ?? "—"}${f.max != null ? " to " + W.n0(f.max) : ""}${f.unit ? " " + f.unit : ""}`;
-      const input = h("input", { type: "number", step: "any", id, value: cur == null ? "" : String(cur), min: f.min, max: f.max, class: "w-num",
-        "aria-describedby": help, "aria-invalid": err ? "true" : null, placeholder: f.example || null });
+      const range = f.options && f.options.length ? "" : `${f.integer ? "a whole number, " : ""}allowed ${f.min_exclusive ? "more than" : "from"} ${f.min ?? "—"}${f.max != null ? " to " + W.n0(f.max) : ""}${f.unit ? " " + f.unit : ""}`;
+      const input = h("input", { type: "number", step: f.integer ? "1" : "any", inputmode: f.integer ? "numeric" : "decimal", id, value: cur == null ? "" : String(cur), min: f.min, max: f.max, class: "w-num",
+        "aria-describedby": help + (err ? " " + id + "-err" : ""), "aria-invalid": err ? "true" : null, placeholder: f.example || null });
       input.addEventListener("input", () => { setp(E.body, f.path, input.value === "" ? null : Number(input.value)); touched(); });
       return h("div", { class: "field" + (err ? " invalid" : ""), "data-path": f.path },
         h("label", { for: id }, f.label), h("div", { class: "row" }, input, h("span", null, f.unit || "")),
         h("div", { class: "muted small", id: help }, [range, f.example ? `example ${f.example}` : "", f.help].filter(Boolean).join(" · ")),
-        err ? h("div", { class: "error", role: "alert" }, err.join("; ")) : null);
+        err ? h("div", { class: "error", role: "alert", id: id + "-err" }, err.join("; ")) : null);
     };
     const choice = f => {
       shown.add(f.path);
@@ -896,14 +908,28 @@
           h("button", { class: "small ghost", onclick: () => { seq.push({ sector: R.sectors[0], duration_s: 300 }); touched(); U.refresh(); } }, "Add a sector step")] : null,
         adv.length ? h("details", { class: "advanced" }, h("summary", null, `Advanced settings: timing and tolerances (${adv.length})`), adv.filter(f => !(f.options && f.options.length)).map(field)) : null));
     };
-    const rid = h("input", { id: "rf-recipe-id", value: E.recipe_id, placeholder: "e.g. summer-2027", disabled: E.version != null || !!(E.recipe_id && E.from && E.from.startsWith(E.recipe_id + "@")) });
-    const nm = h("input", { id: "rf-recipe-name", value: E.name, placeholder: "e.g. Summer tomatoes" });
+    const head = p => issueAt[p] ? h("div", { class: "error", role: "alert", id: "rf-" + p + "-err" }, issueAt[p].join("; ")) : null;
+    const rid = h("input", { id: "rf-recipe-id", value: E.recipe_id, placeholder: "e.g. summer-2027", disabled: E.version != null || !!(E.recipe_id && E.from && E.from.startsWith(E.recipe_id + "@")),
+      "aria-invalid": issueAt.recipe_id ? "true" : null, "aria-describedby": issueAt.recipe_id ? "rf-recipe_id-err" : null });
+    const nm = h("input", { id: "rf-recipe-name", value: E.name, placeholder: "e.g. Summer tomatoes",
+      "aria-invalid": issueAt.name ? "true" : null, "aria-describedby": issueAt.name ? "rf-name-err" : null });
     rid.addEventListener("input", () => { E.recipe_id = rid.value; touched(); });
     nm.addEventListener("input", () => { E.name = nm.value; touched(); });
     /** Check settings = save the draft (types) and run the server's full check; the typed values stay either way. */
     const check = async () => {
-      const r = await act("POST", "/api/recipes/draft", { recipe_id: E.recipe_id, name: E.name || E.recipe_id, body: E.body, version: E.version }, null);
-      if (!r) return;
+      if (S.stale) { toast("Connection stale: nothing was sent", true); return; }
+      let r;
+      try { r = await api("POST", "/api/recipes/draft", { recipe_id: E.recipe_id, name: E.name || E.recipe_id, body: E.body, version: E.version }); }
+      catch (e) {
+        // R33-02: a value of the wrong kind (1.5 doses, a bad recipe id) is refused before the draft is saved; its
+        // problems go beside their fields like the check's own, and the typed values stay
+        if (e.status === 422 && e.detail && Array.isArray(e.detail.fields)) {
+          E.issues = e.detail.fields.map(x => ({ path: x.path, message: x.message })); E.checked = false; recipesKey = null;
+          toast(`${E.issues.length} problem(s) to fix; they are shown beside the fields`, true);
+          U.refresh(); return;
+        }
+        const raw = String(e.message || e); toast(W.refusal(raw), true, raw); return;
+      }
       E.version = r.version; E.recipe_id = r.recipe_id;
       const v = await act("POST", `/api/recipes/${r.recipe_id}/${r.version}/validate`, undefined, null);
       if (!v) return;
@@ -912,18 +938,22 @@
       U.refresh();
     };
     const changes = diffs(E.base, E.body, rules);
-    const hidden = Object.keys(issueAt).filter(p => rules[p] && !shown.has(p) && !MODES.includes(p));
+    // every problem is shown once: beside its field, in its section, in its watering step, or (a field that is not
+    // shown for the chosen ways) in the list under the editor
+    const inGroup = p => SECTIONS.some(([g]) => byGroup[g] && (p === g || (p.startsWith(g + ".") && !rules[p] && !p.startsWith("irrigation.sequence."))));
+    const hidden = Object.keys(issueAt).filter(p => !shown.has(p) && !MODES.includes(p) && p !== "recipe_id" && p !== "name" && !inGroup(p) && !/^irrigation\.sequence\.\d+\.(duration_s|sector)$/.test(p));
     const modeFields = MODES.map(p => rules[p]).filter(Boolean);
     const body = [
       h("h2", null, E.version != null ? `Changing the draft ${E.recipe_id} (version ${E.version})` : `New settings, starting from ${E.from}`),
-      h("div", { class: "row" }, h("label", { for: "rf-recipe-id" }, "Recipe id (a-z, 0-9, - or _)", rid), h("label", { for: "rf-recipe-name" }, "Name", nm)),
+      h("div", { class: "row" }, h("div", { class: "field" + (issueAt.recipe_id ? " invalid" : ""), "data-path": "recipe_id" }, h("label", { for: "rf-recipe-id" }, "Recipe id (a-z, 0-9, - or _)", rid), head("recipe_id")),
+        h("div", { class: "field" + (issueAt.name ? " invalid" : ""), "data-path": "name" }, h("label", { for: "rf-recipe-name" }, "Name", nm), head("name"))),
       h("h3", null, "1. Choose how to refill"), h("div", { class: "grid" }, modeFields.map(choice)),
       h("h3", null, "2. Set amounts and targets"),
       h("p", { class: "muted" }, "Only the settings the chosen ways use are shown. Every field gives its unit and allowed range. Nothing here is a production value until you set it."),
       SECTIONS.filter(([g]) => byGroup[g]).map(([g]) => sectionOf(g))];
     // the field rendering above registered what is shown; problems on fields not shown are listed here
     return h("div", { class: "card editor" }, body,
-      hidden.length ? h("div", { class: "error", role: "alert" }, "Also to fix: ", hidden.map(p => `${rules[p].label}: ${issueAt[p].join("; ")}`).join(" · ")) : null,
+      hidden.length ? h("div", { class: "error", role: "alert" }, "Also to fix: ", hidden.map(p => `${rules[p] ? rules[p].label : p}: ${issueAt[p].join("; ")}`).join(" · ")) : null,
       h("h3", null, "3. Check the changes"),
       changes.length ? h("div", null, h("p", null, `Changes compared with ${E.from}:`), h("ul", null, changes.map(c => h("li", null, c)))) : h("p", { class: "muted" }, `No changes compared with ${E.from} yet.`),
       h("p", { class: "muted" }, effect()),

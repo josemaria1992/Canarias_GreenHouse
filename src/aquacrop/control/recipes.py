@@ -426,12 +426,60 @@ def _nutrient_max(rf: Refill) -> float | None:
     return None
 
 
+def integer_paths(model: type[BaseModel] = None, prefix: str = "") -> set[str]:
+    """The body fields that take whole numbers only (a count, not a quantity), from the model itself."""
+    import typing
+    model = model or RecipeBody
+    out: set[str] = set()
+    for name, f in model.model_fields.items():
+        path = prefix + (f.alias or name)
+        args = [a for a in typing.get_args(f.annotation) if a is not type(None)] or [f.annotation]
+        if args == [int]:
+            out.add(path)
+        elif len(args) == 1 and isinstance(args[0], type) and issubclass(args[0], BaseModel):
+            out |= integer_paths(args[0], path + ".")
+    return out
+
+
 def form_schema(capacities: dict[str, float]) -> list[dict]:
+    ints = integer_paths()
     return [{"path": r.path, "label": r.label, "unit": r.unit, "min": r.lo if r.lo is not None else r.gt,
              "min_exclusive": r.gt is not None, "max": r.hi, "required": r.required, "help": r.help,
              "options": list(r.options), "option_labels": list(r.option_labels or r.options), "advanced": r.advanced,
-             "example": r.example}
+             "example": r.example, "integer": r.path in ints}
             for r in _rules(capacities)]
+
+
+_SHORT = {"int_from_float": "Enter a whole number, without decimals.", "int_parsing": "Enter a whole number.",
+          "int_type": "Enter a whole number.", "float_parsing": "Enter a number.", "float_type": "Enter a number.",
+          "finite_number": "Enter a number.", "missing": "Required.", "literal_error": "Choose one of the options.",
+          "extra_forbidden": "This setting is not known to this version.", "bool_parsing": "Choose yes or no.",
+          "string_type": "Enter text.", "string_too_short": "Required.", "dict_type": "Not in the expected form.",
+          "list_type": "Not in the expected form.", "model_type": "Not in the expected form."}
+
+
+def field_errors(errors: list[dict]) -> list[dict]:
+    """Pydantic errors as {path, message}: the recipe body's own field path (``acid.max_no_response``, or
+    ``recipe_id`` / ``name`` for the draft's header), with a short message the editor shows beside the field.
+    The request wrapper's ``body`` prefix is removed."""
+    out = []
+    for e in errors:
+        loc = [str(x) for x in e.get("loc", ())]
+        while loc and loc[0] == "body":
+            loc = loc[1:]
+        path, t, ctx = ".".join(loc), e.get("type", ""), e.get("ctx") or {}
+        if t == "string_pattern_mismatch" and path == "recipe_id":
+            msg = "Use 1 to 48 characters: lower-case letters a-z, digits 0-9, - or _, starting with a letter or digit."
+        elif t == "string_too_long":
+            msg = f"Use at most {ctx.get('max_length')} characters."
+        elif t in ("greater_than", "greater_than_equal", "less_than", "less_than_equal"):
+            word = {"greater_than": "more than", "greater_than_equal": "at least", "less_than": "less than",
+                    "less_than_equal": "at most"}[t]
+            msg = f"Must be {word} {next(iter(ctx.values()), '')}."
+        else:
+            msg = _SHORT.get(t, str(e.get("msg", "Not accepted.")))
+        out.append({"path": path, "message": msg, "type": t})
+    return out
 
 
 def physical_readiness(recipe: "Recipe | None", *, profile_simulated: bool) -> list[str]:

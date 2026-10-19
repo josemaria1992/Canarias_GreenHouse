@@ -102,7 +102,7 @@
     twin: "The Digital Twin is a computer model of the greenhouse. Everything shown and done in this program happens in the model; no real pump or valve moves.",
     bench: "The I/O test bench shows every input and output channel of the I/O modules. In the Digital Twin the channels are simulated; it is used to test wiring and signals.",
     ph: "Acidity (pH) says how acidic the water is. Lower is more acidic. Plants usually want about 6; acid lowers it.",
-    ec: "Nutrient strength (EC) says how much fertiliser is dissolved in the water, in mS/cm. Higher means stronger.",
+    ec: "Nutrient strength (EC) is the water's electrical conductivity, in mS/cm. Dissolved salts raise it, fertiliser among them, so it rises as fertiliser is added. It is not a direct measure of how much fertiliser is in the water: salts already in the water count too.",
     stop: "This stops the process in the program and switches its equipment off in a safe order. It is not an emergency stop: use the emergency stop on the equipment for that.",
   };
 

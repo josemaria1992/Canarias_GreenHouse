@@ -128,7 +128,11 @@
     if (r.status === 401) { showLogin(); throw new Error("not authenticated"); }
     const ct = r.headers.get("content-type") || "";
     const data = ct.includes("json") ? await r.json() : await r.text();
-    if (!r.ok) throw new Error((data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.status);
+    if (!r.ok) {
+      // a structured answer (the recipe draft's field problems) keeps its parts for the page that asked
+      const d = data && data.detail, e = new Error(d ? (typeof d === "string" ? d : d.message || JSON.stringify(d)) : r.status);
+      e.status = r.status; e.detail = d; throw e;
+    }
     return data;
   }
   async function act(method, path, body, okMsg) {

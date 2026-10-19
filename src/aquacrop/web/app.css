@@ -170,8 +170,9 @@ details.tech > summary, details.card > summary { padding: 2px 0; }
   .kv { grid-template-columns: minmax(0, 1fr); }
   .kv dd { margin-bottom: 6px; }
   .start-body { grid-template-columns: minmax(0, 1fr); }
-  .stopbar { display: flex; position: sticky; top: 30px; z-index: 15; justify-content: space-between; align-items: center; gap: 8px;
+  .stopbar { display: flex; flex-direction: column; position: sticky; top: 30px; z-index: 15; gap: 6px;
     background: var(--panel); border: 2px solid var(--bad); border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; }
+  .stoprow { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .scroll-hint { display: block; }
   table { display: block; overflow-x: auto; }
   .w-kind { min-width: 0; width: 100%; }

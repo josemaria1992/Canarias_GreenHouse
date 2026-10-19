@@ -96,6 +96,9 @@ class Process:
     pid = "PROCESS"
     title = "Process"
     auto_capable = True
+    # fault reasons whose own cause the reset checks observe while the process is stopped (fault_cleared and the
+    # feedback check); any other cause (a valve that did not open, no flow) shows itself only on the next attempt
+    checkable_faults: frozenset[str] = frozenset({"STOP_NOT_VERIFIED"})
 
     def __init__(self, sup: "Supervisor"):
         self.sup = sup
@@ -376,6 +379,14 @@ class Process:
         ok, why = self.fault_cleared(self._ctx)
         return None if ok else why
 
+    def fault_checkable(self) -> bool | None:
+        """While locked out: whether the reset's checks can see the fault's own cause while stopped (True), or
+        cannot (False: passing them does not show the cause is gone); None otherwise. Read-only, for the
+        recovery wording; it changes no check."""
+        if self.state != ControllerState.FAULT_LOCKOUT or self.fault_reason is None:
+            return None
+        return self.fault_reason in self.checkable_faults
+
     def view(self) -> dict:
         return {"process": self.pid, "title": self.title, "state": self.state.value, "phase": self.phase,
                 "phase_since_s": self.phase_since, "fault_reason": self.fault_reason, "fault_detail": self.fault_detail,
@@ -385,6 +396,7 @@ class Process:
                 "resources": self.sup.arbiter.held_by(self.pid), "last_result": self.last_result,
                 "auto_capable": self.auto_capable, "counters": self.counters,
                 "reset_blocker": self.reset_blocker(), "fault_present": self.fault_present(),
+                "fault_checkable": self.fault_checkable(),
                 "history": [t.__dict__ for t in self.history[-25:]]}
 
 
