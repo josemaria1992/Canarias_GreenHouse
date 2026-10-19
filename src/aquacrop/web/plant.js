@@ -60,22 +60,116 @@
   /** What the program asked for (command) next to what the equipment reports (feedback): never merged. */
   function reqObs(P, cmd, fb, words, askWords) {
     const c = sig(P, cmd), asked = c.bound && c.ok && !c.adapter ? h("strong", null, fmtVal(c, 0, askWords || ["on", "off"])) : obs(P, cmd, 0, askWords || ["on", "off"]);
-    return h("span", null, "asked: ", asked, fb ? [" · reports: ", obs(P, fb, 0, words)] : null);
+    const eq = Object.values(equipment(P)).find(x => x.cmd === cmd);       // the same state word as the diagram (O-02)
+    return h("span", null, eq ? [stPill(eqState(P, S.procs || null, eq)), " "] : null, "asked: ", asked, fb ? [" · reports: ", obs(P, fb, 0, words)] : null);
   }
   // a selector (contactor) only selects its pump; the drive runs it
   const names = ids => ids && ids.length ? ids.map(x => { const id = x.replace(/^(valve|pump|contactor|drive)\./, "").replace(/\.(cmd|run)$/, "");
     return x.startsWith("contactor.") ? `${W.cap(W.equip(id))} selected` : x.startsWith("drive.") ? "Pump drive running" : W.cap(W.equip(id)); }).join(", ") : "none";
   const STOP_STAGE = { DRIVE: "stopping the pump", SETTLE: "waiting for the pump to stop", VALVES: "closing the valve", DESELECT: "releasing the pump selection" };
 
+  // ---------------------------------------------------------------- equipment: one state vocabulary (O-02)
+  // Each pump and valve has what the program asked for (its command channel) and what the equipment reports:
+  // a feedback signal, or else the water flow measured on its route, or else the measured rise of the tank it
+  // fills. A command is never shown as movement: it is "Opening…" until the equipment reports it.
+  const ST = {
+    on: { cls: "st-on", valve: "Open", pump: "Running" },
+    off: { cls: "st-off", valve: "Closed", pump: "Stopped" },
+    up: { cls: "st-move", valve: "Opening…", pump: "Starting…" },
+    down: { cls: "st-move", valve: "Closing…", pump: "Stopping…" },
+    fault: { cls: "st-fault", valve: "Fault", pump: "Fault" },
+    unk: { cls: "st-unk", valve: "Not known", pump: "Not known" },
+  };
+  const FLOW_ON = 0.5;                       // L/min: the controllers' own "no flow" limit
+  const TANKS = ["MAIN", "A", "B", "ACID", "SUMP"];
+  const STOCK_OF = { A: "A", B: "B", ACID: "ACID" };
+  /** The equipment of the layout: names, signals, the process that runs it and the one operation it is part of. */
+  function equipment(P) {
+    const L = P.layout, E = {};
+    const add = e => { E[e.key] = e; };
+    ["A", "B", "ACID"].forEach(s => {
+      const T = W.TANK[s], tl = T.charAt(0).toLowerCase() + T.slice(1);
+      add({ key: "valve.FILL_" + s, kind: "valve", name: `Water inlet valve, ${tl}`, cmd: `valve.FILL_${s}.cmd`, proof: "level", level: s,
+        proc: "STOCK_FILL_" + s, page: "#nutrients", tab: s });
+      const proc = s === "ACID" ? "ACID" : "REFILL";
+      add({ key: "valve.OUT_" + s, kind: "valve", name: `Outlet valve, ${tl}`, cmd: `valve.OUT_${s}.cmd`, proof: "flow", flow: `flow.TP_${s}`, proc, page: "#nutrients", tab: s });
+      add({ key: "pump.TP_" + s, kind: "pump", name: `Transfer pump, ${tl}`, cmd: `pump.TP_${s}.cmd`, fb: `pump.TP_${s}.running`, flow: `flow.TP_${s}`, proc, page: "#nutrients", tab: s });
+    });
+    add({ key: "valve.FILL_MAIN", kind: "valve", name: "Water inlet valve, main tank", cmd: "valve.FILL_MAIN.cmd", proof: "flow", flow: "flow.FILL_MAIN", proc: "REFILL", page: "#main-tank", water: true });
+    L.main_pumps.forEach((mp, i) => add({ key: "pump." + mp, kind: "pump", name: `Main pump ${i + 1}`, cmd: `contactor.${mp}.cmd`, fb: `contactor.${mp}.closed`,
+      run: `drive.${L.shared_drive}.running`, proc: "IRRIGATION", page: "#main-pumps", pump: mp }));
+    L.sectors.forEach(s => add({ key: "valve." + s.sector_id, kind: "valve", name: `${W.sectorName(s.sector_id)} valve`, cmd: `valve.${s.sector_id}.cmd`,
+      fb: `valve.${s.sector_id}.open_limit`, flow: `flow.${s.sector_id}`, proc: "IRRIGATION", page: "#sector-" + s.sector_id, sector: s.sector_id }));
+    L.return_pumps.forEach(rp => add({ key: "pump." + rp, kind: "pump", name: W.cap(W.equip(rp)), cmd: `pump.${rp}.cmd`, fb: `pump.${rp}.running`, flow: "flow.RETURN",
+      proc: "RETURN", page: "#drainage", pump: rp }));
+    add({ key: "drive." + L.shared_drive, kind: "pump", name: "Pump drive (shared)", cmd: `drive.${L.shared_drive}.run`, fb: `drive.${L.shared_drive}.running`,
+      fault: `drive.${L.shared_drive}.fault`, proc: "IRRIGATION", page: "#main-pumps", drive: true });
+    return E;
+  }
+  // measured level history per tank, from the readings' own acquisition times (for "rising" and "falling")
+  const levels = {};
+  function noteLevels(P) {
+    TANKS.forEach(t => {
+      const r = sig(P, `tank.${t}.level`);
+      if (!r.ok || r.age == null) return;
+      const at = Date.now() - 1000 * r.age, h0 = levels[t] || (levels[t] = []);
+      if (!h0.length || at - h0[h0.length - 1][0] > 200) h0.push([at, r.v]);
+      while (h0.length && h0[0][0] < Date.now() - 60000) h0.shift();
+    });
+  }
+  /** L/min from the last 20 s of measured levels; null without enough recent readings. */
+  function levelRate(t) {
+    const h0 = (levels[t] || []).filter(x => x[0] > Date.now() - 20000);
+    if (h0.length < 3) return null;
+    const [t0, v0] = h0[0], [t1, v1] = h0[h0.length - 1];
+    return t1 - t0 < 4000 ? null : (v1 - v0) / ((t1 - t0) / 60000);
+  }
+  const RATE_MIN = 2;                         // L/min: below this a level counts as steady
+  function trendOf(t) { const r = levelRate(t); return r == null ? null : r > RATE_MIN ? "rising" : r < -RATE_MIN ? "falling" : "steady"; }
+  /** Asked / reported / state of one piece of equipment: the meaning shown in the diagram, its panel and the pages. */
+  function eqState(P, PR, e) {
+    const c = sig(P, e.cmd);
+    const asked = c.adapter ? (c.v == null ? null : !!c.v) : c.bound && c.ok ? !!c.v : null;
+    let rep = null, how = "", stale = false;
+    if (e.fb) {
+      const r = sig(P, e.fb);
+      if (r.bound && r.ok && r.q !== "STALE") {
+        rep = !!r.v; how = e.kind === "valve" ? "its open signal" : e.run ? "its selector signal and the drive's running signal" : "its running signal";
+        if (e.run && rep) { const d = sig(P, e.run); rep = d.ok ? !!d.v : null; if (rep === null) stale = true; }
+      } else if (r.bound) stale = true;
+    }
+    if (rep === null && !stale && e.proof === "flow") {
+      const f = sig(P, e.flow);
+      if (f.ok && f.q !== "STALE") { rep = f.v > FLOW_ON; how = "the water flow measured on its route (no position signal)"; } else if (f.bound) stale = true;
+    }
+    if (rep === null && !stale && e.proof === "level") {
+      const tr = trendOf(e.level);
+      if (tr) { rep = tr === "rising"; how = "the measured rise of the tank's level (no position signal or flow meter)"; }
+    }
+    let st;
+    const pv = PR && PR.processes[e.proc], f = e.fault ? sig(P, e.fault) : null;
+    if ((f && f.ok && f.v) || (pv && pv.state === "FAULT_LOCKOUT" && asked !== true && rep === true)) st = "fault";
+    else if (rep === null) st = asked === true ? "up" : asked === false && !stale ? "off" : "unk";
+    else if (asked === null) st = rep ? "on" : "off";
+    else st = asked ? (rep ? "on" : "up") : (rep ? "down" : "off");
+    if (stale && st !== "fault") st = "unk";
+    return { st, asked, rep, how, stale, word: ST[st][e.kind], cls: ST[st].cls, pv };
+  }
+  function stPill(s) { return h("span", { class: "pill " + s.cls, "data-state": s.st }, s.word); }
+
   // ---------------------------------------------------------------- the installation diagram
-  /** opts.readOnly: a hardware profile (navigation only, no controls anywhere); opts.focus: the page whose parts
-   * are highlighted (the others are dimmed). Clicking a part only navigates. */
-  function diagram(P, opts) {
-    const readOnly = !!(opts && opts.readOnly), focus = opts && opts.focus;
-    const svg = document.createElementNS(NS, "svg");
-    svg.setAttribute("viewBox", "0 0 1100 690"); svg.setAttribute("class", "schematic diagram");
+  /** opts.readOnly: a hardware profile (no controls anywhere); opts.focus: the page whose parts are highlighted
+   * (the others are dimmed). Clicking a part selects it: its panel beside the diagram shows its state, its
+   * readings and, on a simulated profile, the operation it can be part of. */
+  let svgSeq = 0;
+  function diagram(P, opts, PR) {
+    const readOnly = !!(opts && opts.readOnly), focus = opts && opts.focus, sel = S.diagSel && S.diagSel.key;
+    const EQ = equipment(P);
+    noteLevels(P);
+    const svg = document.createElementNS(NS, "svg"), uid = "d" + (++svgSeq);
+    svg.setAttribute("viewBox", "0 0 1100 700"); svg.setAttribute("class", "schematic diagram");
     svg.setAttribute("role", "group");
-    svg.setAttribute("aria-label", "Greenhouse diagram: the readings the program uses" + (readOnly ? " (read-only)" : ""));
+    svg.setAttribute("aria-label", "Greenhouse diagram: tanks, pumps, valves and sensors with their readings" + (readOnly ? " (read-only)" : ""));
     if (focus) svg.classList.add("compact");
     let parent = svg;
     function e(tag, a, txt) {
@@ -84,136 +178,394 @@
       if (txt != null) x.textContent = txt;
       parent.appendChild(x); return x;
     }
-    function hot(page, label, draw) {
-      const g = e("g", { class: "hot" + (focus ? (page === focus ? " focus" : " dim") : ""), tabindex: "0", role: "link", "aria-label": label });
+    const defs = e("defs", {});
+    parent = defs;
+    e("marker", { id: uid + "-arrow", viewBox: "0 0 10 10", refX: "5", refY: "5", markerWidth: "4", markerHeight: "4", orient: "auto-start-reverse" });
+    parent = defs.lastChild; e("path", { d: "M0 0 L10 5 L0 10 z", class: "arrowhead" });
+    parent = svg;
+    function hot(page, key, type, label, draw) {
+      const g = e("g", { class: "hot" + (focus ? (page === focus ? " focus" : " dim") : "") + (sel === key ? " selected" : ""), tabindex: "0", role: "button",
+        "aria-label": label, "aria-pressed": sel === key ? "true" : "false", "data-key": key, "data-type": type });
       const prev = parent; parent = g; draw(); parent = prev;
-      if (page) {
-        g.addEventListener("click", () => { location.hash = page; });
-        g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); location.hash = page; } });
-      }
+      const pick = () => { if (!S.diagSel || S.diagSel.key !== key) S.diagConfirm = null; S.diagSel = { key, type }; S.diagPend = S.diagPend && S.diagPend.key === key ? S.diagPend : null;
+        if (type === "sensor" || type === "tank") askReading(type === "tank" ? `tank.${key.slice(5)}.level` : key); U.refresh(); };
+      g.addEventListener("click", pick);
+      g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
       return g;
     }
     const v = n => sig(P, n);
-    const flowing = n => { const r = v(n); return r.ok && typeof r.v === "number" && r.v > 0.5; };
-    const pipe = (d, flowSig) => e("path", { d, class: "pipe" + (flowSig && flowing(flowSig) ? " flow" : "") });
-    function short(r, d, words) { return !r.bound ? "not measured" : fmtVal(r, d, words) + (r.adapter || r.ok ? "" : " (" + W.quality(r.q || "UNAVAILABLE").toLowerCase() + ")"); }
+    const short = (r, d, words) => !r.bound ? "not measured" : fmtVal(r, d, words) + (r.adapter || r.ok ? "" : " (" + W.quality(r.q || "UNAVAILABLE").toLowerCase() + ")");
+    // a pipe drawn in the direction the water goes: "flow" (measured flow, moving water and arrows), "asked"
+    // (the program asked for the route but no flow is measured), "unk" (the flow reading is old or unavailable)
+    const pipes = [];
+    const pipe = (d, state) => pipes.push([d, state || ""]);
+    const flowState = n => { if (!n) return ""; const r = v(n); return !r.bound ? "" : !r.ok || r.q === "STALE" ? "unk" : r.v > FLOW_ON ? "flow" : ""; };
+    function tag(x, y, txt, signal, page, label) {
+      const r = v(signal);
+      return hot(page, signal, "sensor", `${label || W.signal(signal)}: ${short(r, 2)}. Ask for a new reading`, () => {
+        e("circle", { cx: x, cy: y, r: 11, class: "sensor " + (!r.bound ? "s-none" : r.ok && r.q !== "STALE" ? "s-ok" : "s-old") + " hl" });
+        e("text", { x, y: y + 4, "text-anchor": "middle", class: "tagt" }, txt);
+        if (r.bound && !(r.ok && r.q !== "STALE")) e("text", { x: x + 12, y: y - 8, class: "small old-t" }, "?");
+      });
+    }
     function tank(x, y, w, hh, name, t, page) {
-      const cap = P.layout.tanks_L[t], r = v(`tank.${t}.level`);
-      hot(page, `${name}: ${short(r, 0)} of ${cap} L`, () => {
-        if (r.ok) { const f = Math.max(0, Math.min(1, r.v / cap)); e("rect", { x, y: y + hh * (1 - f), width: w, height: hh * f, class: "water" }); }
-        else e("rect", { x: x + 2, y: y + 2, width: w - 4, height: hh - 4, class: "unknown" });
-        e("rect", { x, y, width: w, height: hh, class: "tank-wall hl" });
+      const cap = P.layout.tanks_L[t], r = v(`tank.${t}.level`), tr = r.ok ? trendOf(t) : null, rate = levelRate(t);
+      hot(page, "tank." + t, "tank", `${name}: ${short(r, 0)} of ${W.n0(cap)} L${tr && tr !== "steady" ? ", " + tr : ""}`, () => {
+        e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-bg" });
+        if (r.ok) {
+          const f = Math.max(0, Math.min(1, r.v / cap));
+          e("rect", { x: x + 2, y: y + 2 + (hh - 4) * (1 - f), width: w - 4, height: (hh - 4) * f, class: "water" + (r.q === "STALE" ? " old" : "") });
+        } else e("rect", { x: x + 3, y: y + 3, width: w - 6, height: hh - 6, class: "unknown" });
+        e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-wall hl" });
         e("text", { x: x + w / 2, y: y - 6, "text-anchor": "middle", class: "th" }, name);
-        e("text", { x: x + w / 2, y: y + hh + 14, "text-anchor": "middle", class: "val" }, r.ok ? `${W.n0(num(r.v, 0))} / ${W.n0(cap)} L` : `level ${short(r, 0)}`);
-        if (r.ok) e("text", { x: x + w / 2, y: y + hh + 27, "text-anchor": "middle", class: "val muted-t" }, `${(100 * r.v / cap).toFixed(0)} % · ${U.ago(r.age)}`);
+        e("text", { x: x + w / 2, y: y + hh + 14, "text-anchor": "middle", class: "val" }, r.ok ? `${W.n0(num(r.v, 0))} / ${W.n0(cap)} L · ${(100 * r.v / cap).toFixed(0)} %` : `level ${short(r, 0)}`);
+        if (tr && tr !== "steady") e("text", { x: x + w / 2, y: y + hh + 28, "text-anchor": "middle", class: "val trend-t", "data-trend": tr },
+          `${tr === "rising" ? "▲ rising" : "▼ falling"} ${W.n0(Math.abs(rate))} L/min`);
+        else if (r.ok) e("text", { x: x + w / 2, y: y + hh + 28, "text-anchor": "middle", class: "val muted-t" }, U.ago(r.age));
       });
     }
-    function reqClass(cmd) { const r = v(cmd); return !r.bound ? "equip-req unbound" : "equip-req " + (r.v ? "req-on" : "req-off"); }
-    function valve(x, y, id, label, page, fb) {
-      const cmd = `valve.${id}.cmd`, rc = v(cmd), rf = fb ? v(fb) : null;
-      hot(page, `${label}: asked ${short(rc, 0, ["open", "closed"])}${rf ? ", open signal " + short(rf, 0, ["yes", "no"]) : ", no position signal"}`, () => {
-        const open = rf && rf.ok ? (rf.v ? 1 : 0.15) : null;
-        e("polygon", { points: `${x - 14},${y - 9} ${x - 14},${y + 9} ${x},${y}`, class: open == null ? "equip-unk" : "equip-act", "fill-opacity": open == null ? null : open });
-        e("polygon", { points: `${x + 14},${y - 9} ${x + 14},${y + 9} ${x},${y}`, class: open == null ? "equip-unk" : "equip-act", "fill-opacity": open == null ? null : open });
-        e("rect", { x: x - 17, y: y - 12, width: 34, height: 24, class: reqClass(cmd) + " hl" });
-        e("text", { x, y: y - 16, "text-anchor": "middle", class: "small" }, label);
-        e("text", { x, y: y + 24, "text-anchor": "middle", class: "small muted-t" }, `asked ${short(rc, 0, ["open", "closed"])}`);
-        if (rf) e("text", { x, y: y + 36, "text-anchor": "middle", class: "small muted-t" }, short(rf, 0, ["open", "not open"]));
+    function valve(x, y, eq, label, vertical) {
+      const s = eqState(P, PR, eq);
+      hot(eq.page, eq.key, "equip", `${eq.name}: ${s.word}. Select for details`, () => {
+        const g = e("g", { class: "eq " + s.cls, transform: vertical ? `rotate(90 ${x} ${y})` : null });
+        const prev = parent; parent = g;
+        e("polygon", { points: `${x - 13},${y - 9} ${x - 13},${y + 9} ${x},${y}`, class: "body hl" });
+        e("polygon", { points: `${x + 13},${y - 9} ${x + 13},${y + 9} ${x},${y}`, class: "body hl" });
+        e("line", { x1: x, y1: y, x2: x, y2: y - 13, class: "stem" });
+        e("rect", { x: x - 5, y: y - 18, width: 10, height: 5, class: "stem-head" });
+        parent = prev;
+        e("text", { x: x + (vertical ? 26 : 0), y: vertical ? y + 1 : y - 22, "text-anchor": vertical ? "start" : "middle", class: "small" }, label);
+        e("text", { x: x + (vertical ? 26 : 0), y: vertical ? y + 14 : y + 23, "text-anchor": vertical ? "start" : "middle", class: "small st-t " + s.cls }, s.word);
       });
     }
-    function pump(x, y, id, label, page, cmd, fb, extra, words) {
-      // words: what the feedback reports ([on, off]); main pumps report their selector, not the motor
-      const rc = v(cmd), rf = fb ? v(fb) : null, w = words || ["running", "stopped"];
-      hot(page, `${label}: asked ${short(rc, 0)}${rf ? ", reports " + short(rf, 0, w) : ""}`, () => {
-        e("circle", { cx: x, cy: y, r: 16, class: rf && rf.ok ? "equip-act" : "equip-unk", "fill-opacity": rf && rf.ok ? (rf.v ? 1 : 0.15) : null });
-        e("circle", { cx: x, cy: y, r: 20, class: reqClass(cmd) + " hl" });
-        e("text", { x, y: y + 4, "text-anchor": "middle", class: "small" }, id);
-        e("text", { x, y: y + 34, "text-anchor": "middle", class: "small muted-t" },
-          `asked ${short(rc, 0)}${rf ? " · " + short(rf, 0, w) : ""}${extra || ""}`);
+    function pump(x, y, eq, label, dir) {
+      const s = eqState(P, PR, eq), tri = { right: `${x - 6},${y - 8} ${x - 6},${y + 8} ${x + 9},${y}`, left: `${x + 6},${y - 8} ${x + 6},${y + 8} ${x - 9},${y}`,
+        down: `${x - 8},${y - 6} ${x + 8},${y - 6} ${x},${y + 9}` }[dir || "right"];
+      hot(eq.page, eq.key, "equip", `${eq.name}: ${s.word}. Select for details`, () => {
+        const g = e("g", { class: "eq " + s.cls });
+        const prev = parent; parent = g;
+        e("circle", { cx: x, cy: y, r: 16, class: "body hl" });
+        e("polygon", { points: tri, class: "pump-tri" });
+        parent = prev;
+        e("text", { x, y: y + 31, "text-anchor": "middle", class: "small" }, label);
+        e("text", { x, y: y + 44, "text-anchor": "middle", class: "small st-t " + s.cls }, s.word);
       });
     }
-    function flowText(x, y, n, anchor) {
-      const r = v(n);
-      e("text", { x, y, "text-anchor": anchor || "start", class: "val" }, r.bound ? `${fmtVal(r, 1)}${r.ok ? "" : " (" + W.quality(r.q || "UNAVAILABLE").toLowerCase() + ")"}` : "flow not measured");
-    }
+    const flowLabel = (x, y, n, anchor) => { const r = v(n); e("text", { x, y, "text-anchor": anchor || "start", class: "val" + (r.bound && !r.ok ? " old-t" : "") },
+      r.bound ? fmtVal(r, 1) + (r.ok ? "" : " (" + W.quality(r.q || "UNAVAILABLE").toLowerCase() + ")") : "flow not measured"); };
 
-    // mains header and stock fills
-    e("text", { x: 20, y: 24, class: "th" }, "Mains water");
-    pipe("M20 40 H620", null);
+    // ---- routes (drawn first, under the equipment)
+    const L = P.layout, drv = L.shared_drive;
+    const fillOn = s => eqState(P, PR, EQ["valve.FILL_" + s]).st === "on";
+    const asked = k => eqState(P, PR, EQ[k]).asked === true;
+    const fm = flowState("flow.FILL_MAIN");
+    pipe("M20 40 H620", ["A", "B", "ACID"].some(fillOn) || fm === "flow" ? "flow" : "");
+    pipe("M620 40 V210", fm || (asked("valve.FILL_MAIN") ? "asked" : ""));
+    [["A", 60], ["B", 200], ["ACID", 340]].forEach(([s, x]) => {
+      const c = x + 45, fs = flowState(`flow.TP_${s}`);
+      pipe(`M${c} 40 V125`, fillOn(s) ? "flow" : asked("valve.FILL_" + s) ? "asked" : "");
+      pipe(`M${c} 262 V430 H500`, fs || (asked("pump.TP_" + s) || asked("valve.OUT_" + s) ? "asked" : ""));
+    });
+    const sectorFlow = {};
+    L.sectors.forEach(s => { sectorFlow[s.sector_id] = flowState("flow." + s.sector_id); });
+    const pumpY = i => 290 + i * 120, secY = i => 200 + i * 240;
+    L.main_pumps.forEach((mp, i) => {
+      const ps = eqState(P, PR, EQ["pump." + mp]), yp = pumpY(i);
+      // the water goes through this pump only while it is selected and the drive reports running
+      const via = ps.rep === true;
+      L.sectors.forEach((s, j) => {
+        const fl = sectorFlow[s.sector_id], ys = secY(j);
+        const st = via && fl === "flow" ? "flow" : via && fl === "unk" ? "unk" : ps.asked && asked("valve." + s.sector_id) ? "asked" : "";
+        pipe(`M660 410 H700 V${yp} H744`, st);
+        pipe(`M776 ${yp} H830 V${ys} H867`, st);
+      });
+    });
+    L.sectors.forEach((s, j) => {
+      const ys = secY(j), fl = sectorFlow[s.sector_id];
+      pipe(`M893 ${ys} H930`, fl || (asked("valve." + s.sector_id) ? "asked" : ""));
+      pipe(`M1090 ${ys + 30} H1097 V600 H960`, "");
+    });
+    const rf = flowState("flow.RETURN");
+    pipe("M860 620 H478 V440 H500", rf || (L.return_pumps.some(rp => asked("pump." + rp)) ? "asked" : ""));
+    // inactive under active, so a moving route is never hidden by a shared idle stretch
+    pipes.sort((a, b) => (a[1] ? 1 : 0) - (b[1] ? 1 : 0)).forEach(([d, st]) =>
+      e("path", { d, class: "pipe" + (st ? " " + st : ""), "marker-mid": null, "marker-end": st === "flow" ? `url(#${uid}-arrow)` : null, "data-route": st || "idle" }));
+
+    // ---- mains and the fertiliser and acid tanks
+    e("text", { x: 20, y: 26, class: "th" }, "Mains water");
     [["A", "Fertiliser A", 60], ["B", "Fertiliser B", 200], ["ACID", "Acid", 340]].forEach(([s, name, x]) => {
       const c = x + 45;
-      pipe(`M${c} 40 V125`, null);
-      valve(c, 72, `FILL_${s}`, `water in`, "#nutrients", null);
+      valve(c, 80, EQ["valve.FILL_" + s], "water in", true);
       tank(x, 125, 90, 100, name, s, "#nutrients");
-      pipe(`M${c} 258 V420 H500`, `flow.TP_${s}`);
-      valve(c, 285, `OUT_${s}`, `outlet`, "#nutrients", null);
-      pump(c, 345, `TP_${s}`, `Transfer pump, ${W.TANK[s].toLowerCase()}`, "#nutrients", `pump.TP_${s}.cmd`, `pump.TP_${s}.running`);
-      flowText(c, 396, `flow.TP_${s}`, "middle");
+      tag(x + 78, 137, "L", `tank.${s}.level`, "#nutrients");
+      valve(c, 290, EQ["valve.OUT_" + s], "outlet", true);
+      pump(c, 352, EQ["pump.TP_" + s], `TP ${s === "ACID" ? "acid" : s}`, "down");
+      tag(c + 22, 416, "F", `flow.TP_${s}`, "#nutrients");
+      flowLabel(c + 36, 420, `flow.TP_${s}`);
     });
     e("text", { x: 20, y: 470, class: "small muted-t" }, "No stirrer or air pump: mixing is not checked.");
-    // main tank
-    pipe("M620 40 V210", "flow.FILL_MAIN");
-    valve(620, 120, "FILL_MAIN", "water in", "#main-tank", null);
-    flowText(632, 180, "flow.FILL_MAIN");
+    // ---- main tank
+    valve(620, 128, EQ["valve.FILL_MAIN"], "water in", true);
+    tag(642, 180, "F", "flow.FILL_MAIN", "#main-tank");
+    flowLabel(656, 184, "flow.FILL_MAIN");
     tank(500, 210, 160, 240, "Main tank", "MAIN", "#main-tank");
+    tag(508, 232, "L", "tank.MAIN.level", "#main-tank");
+    tag(530, 515, "pH", "main.ph", "#main-tank");
+    tag(580, 515, "EC", "main.ec", "#main-tank");
+    tag(630, 515, "T", "main.temperature", "#main-tank");
     const ph = v("main.ph"), ec = v("main.ec");
-    hot("#main-tank", `Acidity (pH) ${short(ph, 2)}, nutrient strength (EC) ${short(ec, 2)}`, () => {
-      e("rect", { x: 505, y: 495, width: 150, height: 40, class: "box hl" });
-      e("text", { x: 580, y: 511, "text-anchor": "middle", class: "small" }, `pH ${short(ph, 2)}`);
-      e("text", { x: 580, y: 527, "text-anchor": "middle", class: "small" }, `EC ${short(ec, 2)}`);
+    e("text", { x: 505, y: 545, class: "small" }, `pH ${short(ph, 2)} · EC ${short(ec, 2)}`);
+    e("text", { x: 505, y: 560, class: "small muted-t" }, "probe position proposed, not installed");
+    // ---- main pumps on the shared drive, and the sectors
+    L.main_pumps.forEach((mp, i) => pump(760, pumpY(i), EQ["pump." + mp], `Main pump ${i + 1}`, "right"));
+    const ds = eqState(P, PR, EQ["drive." + drv]), drf = v(`drive.${drv}.fault`);
+    hot("#main-pumps", "drive." + drv, "equip", `Pump drive: ${ds.word}${drf.ok && drf.v ? ", DRIVE FAULT" : ""}. Select for details`, () => {
+      e("rect", { x: 690, y: 478, width: 140, height: 50, rx: 6, class: "box eqbox " + ds.cls + " hl" });
+      e("text", { x: 760, y: 497, "text-anchor": "middle", class: "small" }, "Pump drive (shared)");
+      e("text", { x: 760, y: 514, "text-anchor": "middle", class: "small st-t " + ds.cls }, drf.ok && drf.v ? "⚠ DRIVE FAULT" : ds.word);
     });
-    e("text", { x: 505, y: 550, class: "small muted-t" }, "probe position proposed, not installed");
-    // main pumps on the shared drive
-    const drv = P.layout.shared_drive, mps = P.layout.main_pumps;
-    pipe("M660 410 H700", null);
-    mps.forEach((mp, i) => {
-      const y = 290 + i * 120, k = "K" + (i + 1);
-      pipe(`M700 410 V${y} H740`, null);
-      pump(760, y, mp, `Main pump ${i + 1} (selector ${k})`, "#main-pumps", `contactor.${mp}.cmd`, `contactor.${mp}.closed`, "", [`${k} closed`, `${k} open`]);
-      pipe(`M780 ${y} H830`, null);
-    });
-    pipe("M830 200 V440", null);
-    const dr = v(`drive.${drv}.run`), drr = v(`drive.${drv}.running`), drf = v(`drive.${drv}.fault`);
-    hot("#main-pumps", `Pump drive: asked ${short(dr, 0)}, running ${short(drr, 0, ["yes", "no"])}, fault ${short(drf, 0, ["yes", "no"])}`, () => {
-      e("rect", { x: 690, y: 472, width: 140, height: 46, class: "box hl" });
-      e("text", { x: 760, y: 489, "text-anchor": "middle", class: "small" }, "Pump drive (shared)");
-      e("text", { x: 760, y: 505, "text-anchor": "middle", class: "small muted-t" }, `asked ${dr.adapter ? dr.txt : short(dr, 0)} · ${short(drr, 0, ["running", "stopped"])}`);
-      e("text", { x: 760, y: 534, "text-anchor": "middle", class: drf.ok && drf.v ? "small fault-mark" : "small muted-t" },
-        drf.ok && drf.v ? "⚠ DRIVE FAULT" : `fault ${short(drf, 0, ["yes", "no"])}`);
-    });
-    // sectors
-    P.layout.sectors.forEach((s, i) => {
-      const y = 200 + i * 240, id = s.sector_id, page = "#sector-" + id;
-      pipe(`M830 ${y} H866`, `flow.${id}`);
-      valve(880, y, id, `valve ${id}`, page, `valve.${id}.open_limit`);
-      pipe(`M894 ${y} H930`, `flow.${id}`);
-      hot(page, `${W.sectorName(id)}: channels ${s.channels[0]} to ${s.channels[s.channels.length - 1]}`, () => {
-        e("rect", { x: 930, y: y - 50, width: 160, height: 100, class: "box hl" });
-        e("text", { x: 1010, y: y - 32, "text-anchor": "middle", class: "th" }, W.sectorName(id));
-        e("text", { x: 1010, y: y - 16, "text-anchor": "middle", class: "small" }, `channels ${s.channels[0]}–${s.channels[s.channels.length - 1]} · ${s.channels.length * P.layout.outlets_per_channel} outlets`);
-        e("text", { x: 1010, y: y + 2, "text-anchor": "middle", class: "small" }, `flow ${short(v("flow." + id), 1)}`);
-        e("text", { x: 1010, y: y + 18, "text-anchor": "middle", class: "small" }, `pressure ${short(v("pressure." + id), 2)}`);
-        e("text", { x: 1010, y: y + 36, "text-anchor": "middle", class: "small muted-t" }, `automatic: main pump ${s.auto_pump.slice(2)}`);
+    L.sectors.forEach((s, j) => {
+      const ys = secY(j), id = s.sector_id, page = "#sector-" + id;
+      valve(880, ys, EQ["valve." + id], `valve ${id}`);
+      tag(912, ys - 22, "F", "flow." + id, page);
+      tag(912, ys + 24, "P", "pressure." + id, page);
+      hot(page, "sector." + id, "sector", `${W.sectorName(id)}: flow ${short(v("flow." + id), 1)}, pressure ${short(v("pressure." + id), 2)}. Select for details`, () => {
+        e("rect", { x: 930, y: ys - 52, width: 160, height: 104, rx: 6, class: "box sector-box hl" + (sectorFlow[id] === "flow" ? " watering" : "") });
+        e("text", { x: 1010, y: ys - 33, "text-anchor": "middle", class: "th" }, W.sectorName(id));
+        e("text", { x: 1010, y: ys - 17, "text-anchor": "middle", class: "small" }, `channels ${s.channels[0]}–${s.channels[s.channels.length - 1]} · ${s.channels.length * L.outlets_per_channel} outlets`);
+        e("text", { x: 1010, y: ys + 1, "text-anchor": "middle", class: "small" }, `flow ${short(v("flow." + id), 1)}`);
+        e("text", { x: 1010, y: ys + 17, "text-anchor": "middle", class: "small" }, `pressure ${short(v("pressure." + id), 2)}`);
+        e("text", { x: 1010, y: ys + 35, "text-anchor": "middle", class: "small " + (sectorFlow[id] === "flow" ? "flow-t" : "muted-t") },
+          sectorFlow[id] === "flow" ? "being watered" : `automatic: main pump ${s.auto_pump.slice(2)}`);
       });
-      pipe(`M1090 ${y + 30} H1097`, null);
     });
-    // drainage
-    pipe("M1097 230 V600 H960", null);
-    e("text", { x: 1000, y: 590, "text-anchor": "middle", class: "small muted-t" }, "drains by gravity");
+    // ---- drainage
+    e("text", { x: 1032, y: 592, "text-anchor": "middle", class: "small muted-t" }, "by gravity, not measured");
     tank(860, 560, 100, 80, "Drainage tank", "SUMP", "#drainage");
-    pipe("M860 620 H478 V440 H500", "flow.RETURN");
-    P.layout.return_pumps.forEach((rp, i) => pump(770 - i * 100, 620, rp, `Return pump ${rp.slice(2)}`, "#drainage", `pump.${rp}.cmd`, `pump.${rp}.running`));
-    flowText(490, 612, "flow.RETURN");
+    tag(946, 574, "L", "tank.SUMP.level", "#drainage");
+    L.return_pumps.forEach((rp, i) => pump(770 - i * 100, 620, EQ["pump." + rp], `Return pump ${rp.slice(2)}`, "left"));
+    tag(520, 640, "F", "flow.RETURN", "#drainage");
+    flowLabel(536, 644, "flow.RETURN");
     const sc = v("safety.chain_ok");
-    e("text", { x: 20, y: 680, class: sc.ok && !sc.v ? "fault-mark" : "small" }, `Safety circuit: ${short(sc, 0, ["healthy", "OPEN"])}`);
+    e("text", { x: 20, y: 690, class: sc.ok && !sc.v ? "fault-mark" : "small" }, `Safety circuit: ${short(sc, 0, ["healthy", "OPEN"])}`);
     return svg;
   }
   function legend(P) {
-    return h("p", { class: "muted" }, "Outline: what the program asked for (solid = on or open, dashed = off or closed, dotted = no channel). ",
-      "Fill: what the equipment reports (hatched = nothing reports it). The values are the readings the program uses, with their age. ",
-      "Click a part to open its page. ", provenance(P) + " Layout: " + P.layout.provenance + ".");
+    const sw = (cls, word, what) => h("span", { class: "lg" }, h("span", { class: "pill " + cls }, word), " ", what);
+    return h("div", { class: "muted small legend-box" },
+      h("p", null, "Pumps and valves: ", sw("st-on", "Running / Open", "the equipment reports it"), " ", sw("st-move", "Starting… / Opening…", "asked for, not yet reported (also Stopping… and Closing…)"),
+        " ", sw("st-off", "Stopped / Closed", ""), " ", sw("st-fault", "Fault", ""), " ", sw("st-unk", "Not known", "no feedback, or its reading is old")),
+      h("p", null, "Pipes: moving water and arrows where water flow is measured; dashed where the program asked for a route but no flow is measured yet; dotted where the flow reading is old or missing. ",
+        "Round tags are sensors (L level, F flow, P pressure, pH, EC, T temperature); a “?” marks an old or unavailable reading. ▲ and ▼ show a level the readings show rising or falling."),
+      h("p", null, "Select a pump, valve, tank, sensor or sector to see it beside the diagram. ", provenance(P) + " Layout: " + P.layout.provenance + "."));
   }
   function scrollHint() { return h("p", { class: "scroll-hint muted" }, "Scroll sideways to see the whole greenhouse."); }
+
+  // ---------------------------------------------------------------- the selected part: readings and actions (O-04)
+  /** Asks the server for the next acquisition of one signal; the panel shows that sample with its own time. */
+  async function askReading(signal) {
+    const ask = S.reading = { signal, at: Date.now(), state: "asking" };
+    try {
+      const r = await api("GET", `/api/plant/reading?signal=${encodeURIComponent(signal)}`);
+      if (S.reading === ask) S.reading = { signal, at: ask.at, state: "done", r, got: Date.now() };
+    } catch (err) {
+      if (S.reading === ask) S.reading = { signal, at: ask.at, state: "failed", msg: W.refusal(String(err.message || err)) };
+    }
+    U.refresh();
+  }
+  function readingBox(P, signal) {
+    const R = S.reading && S.reading.signal === signal ? S.reading : null, name = W.signal(signal);
+    const again = h("button", { class: "small ghost", onclick: () => { askReading(signal); U.refresh(); } }, "Ask for a new reading");
+    let body;
+    if (!R || R.state === "asking") body = h("p", { "data-reading": "asking" }, "Asking for a new reading…");
+    else if (R.state === "failed") body = h("p", { class: "error", "data-reading": "failed" }, "No answer: ", R.msg);
+    else if (!R.r.bound) body = h("p", { class: "muted", "data-reading": "unbound" }, R.r.why === "DRIVE_ADAPTER" ? "This is a command over the drive's data link, not a measurement." : "Not measured: no channel carries this signal on this profile.");
+    else if (!R.r.sample) body = h("p", { class: "warn-t", "data-reading": "none" }, "No reading has arrived from this channel yet.");
+    else {
+      const sm = R.r.sample, ageNow = sm.age_s + (Date.now() - R.got) / 1000;
+      const val = sm.value == null || ["INVALID", "UNAVAILABLE"].includes(sm.quality) ? "—" : typeof sm.value === "boolean" ? (sm.value ? "on (1)" : "off (0)") : `${W.fixed(sm.value, signal.startsWith("main.") ? 2 : 1)}${sm.unit ? " " + sm.unit : ""}`;
+      body = [h("p", { class: R.r.fresh ? "" : "warn-t", "data-reading": R.r.fresh ? "fresh" : "old" },
+        R.r.fresh ? "New reading, taken after you asked:" : "No new reading arrived within 3 seconds. This is the newest reading, not a new one:"),
+        kvRows([["Value", h("strong", { "data-value": "" }, val)], ["Unit", sm.unit || "none"], ["Measured at", h("span", { "data-acquired": sm.acquired_utc }, fmtTime(sm.acquired_utc))],
+          ["Age", U.ago(ageNow)], ["Validity", qBadge(sm.quality, ageNow)], ["You asked at", fmtTime(new Date(R.at).toISOString())],
+          ["Channel", h("span", { class: "mono" }, `${R.r.point}${R.r.label ? " (" + R.r.label + ")" : ""}`)], ["Origin", sm.origin]])];
+    }
+    return h("div", { class: "reading-box" }, h("h3", null, name), body, h("div", { class: "row" }, again, historyLink(P, [signal])));
+  }
+  function historyLink(P, signals) {
+    const pts = signals.map(n => P.signals[n] && P.signals[n].point).filter(Boolean);
+    return pts.length ? h("a", { href: "#history", onclick: () => { S.trendSel = pts.slice(0, 8); } }, "History of these readings") : null;
+  }
+  // the operation a piece of equipment is part of, with its amounts from the recipe in use where it sets them
+  function opOf(e, P, PR, form) {
+    const rec = PR && PR.active_recipe_body, L = P.layout;
+    const seqDur = sec => { const st = rec && (rec.irrigation.sequence || []).find(x => x.sector === sec); return st ? st.duration_s : null; };
+    const val = (k, d) => form && form[k] != null && form[k] !== "" ? form[k] : d;
+    if (e.proc === "IRRIGATION" && !e.drive) {
+      const sector = e.sector || val("sector", (L.sectors.find(s => s.auto_pump === e.pump) || L.sectors[0]).sector_id);
+      const pumpId = e.pump || val("pump", (L.sectors.find(s => s.sector_id === sector) || {}).auto_pump);
+      const dur = val("duration_s", seqDur(sector));
+      return { op: { pump: pumpId, sector, duration_s: Number(dur) }, what: `waters ${W.sectorName(sector)} once with ${W.equip(pumpId)} for ${dur == null || dur === "" ? "the time you set" : dur + " s"}: the valve opens first, then the pump starts`,
+        fields: [e.sector ? ["pump", "Main pump", L.main_pumps.map(x => [x, W.cap(W.equip(x))]), pumpId] : ["sector", "Sector", L.sectors.map(s => [s.sector_id, W.sectorName(s.sector_id)]), sector],
+          ["duration_s", "Watering time (s)", null, seqDur(sector)]] };
+    }
+    if (e.proc === "RETURN") return { op: { pump: e.pump, duration_s: Number(val("duration_s", null)) }, what: `runs ${W.equip(e.pump)} once for the time you set`, fields: [["duration_s", "Run time (s)", null, null]] };
+    if (e.proc === "ACID") { const d = rec ? rec.acid.dose_step_L : null; return { op: { volume_L: Number(val("volume_L", d)) }, what: "adds one dose of acid to the main tank: the outlet valve opens, then the transfer pump runs", fields: [["volume_L", "Acid to add (L)", null, d]] }; }
+    if (e.proc === "REFILL") {
+      const path = e.water ? "WATER" : STOCK_OF[e.tab], r = rec && rec.refill;
+      const d = !r ? null : path === "WATER" ? (r.water || {}).target_L : path === "A" ? (r.fixed || {}).a_L : (r.fixed || {}).b_L;
+      return { op: { path, volume_L: Number(val("volume_L", d)) }, what: path === "WATER" ? "adds one amount of mains water to the main tank" : `adds one amount of fertiliser ${path} to the main tank: the outlet valve opens, then the transfer pump runs`,
+        fields: [["volume_L", "Amount (L)", null, d]] };
+    }
+    if (e.proc.startsWith("STOCK_FILL_")) {
+      const s = e.proc.slice(11), d = rec && rec.stock_fill && rec.stock_fill[s] ? rec.stock_fill[s].target_L : null;
+      return { op: { target_L: Number(val("target_L", d)) }, what: `fills ${W.TANK[s].toLowerCase()} with mains water once, up to the level you set`, fields: [["target_L", "Fill up to (L)", null, d]] };
+    }
+    return null;
+  }
+  const verb = (e, on) => e.kind === "valve" ? (on ? "open" : "close") : (on ? "start" : "stop");
+  /** What pressing the action does, before it is done: null when it can go straight to the controller (Manual mode), else the confirmation. */
+  function plan(e, on, pv, o) {
+    const w = W.proc(e.proc), pn = w.name.toLowerCase(), nm = e.name;
+    if (pv.state === "FAULT_LOCKOUT") return { refuse: `${w.name} is stopped because of a problem. Clear the stop on its page first; nothing is sent from here.` };
+    if (pv.stopping) return { refuse: `${w.name} is still stopping. Wait until it has stopped.` };
+    if (!on) {
+      if (pv.state === "STOPPED") return { refuse: `${w.name} is stopped; the program is not running ${nm}.` };
+      if (pv.state === "MANUAL") return pv.manual_op ? { direct: true, tell: `Ends the run once: ${pn} stops in a safe order and goes to Stopped.` }
+        : { refuse: `Nothing is running in Manual mode; the program is not running ${nm}.` };
+      return { confirm: `${W.cap(verb(e, false))} ${nm}?`, body: `${w.name} is in automatic mode. To ${verb(e, false)} ${nm}, the program stops ${pn}: pumps stop first, then valves close. ` +
+        `${w.name} then stays stopped until you start it again on its page.`, yes: `Stop ${pn} and ${verb(e, false)} ${nm}` };
+    }
+    if (e.drive) return { refuse: "The drive starts only as part of watering. Select a main pump or a sector valve to water a sector once." };
+    if (pv.state === "MANUAL" && pv.manual_op) return { refuse: `${w.name} is already running once. Stop it before asking for something else.` };
+    if (pv.state === "MANUAL") return { direct: true, tell: `In Manual mode: ${o.what}.` };
+    if (pv.state === "AUTO") return { confirm: `${W.cap(verb(e, true))} ${nm}?`, body: `${w.name} is in automatic mode. To ${verb(e, true)} ${nm} now, the program stops ${pn} ` +
+      `(anything running ends with a safe stop), switches ${pn} to Manual mode, then ${o.what}. Automatic operation of ${pn} stays off until you start it again on its page.`,
+      yes: `Stop automatic, switch to Manual mode and ${verb(e, true)}` };
+    return { confirm: `${W.cap(verb(e, true))} ${nm}?`, body: `${w.name} is stopped. To ${verb(e, true)} ${nm}, the program switches ${pn} to Manual mode, then ${o.what}. Nothing else changes.`,
+      yes: `Switch to Manual mode and ${verb(e, true)}` };
+  }
+  async function waitState(pid, ok, ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      const PR = await api("GET", "/api/processes");
+      if (ok(PR.processes[pid])) return true;
+      await new Promise(r => setTimeout(r, 400));
+    }
+    return false;
+  }
+  /** Sends the operation through the controller: stop (and wait for it), Manual mode, then the bounded operation. */
+  async function runAction(e, on, op) {
+    const pid = e.proc, w = W.proc(pid);
+    const pend = S.diagPend = { key: e.key, on, at: Date.now(), step: "Sending the request…", sent: [] };
+    const send = async (path, body, step) => { pend.step = step; U.refresh(); pend.sent.push(path); return api("POST", path, body); };
+    try {
+      if (S.stale) throw new Error("Connection stale: nothing was sent");
+      let PR = await api("GET", "/api/processes"), pv = PR.processes[pid];
+      if (!on) await send(`/api/processes/${pid}/state`, { target: "STOPPED" }, `Asking ${w.name.toLowerCase()} to stop…`);
+      else {
+        if (pv.state === "AUTO") {
+          await send(`/api/processes/${pid}/state`, { target: "STOPPED" }, `Stopping automatic ${w.name.toLowerCase()}…`);
+          if (!await waitState(pid, x => x.state === "STOPPED" && !x.stopping, 60000)) throw new Error(`${w.name} did not finish stopping within 60 s; nothing more was sent`);
+          pv = (await api("GET", "/api/processes")).processes[pid];
+        }
+        if (pv.state === "STOPPED") await send(`/api/processes/${pid}/state`, { target: "MANUAL" }, `Switching ${w.name.toLowerCase()} to Manual mode…`);
+        await send(`/api/processes/${pid}/manual`, { op }, "Sending the operation…");
+      }
+      pend.step = "sent"; pend.sentAt = Date.now();
+    } catch (err) {
+      pend.step = "refused"; pend.msg = W.refusal(String(err.message || err));
+      toast(`${e.name}: ${pend.msg}`, true);
+    }
+    U.refresh();
+  }
+  function pendingBox(P, PR, e) {
+    const p = S.diagPend;
+    if (!p || p.key !== e.key) return null;
+    const s = eqState(P, PR, e), pv = PR && PR.processes[e.proc], secs = Math.round((Date.now() - (p.sentAt || p.at)) / 1000);
+    const want = p.on ? "on" : "off", w = ST[want][e.kind];
+    let line, cls = "pending";
+    if (p.step === "refused") { line = `Refused: ${p.msg}`; cls = "error"; }
+    else if (p.step !== "sent") line = p.step;
+    else if (s.st === want) { line = `Reported: ${s.word.toLowerCase()} (${s.how || "its command"}), ${secs} s after the request.`; cls = "done"; }
+    else if (pv && pv.state === "FAULT_LOCKOUT") { line = `The controller stopped it: ${sentence(e.proc, pv, P)}`; cls = "error"; }
+    else if (secs < 30) line = `Request accepted by the controller. Waiting for the equipment to report ${w.toLowerCase()}… (${secs} s)`;
+    else { line = `No report from the equipment ${secs} s after the request. The program asked for it, but nothing confirms it is ${w.toLowerCase()}. See ${W.proc(e.proc).name} for the reason.`; cls = "warn-t"; }
+    return h("div", { class: "pend " + cls, role: "status", "aria-live": "polite", "data-pending": p.step === "sent" ? (cls === "done" ? "reported" : cls === "pending" ? "waiting" : "no-report") : p.step === "refused" ? "refused" : "sending" },
+      h("p", null, line), p.sent.length ? h("p", { class: "muted small" }, "Sent to the controller: ", p.sent.join(", ")) : null);
+  }
+  function equipPanel(P, PR, e, readOnly) {
+    const s = eqState(P, PR, e), pv = s.pv, w = W.proc(e.proc);
+    const rows = [["State", stPill(s)], ["Asked for", s.asked == null ? "not known" : ST[s.asked ? "on" : "off"][e.kind].toLowerCase()],
+      ["Reported", s.rep == null ? (s.stale ? "reading old or unavailable" : "nothing reports it yet") : `${ST[s.rep ? "on" : "off"][e.kind].toLowerCase()}, from ${s.how}`],
+      e.flow ? ["Water flow", obs(P, e.flow, 1)] : null, e.fault ? ["Drive fault", obs(P, e.fault, 0, ["FAULT", "none"])] : null,
+      pv ? ["Run by", h("span", null, h("a", { href: w.page }, w.name), " ", statePill(pv.state))] : null];
+    const kids = [h("h3", null, e.name), kvRows(rows)];
+    if (readOnly || !PR) kids.push(h("p", { class: "muted" }, "Real equipment, read only: nothing can be operated from this release."));
+    else if (!can("process_control")) kids.push(h("p", { class: "muted" }, "Operating equipment needs an operator or administrator account."));
+    else {
+      const on = !(s.asked === true || s.st === "on" || s.st === "down");
+      const form = S.diagForm && S.diagForm.key === e.key ? S.diagForm.v : {};
+      const o = on ? opOf(e, P, PR, form) : null, pl = plan(e, on, pv, o || {});
+      const label = `${W.cap(verb(e, on))} ${e.kind === "valve" ? "valve" : e.drive ? "drive" : "pump"}`;
+      const fields = on && o && !pl.refuse ? h("div", { class: "row" }, o.fields.map(([k, lab, opts, def]) => {
+        const cur = form[k] != null ? form[k] : def;
+        const inp = opts ? h("select", { "aria-label": lab }, opts.map(([x, t]) => h("option", { value: x, selected: x === cur }, t)))
+          : h("input", { type: "number", min: 0, step: "any", class: "w-num", value: cur == null ? "" : String(cur), placeholder: def == null ? "required" : null, "aria-label": lab });
+        inp.addEventListener("change", () => { S.diagForm = { key: e.key, v: { ...(S.diagForm && S.diagForm.key === e.key ? S.diagForm.v : {}), [k]: inp.value } }; });
+        return h("label", null, lab + (def != null && opts == null ? " (from the recipe in use)" : ""), inp);
+      })) : null;
+      const go = () => {
+        const op = on ? opOf(e, P, PR, S.diagForm && S.diagForm.key === e.key ? S.diagForm.v : {}).op : null;
+        if (op && Object.values(op).some(x => typeof x === "number" && !isFinite(x))) { toast("Set the amount first.", true); return; }
+        S.diagConfirm = null; runAction(e, on, op);
+      };
+      const conf = S.diagConfirm && S.diagConfirm.key === e.key && S.diagConfirm.on === on ? S.diagConfirm : null;
+      if (pl.refuse) kids.push(h("p", { class: "warn-t", "data-refusal": "" }, pl.refuse));
+      else if (conf) kids.push(h("div", { class: "confirm", role: "alertdialog", "aria-label": pl.confirm }, h("p", null, h("strong", null, pl.confirm)), h("p", null, pl.body), fields,
+        h("div", { class: "row" }, h("button", { class: "ghost", "data-act": "cancel", onclick: () => { S.diagConfirm = null; U.refresh(); } }, "Cancel"),
+          h("button", { class: on ? "" : "danger", "data-act": "confirm", onclick: go }, pl.yes))));
+      else kids.push(h("p", { class: "muted small" }, pl.direct ? pl.tell : `${W.cap(w.name)} is ${W.state(pv.state).toLowerCase()}: you will be asked to confirm first.`), pl.direct ? fields : null,
+        h("div", { class: "row" }, h("button", { class: "cmd" + (on ? "" : " danger"), "data-act": "equip", "data-on": on ? "1" : "0",
+          onclick: () => { if (pl.direct) go(); else { S.diagConfirm = { key: e.key, on }; U.refresh(); } } }, label)));
+    }
+    kids.push(pendingBox(P, PR, e));
+    kids.push(h("div", { class: "row" }, h("a", { href: e.page, onclick: () => { if (e.tab) S.stockTab = e.tab; } }, `Open ${pageName(e.page)}`),
+      historyLink(P, [e.cmd, e.fb, e.flow, e.run].filter(Boolean))));
+    return kids;
+  }
+  function sidePanel(P, PR, readOnly) {
+    const sel = S.diagSel;
+    let kids;
+    if (!sel) kids = [h("h3", null, "Nothing selected"), h("p", { class: "muted" }, "Select a pump, valve, tank, sensor or sector in the diagram to see its state and readings here",
+      readOnly ? "." : ", and to operate a pump or valve through its process.")];
+    else if (sel.type === "equip") { const e = equipment(P)[sel.key]; kids = e ? equipPanel(P, PR, e, readOnly) : [h("p", null, "Not in this layout.")]; }
+    else if (sel.type === "tank") {
+      const t = sel.key.slice(5), tr = trendOf(t), rate = levelRate(t), page = { MAIN: "#main-tank", SUMP: "#drainage" }[t] || "#nutrients";
+      const sw = Object.keys(P.signals).filter(n => n.startsWith(`tank.${t}.`) && n !== `tank.${t}.level`);
+      kids = [h("h3", null, W.TANK[t]), kvRows([["Water level", level(P, t)], ["Capacity", W.n0(P.layout.tanks_L[t]) + " L"],
+        ["Change", tr == null ? "not enough recent readings yet" : tr === "steady" ? "steady" : `${tr}, about ${W.n0(Math.abs(rate))} L/min (from the readings of the last 20 s)`],
+        ...sw.map(n => [W.signal(n).replace(W.TANK[t] + " ", "").replace(/^./, c => c.toUpperCase()), obs(P, n, 0, ["ACTIVE", "clear"])])]),
+        readingBox(P, `tank.${t}.level`), h("p", null, h("a", { href: page, onclick: () => { if (STOCK_OF[t]) S.stockTab = t; } }, `Open ${pageName(page)}`))];
+    } else if (sel.type === "sector") {
+      const id = sel.key.slice(7), e = equipment(P)["valve." + id];
+      kids = [h("h3", null, W.sectorName(id)), kvRows([["Valve", e ? stPill(eqState(P, PR, e)) : "—"], ["Water flow", obs(P, "flow." + id, 1)], ["Pressure", obs(P, "pressure." + id, 2)]]),
+        h("div", { class: "row" }, h("a", { href: "#sector-" + id }, `Open the ${W.sectorName(id)} page`), historyLink(P, ["flow." + id, "pressure." + id, `valve.${id}.open_limit`]))];
+    } else kids = [readingBox(P, sel.key), h("p", null, h("a", { href: pageFor(sel.key) }, `Open ${pageName(pageFor(sel.key))}`))];
+    return h("aside", { class: "side-panel", "aria-label": "Selected part of the diagram", "data-selected": sel ? sel.key : "" },
+      sel ? h("button", { class: "small ghost close", onclick: () => { S.diagSel = null; S.diagConfirm = null; U.refresh(); } }, "Close") : null, kids);
+  }
+  function pageFor(signal) {
+    const b = signal.split(".")[1] || "";
+    if (/^S\d+$/.test(b)) return "#sector-" + b;
+    if (signal.startsWith("main.") || b === "FILL_MAIN" || b === "MAIN") return "#main-tank";
+    if (b === "RETURN" || b === "SUMP") return "#drainage";
+    return "#nutrients";
+  }
+  /** The diagram with its side panel: the whole view of the Overview, the full diagram and the page diagrams. */
+  function diagramView(P, PR, opts) {
+    return h("div", { class: "diagram-layout" }, h("div", null, scrollHint(), h("div", { class: "diagram-wrap" }, diagram(P, opts, PR))), sidePanel(P, PR, opts && opts.readOnly));
+  }
 
   // ---------------------------------------------------------------- processes: state, start and stop
   function statePill(s) { return pill(W.state(s), s === "FAULT_LOCKOUT" ? "bad" : s === "AUTO" ? "ok" : s === "MANUAL" ? "warn" : ""); }
@@ -282,7 +634,7 @@
       sim && pb.simFault ? h("span", { class: "muted" }, " In the Digital Twin, a simulated fault is removed on the ", h("a", { href: "#twin" }, "Digital Twin"), " page.") : null,
       present ? h("span", { class: "warn-t" }, " The program still sees the problem.")
         : unseen ? h("span", { class: "muted", "data-check": "not-checkable" }, ` The program cannot check this while ${w.name.toLowerCase()} is stopped: `,
-          "it shows again only if it happens at the next start. Check ", pb.equipment ? pb.equipment.replace(/^./, c => c.toLowerCase()) : "the equipment", " yourself before clearing the stop.")
+          "it shows again only if it happens at the next start. Check ", pb.equipment ? "the " + pb.equipment.replace(/^./, c => c.toLowerCase()) : "the equipment", " yourself before clearing the stop.")
         : h("span", { class: "muted" }, " The program no longer sees the problem; check the equipment yourself before starting again.")));
     if (pv && pv.state === "FAULT_LOCKOUT") {
       const why = pv.fault_present ? "fault condition still present: " + pv.fault_present : pv.reset_blocker;   // the cause first, then the rest
@@ -471,7 +823,7 @@
       const meta = pid => { const e = pts.find(([, x]) => x.point === pid); return { kind: e[1].kind === "analog" ? "AI" : "DI", label: W.signal(e[0]) }; };
       const series = U.trendSeries(c.tr, pts.map(([, x]) => x.point), meta);
       const out = window.AqChart.render(svg, { series, events: c.tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: c.start, tEnd: c.end, timezone: S.tz });
-      leg.replaceChildren(...out.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
+      leg.replaceChildren(...out.map(l => h("span", null, h("span", { style: "color:" + l.color, "aria-hidden": "true" }, l.suspect ? "◌ " : "■ "), l.name)));
     };
     return [card, () => draw().catch(e => leg.replaceChildren(h("span", { class: "error" }, "Chart unavailable: " + (e.message || e))))];
   }
@@ -481,10 +833,10 @@
       : `Readings: from the Digital Twin (simulated, source ${S.status.twin ? S.status.twin.source : "?"}); ${P.mapping}.`;
   }
   /** The installation diagram with this page's parts highlighted: a secondary view, closed until opened (F-02). */
-  function pageDiagram(P, def) {
+  function pageDiagram(P, PR, def) {
     const d = h("details", { class: "card", open: S.pageDiagram === true },
       h("summary", null, h("strong", null, "Greenhouse diagram"), h("span", { class: "muted" }, " (the parts of this page are highlighted)")),
-      scrollHint(), h("div", { class: "diagram-wrap" }, diagram(P, { readOnly: P.read_only, focus: def.focus })),
+      diagramView(P, PR, { readOnly: P.read_only, focus: def.focus }),
       h("p", { class: "muted" }, provenance(P), " ", h("a", { href: "#diagram" }, "Open the full diagram")));
     d.addEventListener("toggle", () => { S.pageDiagram = d.open; });
     return d;
@@ -503,6 +855,7 @@
     const P = await api("GET", "/api/plant");
     S.plant = P; S.plantAt = Date.now();          // also the status line's main tank level
     const PR = P.read_only ? null : await api("GET", "/api/processes");
+    S.procs = PR; noteLevels(P);
     return [P, PR];
   }
   /** A process page: the main process's stop bar (narrow screens), the process cards with their state, Stop and
@@ -511,7 +864,7 @@
     const [tc, draw] = trendCard(P, def.trend);
     mount("v-plant", stopbar(PR, def.stops || [def.procs[0]]), PR ? top : noControl(P), problemsCard(P, PR, def), cards,
       tech ? h("details", { class: "card tech" }, h("summary", null, h("strong", null, "Technical details")), tech) : null,
-      pageDiagram(P, def), tc);
+      pageDiagram(P, PR, def), tc);
     await draw();
   }
   const fmtv = (x, unit) => x == null ? "not set" : `${W.n0(x)}${unit ? " " + unit : ""}`;
@@ -536,18 +889,30 @@
             h("span", { class: "muted" }, "Recipe in use: ", h("strong", null, PR.recipe.active || "none"), ". Automatic operation exists only in the Digital Twin in this release."))),
         h("div", { class: "card" }, h("h2", null, "Tanks"), table(["Tank", "Water level", ""], tanks)),
         problemsCard(P, PR, null)),
-      h("div", { class: "card" }, h("h2", null, "Greenhouse diagram"), scrollHint(), h("div", { class: "diagram-wrap" }, diagram(P, {})), legend(P),
+      sectorsCard(P, PR),
+      h("div", { class: "card", id: "overview-diagram" }, h("h2", null, "Greenhouse diagram"), diagramView(P, PR, {}), legend(P),
         h("p", null, h("a", { href: "#diagram" }, "Open the full diagram"))));
+  }
+  /** O-05: each sector's name, valve, readings and its page and history, always visible on the Overview. */
+  function sectorsCard(P, PR) {
+    const EQ = equipment(P);
+    return h("div", { class: "card", id: "overview-sectors" }, h("h2", null, "Sectors"), table(["Sector", "Valve", "Water flow", "Pressure", ""],
+      P.layout.sectors.map(s => { const id = s.sector_id, e = EQ["valve." + id];
+        return h("tr", { "data-sector": id }, h("td", null, h("strong", null, W.sectorName(id)), h("div", { class: "muted small" }, `channels ${s.channels[0]}–${s.channels[s.channels.length - 1]}`)),
+          h("td", null, e ? stPill(eqState(P, PR, e)) : "—"), h("td", null, obs(P, "flow." + id, 1)), h("td", null, obs(P, "pressure." + id, 2)),
+          h("td", null, h("a", { href: "#sector-" + id }, `Open ${W.sectorName(id)}`), " ", historyLink(P, ["flow." + id, "pressure." + id]))); })));
   }
   async function fullDiagram() {
     const P = await api("GET", "/api/plant");
-    mount("v-plant", h("div", { class: "card" }, h("h2", null, "Greenhouse diagram"), scrollHint(),
-      h("div", { class: "diagram-wrap full" }, diagram(P, { readOnly: P.read_only })), legend(P)));
+    const PR = P.read_only ? null : await api("GET", "/api/processes");
+    S.procs = PR; noteLevels(P);
+    mount("v-plant", h("div", { class: "card" }, h("h2", null, "Greenhouse diagram"), diagramView(P, PR, { readOnly: P.read_only }), legend(P)));
   }
   async function hwDiagram() {
     const P = await api("GET", "/api/plant");
-    return h("div", { class: "card" }, h("h2", null, "Installation (read-only)"), scrollHint(), h("div", { class: "diagram-wrap" }, diagram(P, { readOnly: true })), legend(P),
-      h("p", { class: "muted" }, "No process control exists on a hardware profile in this release. Each part opens its read-only page."));
+    noteLevels(P);
+    return h("div", { class: "card" }, h("h2", null, "Installation (read-only)"), diagramView(P, null, { readOnly: true }), legend(P),
+      h("p", { class: "muted" }, "No process control exists on a hardware profile in this release. Each part shows its readings; its page opens from there."));
   }
   const TANK_OF = { A: "tank A", B: "tank B", ACID: "the acid tank" };
   /** F-08: preparing a fertiliser or acid tank is a person's confirmation; the simulated fertiliser is added on the

@@ -52,7 +52,7 @@ When there are open problems, the line ends with a link such as `2 problems` tha
 
 Press **Details** at the end of the line to see the technical line, for example:
 
-`AquaCrop 0.3.3 · Profile SIMULATED · config installation-80@2026-10-13.80.1 · processes STOPPED · recipe demo-sim@v1 · twin RUN 1× · simulated time 0:00:01 since the run started · source TWIN · newest data 0.3 s old · site clock 2026-10-13 20:13:44 Atlantic/Canary`
+`AquaCrop 0.3.4 · Profile SIMULATED · config installation-80@2026-10-13.80.1 · processes STOPPED · recipe demo-sim@v1 · twin RUN 1× · simulated time 0:00:01 since the run started · source TWIN · newest data 0.3 s old · site clock 2026-10-13 20:13:44 Atlantic/Canary`
 
 - **simulated time** is the simulation clock since the current run started. At 10× it runs ten times
   faster than your watch.
@@ -67,7 +67,7 @@ Settings, card **Versions**:
 
 | Row | What it shows |
 |---|---|
-| Software | the installed package version (0.3.3) |
+| Software | the installed package version (0.3.4) |
 | Release | release version, source commit, build time, and a green **wheel verified** mark when the program installed on this PC is exactly the one in the release folder you started it from |
 | Config | `installation-80@2026-10-13.80.1 (SIMULATED)` |
 | Inventory | `6 modules: 16 AI + 32 DI + 32 DO = 80 points` |
@@ -112,15 +112,16 @@ A first-time or reset password must be changed before anything else works.
 
 ### Starting conditions: presets and DEMO values
 
-The Digital Twin page has a list called **Start condition (scenario)** in two groups. Choosing a
-preset shows what it does under the list.
+The Digital Twin page has a card called **Examples**: "These examples set up the simulated greenhouse so
+you can try different situations." Pick one under **Choose an example**. Under the list you see a
+one-sentence preview, what loading it does, and a **Details** panel with its id and UAT number.
 
-- **Owner tour presets (simulation only)**, names starting with `tour_`. They set synthetic starting
-  levels and start nothing: you press the buttons yourself.
-- **Scripted test scenarios (they run by themselves)**. They press buttons on a timer and are used by
-  the automated tests. The tour uses only `tour_ec_lost_at_valve_opening` of this kind.
+- **Set up a situation (nothing starts)**. These set synthetic starting levels and start nothing: you
+  press the buttons yourself. Their ids start with `tour_`.
+- **Run a situation (it starts by itself)**. These press buttons on a timer and are used by the
+  automated tests. The tour uses only **See a refill stop when EC is lost** of this kind.
 
-**Load scenario (new run)** and **Reset run** start a new simulation run: levels and the plant return
+**Load this example** and **Reset run** start a new simulation run: levels and the plant return
 to the start condition, every process is stopped, simulated faults and hand-set readings are cleared.
 History, accounts, recipes and tank confirmations are kept, and the speed stays as set.
 
@@ -131,11 +132,11 @@ is an approved recipe.
 | Where | DEMO value |
 |---|---|
 | Normal start (Reset run) | main tank 12,000 L, fertiliser tank A 3,000 L, fertiliser tank B 3,000 L, acid tank 2,000 L, drainage tank 1,200 L, main tank pH 6.1, EC 1.6 mS/cm |
-| `tour_low_main` | main tank 7,600 L (below the 8,000 L refill start level) |
-| `tour_ph_high` | main tank pH 6.8 (above the 6.0 target) |
-| `tour_sump_high` | drainage tank 2,700 L (above the 2,500 L return start) |
-| `tour_main_full_sump_high` | main tank 18,800 L, drainage tank 4,700 L (main tank above the 18,500 L hold level) |
-| `tour_ec_lost_at_valve_opening` | main tank 7,600 L, all tanks confirmed prepared, automatic refill switched on at 1 s, EC input forced to raw 0 at 13.5 s |
+| **Try refilling the main tank** (`tour_low_main`) | main tank 7,600 L (below the 8,000 L refill start level) |
+| **Try acid dosing** (`tour_ph_high`) | main tank pH 6.8 (above the 6.0 target) |
+| **Try returning drainage water** (`tour_sump_high`) | drainage tank 2,700 L (above the 2,500 L return start) |
+| **See the return wait for a full main tank** (`tour_main_full_sump_high`) | main tank 18,800 L, drainage tank 4,700 L (main tank above the 18,500 L hold level) |
+| **See a refill stop when EC is lost** (`tour_ec_lost_at_valve_opening`) | main tank 7,600 L, all tanks confirmed prepared, automatic refill switched on at 1 s, EC input forced to raw 0 at 13.5 s |
 | Recipe `demo-sim@v1` (DEMO_PRESET) | refill starts below 8,000 L, fills to 15,000 L, EC target 1.8 ± 0.1 mS/cm, A:B 1:1, 20 L A+B per step, at most 150 L A and 150 L B per refill, 300 L always kept in each fertiliser tank |
 | | watering: sector 1 300 s then sector 2 300 s; Run once at most 1,800 s |
 | | acid: pH target 6.0 ± 0.2, 2 L per dose, 600 s wait after a dose, at most 30 L per batch and 60 L per 24 h |
@@ -193,12 +194,12 @@ Expected:
 - Banner `SIMULATION — DEMO MODEL`.
 - Status line `Digital Twin · Watering stopped · Main tank 60% · Last reading 1 second ago` (the age
   may read a few seconds).
-- Details: the technical line starts `AquaCrop 0.3.3 · Profile SIMULATED · config installation-80@2026-10-13.80.1`.
-- Versions: Inventory `6 modules: 16 AI + 32 DI + 32 DO = 80 points`; Release shows `0.3.3`, a source
+- Details: the technical line starts `AquaCrop 0.3.4 · Profile SIMULATED · config installation-80@2026-10-13.80.1`.
+- Versions: Inventory `6 modules: 16 AI + 32 DI + 32 DO = 80 points`; Release shows `0.3.4`, a source
   commit, a build time and **wheel verified**; Data folder is `%LOCALAPPDATA%\AquaCrop\demo` (shown
   in full).
 
-Fail if: the banner says REAL, the version is not 0.3.3, the inventory is not 80 points, or Release
+Fail if: the banner says REAL, the version is not 0.3.4, the inventory is not 80 points, or Release
 shows MISMATCH (or "not started from a release folder" although you used `AquaCrop-Demo.cmd`).
 
 Return: nothing to undo.
@@ -211,7 +212,7 @@ Your result: record it in the result form, owner-tour/results.html.
 
 | | |
 |---|---|
-| Goal | The Overview diagram matches the installation and every part opens its page |
+| Goal | The Overview diagram matches the installation, and every part shows its state and opens its page |
 | Page | Overview, then each process page |
 | Role | any |
 | Start | normal start |
@@ -221,15 +222,18 @@ Your result: record it in the result form, owner-tour/results.html.
 
 Steps:
 1. Open **Overview** and scroll to the card **Greenhouse diagram**.
-2. Click, in turn: the tank **Fertiliser A**, the **Main tank**, the pump **MP1** (main pump 1), the
-   box **Sector 1**, the box **Sector 2** and the **Drainage tank**. Use the browser's Back button
-   between clicks. Hovering over a part names it, for example "Main pump 1 (selector K1): …".
+2. Click, in turn: the tank **Fertiliser A**, the **Main tank**, the pump **Main pump 1**, the box
+   **Sector 1**, the box **Sector 2** and the **Drainage tank**. Each click selects the part and shows
+   it in the panel beside the diagram (below it on a narrow screen). In the panel, press the link
+   **Open …** and then use the browser's Back button. Hovering over a part names it with its state.
 3. On **Main tank**, in the card **Main tank (20,000 L)**, read the rows **Water level** and
    **Acidity (pH)**.
 
 Expected:
-- The clicks open **Nutrients & acid**, **Main tank**, **Watering**, **Sector 1**, **Sector 2** and
-  **Drainage return**.
+- The panel names the part. For a tank or a sensor it shows a new reading with its value, unit, time
+  and validity. For a pump or a valve it shows the state asked for and the state reported.
+- The **Open …** links open **Nutrients & acid**, **Main tank**, **Watering**, **Sector 1**,
+  **Sector 2** and **Drainage return**.
 - Water level reads `12,000 L Reading valid 1 second ago`: value, unit, quality and age. Other
   readings show value, unit and age (for example `6.1 pH 1 second ago`); hovering over the value shows
   where it comes from and `Reading valid`. A reading that is not valid always shows its quality in
@@ -237,7 +241,9 @@ Expected:
 - The diagram shows 2 main pumps on one shared pump drive, 2 return pumps, 3 tanks (Fertiliser A,
   Fertiliser B, Acid) with transfer pumps, sector 1 with channels 1 to 6 and sector 2 with channels 7
   to 13. There is no stirrer or air pump.
-- What the program asked for (outline) is drawn apart from what the equipment reports (fill).
+- Each pump and valve shows one state in words and colour: stopped or closed, running or open,
+  starting or opening, stopping or closing, fault, or not known. The legend under the diagram explains
+  them. Water moves and arrows show the flow direction only where a reading reports flow.
 
 Fail if: a part opens the wrong page or nothing, a value lacks its unit, quality or age, or the layout
 differs from the installation.
@@ -392,7 +398,7 @@ Your result: record it in the result form, owner-tour/results.html.
 | Page | Digital Twin; Nutrients & acid; Main tank; Recipes |
 | Role | admin |
 | Start | `demo-sim@v1` in use |
-| Load | Digital Twin, preset **`tour_low_main`**, **Load scenario (new run)** |
+| Load | Digital Twin, example **Try refilling the main tank**, **Load this example** |
 | Speed | 60× |
 | Duration | 10 min |
 
@@ -416,7 +422,7 @@ Steps:
    settings: timing and tolerances** and set **Wait after adding nutrients before checking EC**
    **600**. Press **Check settings**; on the row `tour-fixed@v1` open **Use these settings**, type
    why and press **Use these settings**. Press **Discard changes**.
-7. Load **`tour_low_main`** again, press **Switch on automatic refill** on **Main tank**, press
+7. Load **Try refilling the main tank** again, press **Switch on automatic refill** on **Main tank**, press
    **60×**, wait for the refill to end.
 8. Press **Stop refill**, then on **Recipes** use **Restore previous settings** with a reason.
 
@@ -481,7 +487,7 @@ Your result: record it in the result form, owner-tour/results.html.
 | Page | Nutrients & acid (tab Acid tank); I/O test bench |
 | Role | admin |
 | Start | `demo-sim@v1` in use |
-| Load | Digital Twin, preset **`tour_ph_high`**, **Load scenario (new run)** |
+| Load | Digital Twin, example **Try acid dosing**, **Load this example** |
 | Speed | 60× |
 | Duration | 6 min |
 
@@ -524,18 +530,18 @@ Your result: record it in the result form, owner-tour/results.html.
 | Page | Drainage return; Watering; Overview |
 | Role | operator or admin |
 | Start | `demo-sim@v1` in use |
-| Load | preset **`tour_sump_high`**, later preset **`tour_main_full_sump_high`** |
+| Load | example **Try returning drainage water**, later example **See the return wait for a full main tank** |
 | Speed | 60×, then 1× |
 | Duration | 6 min |
 
 Steps:
-1. Load **`tour_sump_high`**. **Drainage return**, card **Drainage return**, press **Switch on
+1. Load **Try returning drainage water**. **Drainage return**, card **Drainage return**, press **Switch on
    automatic return**.
 2. **Watering**, press **Start automatic watering** (water drains from the sectors into the drainage
    tank). Press **60×**.
 3. Watch **Drainage return** until two runs are listed under **Technical details**, **Recent runs**.
 4. **Overview**, press **Stop all processes**. Press **1×**.
-5. Load **`tour_main_full_sump_high`**. **Drainage return**, press **Switch on automatic return**.
+5. Load **See the return wait for a full main tank**. **Drainage return**, press **Switch on automatic return**.
 
 Expected:
 - Step 3: the first run uses return pump 1 (RP1) and the next return pump 2 (RP2).
@@ -610,7 +616,7 @@ Your result: record it in the result form, owner-tour/results.html.
 | Page | I/O test bench; Main tank; Digital Twin; Nutrients & acid; Alarms & events |
 | Role | admin |
 | Start | `demo-sim@v1` in use |
-| Load | **Reset run** for parts 1 to 3; preset **`tour_ec_lost_at_valve_opening`** for part 4 |
+| Load | **Reset run** for parts 1 to 3; example **See a refill stop when EC is lost** for part 4 |
 | Speed | 10×, then 1× |
 | Duration | 8 min |
 
@@ -622,7 +628,7 @@ Steps:
    Read the quality of the `analog_B` and `analog_A` points. Press **Restore**.
 3. **Old readings.** **Reset run**. Digital Twin, press **Stall acquisition**; wait 5 s and open
    **Overview**. Then on Digital Twin press **Resume acquisition**.
-4. **EC lost at valve opening.** Press **1×**. Load **`tour_ec_lost_at_valve_opening`** (it presses its
+4. **EC lost at valve opening.** Press **1×**. Load **See a refill stop when EC is lost** (it presses its
    own buttons). Wait 20 s. Open **Nutrients & acid**, then **Alarms & events** and open **Commands
    sent to the equipment (including refused ones)** and **Event log (newest first)**. On I/O test
    bench press **Clear** on `analog_A.AI7` and wait 60 s.

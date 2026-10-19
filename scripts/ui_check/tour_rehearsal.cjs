@@ -139,7 +139,7 @@ const proc = async (p, pid) => (await procs(p))[pid];
 async function twinPreset(p, name) {
   await show(p, "twin");
   await p.selectOption("#scn", name);
-  await viewButton(p, "Load scenario (new run)");
+  await viewButton(p, "Load this example");
   await until(p, async () => (await get(p, "/api/status")).twin.scenario === name, 15000);
   await p.waitForTimeout(800);
 }
@@ -255,14 +255,22 @@ CASES["UAT-01"] = async (p) => {
 };
 
 CASES["UAT-02"] = async (p) => {
-  const targets = [["Fertiliser A", "nutrients"], ["Main tank", "main-tank"], ["Main pump 1 (selector K1)", "main-pumps"], ["Sector 1", "sector-S1"],
-    ["Sector 2", "sector-S2"], ["Drainage tank", "drainage"]];
-  for (const [label, view] of targets) {
+  // 0.3.4 (O-04): a click selects the part and shows its panel; the panel's "Open ..." link opens its page
+  const targets = [["tank.A", "nutrients"], ["tank.MAIN", "main-tank"], ["pump.MP1", "main-pumps"], ["sector.S1", "sector-S1"],
+    ["sector.S2", "sector-S2"], ["tank.SUMP", "drainage"]];
+  for (const [key, view] of targets) {
     await show(p, "overview");
-    await p.locator(`section.view:not(.hidden) svg.diagram g.hot[aria-label^="${label}:"]`).first().click();
-    const ok = await until(p, () => p.evaluate(v => location.hash === "#" + v && window.AqUI.S.rendered === v, view), 8000);
+    const part = p.locator(`section.view:not(.hidden) svg.diagram g.hot[data-key="${key}"]`).first();
+    const label = await part.getAttribute("aria-label");
+    await part.click();
+    const panel = p.locator(`section.view:not(.hidden) aside.side-panel[data-selected="${key}"]`);
+    const sel = await until(p, async () => (await panel.count()) > 0, 5000);
+    const link = panel.locator(`a[href="#${view}"]`).first();
+    const linkText = sel && (await link.count()) ? (await link.innerText()).trim() : "";
+    if (linkText) await link.click();
+    const ok = sel && !!linkText && await until(p, () => p.evaluate(v => location.hash === "#" + v && window.AqUI.S.rendered === v, view), 8000);
     await p.waitForTimeout(500);
-    check(`diagram part "${label}" opens ${view}`, ok, ok ? "opened" : await p.evaluate(() => location.hash));
+    check(`diagram part "${label.split(":")[0]}" is selected and its panel opens ${view}`, ok, ok ? `"${linkText}" opened` : `selected ${sel}, link "${linkText}", at ${await p.evaluate(() => location.hash)}`);
     await shot(p, `UAT-02-${view}`);
   }
   await show(p, "main-tank");

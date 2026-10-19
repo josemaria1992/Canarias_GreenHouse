@@ -3,7 +3,8 @@
 Issues found by Claude while preparing and rehearsing the owner tour of 0.3.2 (`../walkthrough.md`), all
 fixed in 0.3.2 before the owner's first run. Each keeps its ID if it comes back. Owner findings have
 their own IDs (F-01, F-02, …); the first nine, from the owner's first-time-operator review of 0.3.2, are
-listed at the end with what 0.3.3 changed for each.
+listed after them with what 0.3.3 changed for each. The owner feedback on 0.3.3 (O-01 to O-05) and the
+reviewer's corrections (R33-01 to R33-03) are listed last, with what 0.3.4 changed.
 
 "Repeat" names the owner cases to run again after a fix. All owner results are NOT RUN, so nothing needs
 repeating yet; the column says what a later fix to the same area would affect.
@@ -52,3 +53,23 @@ it is fixed. The owner's acceptance results stay NOT RUN until the owner runs th
 Also added: Getting started in the app (four pictured tasks for a first-time operator) and
 `owner-tour/results.html`, which saves results only when Download results is pressed and keeps a
 first-time operator's tasks apart from the owner's cases.
+
+## Owner feedback on 0.3.3 and the reviewer's corrections (2026-10-19)
+
+O-01 to O-05 are the owner's own feedback after looking at 0.3.3. They are not tour results. R33-01 to
+R33-03 are the external reviewer's corrections to 0.3.3. 0.3.4 answers each as below; the owner and the
+reviewer decide whether it is fixed. The 16 owner results stay NOT RUN.
+
+| ID | Feedback | What 0.3.4 changes | Repeat |
+|---|---|---|---|
+| O-01 | Blue text is hard to read | Links and link buttons are white on green, with a darker green on hover and when selected, and a yellow focus ring. Origin badges are white on their colour. Only water keeps a water colour | all |
+| O-02 | Equipment graphics | One diagram drawn in the direction the water goes, with symbols for valves, pumps and sensors. Moving water and arrows only where a reading reports flow; dashed where a route is asked for without measured flow; dotted where the flow reading is old. Tanks show their level, percent and ▲ rising or ▼ falling from the last 20 s of readings. Pumps and valves show Stopped/Closed, Running/Open, Starting/Opening, Stopping/Closing, Fault or Not known, in words and colour, the same on every page. The animation follows readings, never commands | UAT-02, UAT-03, UAT-06 |
+| O-03 | Digital Twin examples | Card **Examples** with the explanation, **Choose an example**, plain names in two groups (nothing starts / it starts by itself), a one-sentence preview, what loading resets and whether anything starts, and **Load this example**. Ids, UAT numbers and the technical description under Details | UAT-06, UAT-08, UAT-09, UAT-11 |
+| O-04 | Operate from the diagram | A click selects the part and shows it beside the diagram. A pump or valve is operated through the process that owns it, with that process's bounded one-time operation; nothing is switched directly. In Manual mode the action goes straight through. When the process is Stopped or Automatic, a confirmation first names the equipment and the effect and says that it switches to Manual mode; Cancel changes nothing. The panel shows the request being sent, then what the equipment reports, or the controller's refusal in words. A sensor or tank asks for the next acquired reading and shows its value, unit, time and validity; without a new one in 3 seconds it shows the newest with its real age. Links to the page and to History stay. Real equipment profiles stay read only | UAT-02, UAT-03, UAT-04 |
+| O-05 | Sector data out of sight | The Overview has a **Sectors** card with each sector's valve, flow and pressure, **Open Sector N** and the history of its readings | UAT-03 |
+| R33-01 | The pinned Stop on Nutrients & acid did not follow the selected tank tab | The pinned bar follows the selected tank tab: refill or acid dosing plus that tank's fertiliser or acid fill, each with its own Stop | UAT-07, UAT-08 |
+| R33-02 | Some recipe errors did not reach their field | A wrong kind of value (for example 1.5 for a count, text for a number, a name with spaces as the id) comes back beside its field, nothing is saved, and the count field accepts whole numbers only | UAT-05, UAT-06 |
+| R33-03 | After a fault the reset checks cannot see, the page said the problem was gone | For a valve that did not open, the page says the program cannot check it while the process is stopped and asks you to check the valve yourself. A drive fault, which the program can see, still says "still sees" or "no longer sees" | UAT-10 |
+
+EC keeps the name **Nutrient strength (EC)**. Its help now says that EC is electrical conductivity, that
+dissolved salts raise it, and that it is not a direct measure of how much fertiliser is in the water.

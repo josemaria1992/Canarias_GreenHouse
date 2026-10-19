@@ -89,6 +89,7 @@ async function tabTo(p, name, max = 300) {
 const RAW_LABELS = /^(AUTO|MANUAL|STOP|Ack|Reset|Reset lockout|Acknowledge prepared|Validate|Activate|Roll back.*|Export CSV|Twin: prepare.*)$/;
 
 async function main() {
+  if (process.env.AQ_ONLY === "0.3.4") { const b0 = await launch(); return o34(b0); }   // only the 0.3.4 checks (for working on them)
   const b = await launch();
   const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, acceptDownloads: true });
   const p = await ctx.newPage();
@@ -178,21 +179,28 @@ async function main() {
   // UI-02: the diagram is clickable (mouse and keyboard), labelled, with units and age
   await show(p, "overview");
   const hot = await p.$$eval("#v-overview svg.diagram g.hot", gs => gs.map(g => [g.getAttribute("role"), g.getAttribute("aria-label"), g.getAttribute("tabindex")]));
-  check("UI-02 diagram parts", hot.length >= 25 && hot.every(([r, l, t]) => r === "link" && l && t === "0"), `${hot.length} clickable parts, all role=link with labels`);
+  check("UI-02 diagram parts", hot.length >= 40 && hot.every(([r, l, t]) => r === "button" && l && t === "0"), `${hot.length} parts (equipment, tanks, sensors, sectors) that can be selected, all buttons with labels`);
   const svgText = await p.$eval("#v-overview svg.diagram", s => s.textContent);
   check("UI-02 units", ["L", "pH", "mS/cm", "L/min", "bar"].every(u => svgText.includes(u)) && /\d+ seconds? ago/.test(svgText),
     "litres, pH, mS/cm, L/min, bar and the age of the readings on the diagram");
-  const labels = hot.map(x => x[1]).join(" | ");
-  check("UI-02 requested vs observed", /asked .*reports/.test(labels) && /no position signal/.test(labels),
-    "pump labels give what was asked and what it reports; valves without a position signal say so");
+  await p.locator('#v-overview svg.diagram g.hot[data-key="pump.TP_A"]').click();
+  const pumpPanel = await until(p, async () => { const t = await p.locator("#v-overview aside.side-panel").innerText(); return /Transfer pump/.test(t) && t; }, 5000);
+  await p.locator('#v-overview svg.diagram g.hot[data-key="valve.OUT_A"]').click();
+  const valvePanel = await until(p, async () => { const t = await p.locator("#v-overview aside.side-panel").innerText(); return /Outlet valve/.test(t) && t; }, 5000);
+  check("UI-02 requested vs observed", /Asked for\s+stopped/.test(pumpPanel || "") && /Reported\s+stopped, from its running signal/.test(pumpPanel || "") &&
+    /no position signal/.test(valvePanel || ""), "a pump's panel gives what was asked and what it reports; a valve without a position signal says so");
   check("UI-02 no installed-probe or mixer claim", svgText.includes("probe position proposed, not installed") &&
     svgText.includes("No stirrer or air pump") && !/(agitator|mixer|stirrer)\s+(on|running|installed)/i.test(svgText), "probe and mixing notes present");
-  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Sector 2"]').click();
-  check("UI-02 click-through", await until(p, () => p.evaluate(() => location.hash === "#sector-S2")), "the Sector 2 box opens #sector-S2");
+  await p.locator('#v-overview svg.diagram g.hot[data-key="sector.S2"]').click();
+  await p.locator("#v-overview aside.side-panel a", { hasText: "Open the Sector 2 page" }).click();
+  check("UI-02 click-through", await until(p, () => p.evaluate(() => location.hash === "#sector-S2")), "the Sector 2 box shows Sector 2 beside the diagram; its link opens #sector-S2");
   await show(p, "overview");
-  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Main tank:"]').focus();
+  await p.locator('#v-overview svg.diagram g.hot[data-key="tank.MAIN"]').focus();
   await p.keyboard.press("Enter");
-  check("UI-02 keyboard", await until(p, () => p.evaluate(() => location.hash === "#main-tank")), "Enter on the main tank opens #main-tank");
+  const kb = await until(p, async () => { const t = await p.locator("#v-overview aside.side-panel").innerText(); return /Main tank/.test(t) && /Measured at/.test(t) && t; }, 8000);
+  await p.locator("#v-overview aside.side-panel a", { hasText: "Open Main tank" }).focus();
+  await p.keyboard.press("Enter");
+  check("UI-02 keyboard", !!kb && await until(p, () => p.evaluate(() => location.hash === "#main-tank")), "Enter on the main tank shows its level reading beside the diagram; Enter on its link opens #main-tank");
 
   // F-04: the recipe editor names every field, shows only the chosen ways' fields, and keeps typed input on errors
   await show(p, "recipes");
@@ -458,7 +466,344 @@ async function main() {
     await vc.close();
   }
   check("UI page errors", errs.length === 0 && verrs.length === 0, errs.concat(verrs).join("; ") || "none");
+  await o34(b);
   await b.close();
+}
+
+// ------------------------------------------------------------------------------------------------ 0.3.4
+// Owner feedback O-01 to O-05 and the reviewer's corrections R33-01 to R33-03 (simulation only).
+const BLUE = c => { const m = /rgba?\((\d+), (\d+), (\d+)/.exec(c); if (!m) return false; const [r, g, bl] = m.slice(1).map(Number); return bl > r + 40 && bl > g + 20; };
+async function textColours(q) {
+  return q.evaluate(() => {
+    const out = { blue: [], links: [], n: 0 };
+    const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== "hidden"; };
+    for (const e of document.querySelectorAll("body *")) {
+      if (!vis(e) || e.closest("svg") || e.closest(".banner")) continue;
+      const own = [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+      if (!own) continue;
+      out.n++;
+      const c = getComputedStyle(e).color, m = /rgba?\((\d+), (\d+), (\d+)/.exec(c);
+      if (m) { const [r, g, b] = m.slice(1).map(Number); if (b > r + 40 && b > g + 20 && !e.closest("[aria-hidden=true]")) out.blue.push(e.tagName + ":" + e.textContent.trim().slice(0, 30) + " " + c); }
+      if (e.matches("a:not(.button):not(nav a)")) out.links.push(c);
+    }
+    return out;
+  });
+}
+const sentPosts = q => { const xs = []; q.on("request", r => { if (r.method() === "POST" && /\/api\/(processes|twin\/scenario)/.test(r.url())) xs.push(r.url().replace(/^https?:\/\/[^/]+/, "")); }); return xs; };
+const panel = q => q.locator("section.view:not(.hidden) aside.side-panel");
+async function pick(q, key) {
+  await q.locator(`section.view:not(.hidden) svg.diagram g.hot[data-key="${key}"]`).first().click();
+  await until(q, () => q.evaluate(k => { const a = document.querySelector("section.view:not(.hidden) aside.side-panel"); return a && a.dataset.selected === k; }, key), 5000);
+}
+const panelText = q => panel(q).innerText();
+// a phone shows the diagram at a readable size, scrolled sideways inside its card: bring the part to show into view
+async function phoneDiagram(q, across) {
+  await q.evaluate(f => { const w = document.querySelector("#overview-diagram .diagram-wrap"); w.scrollIntoView({ block: "start" }); window.scrollBy(0, -40);
+    w.scrollLeft = (w.scrollWidth - w.clientWidth) * f; }, across);
+  await q.waitForTimeout(1200);
+}
+async function stopAll(q) {
+  await api(q, "/api/processes/stop-all", "POST", { reason: "ui check 0.3.4" });
+  await until(q, async () => Object.values(await procs(q)).every(x => x.state === "STOPPED" && !x.stopping), 60000);
+}
+async function o34(b) {
+  const ctx0 = { p: null };
+  try { await o34run(b, ctx0); } catch (e) { if (ctx0.p) { await shot(ctx0.p, "o34-error").catch(() => {}); console.log("PANEL", await ctx0.p.locator("aside.side-panel").first().innerText().catch(() => "")); } throw e; }
+}
+async function o34run(b, ctx0) {
+  const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, colorScheme: "dark" });
+  const p = ctx0.p = await ctx.newPage();
+  const errs = watchErrors(p), posts = sentPosts(p);
+  await login(p, USER, PASS);
+  await stopAll(p);
+  await api(p, "/api/twin/control", "POST", { action: "reset" });
+  await api(p, "/api/twin/control", "POST", { action: "speed", speed: 1 });
+  await p.waitForTimeout(1500);
+
+  // O-01: no blue text; every link white on dark green, also hovered and focused, in both colour schemes
+  const col = [];
+  for (const scheme of ["dark", "light"]) {
+    await p.emulateMedia({ colorScheme: scheme });
+    for (const v of ["overview", "nutrients", "twin", "history", "alarms", "main-pumps"]) {
+      await show(p, v);
+      const t = await textColours(p);
+      col.push(`${scheme} ${v}: ${t.n} texts, ${t.blue.length} blue, links ${[...new Set(t.links)].join("/") || "none"}`);
+      if (t.blue.length || t.links.some(c => c !== "rgb(255, 255, 255)")) col.push("BAD " + t.blue.slice(0, 3).join("; "));
+    }
+  }
+  await p.emulateMedia({ colorScheme: "dark" });
+  await show(p, "overview");
+  const link = p.locator("section.view:not(.hidden) a", { hasText: "All alarms and events" }).first();
+  await link.hover();
+  const hov = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).backgroundColor]);
+  await link.focus(); await p.keyboard.press("Shift+Tab"); await p.keyboard.press("Tab");
+  const foc = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).outlineColor, getComputedStyle(a).outlineStyle]);
+  check("O-01 white text instead of blue", !col.some(x => x.startsWith("BAD")) && hov[0] === "rgb(255, 255, 255)" && !BLUE(hov[1]) && foc[0] === "rgb(255, 255, 255)" && foc[2] !== "none",
+    col.join(" · ") + ` · hover ${hov.join(" on ")} · focus ${foc.join(", ")}`);
+
+  // O-02 / O-04 in Manual mode: the Sector 1 valve from the diagram, through the controller
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "MANUAL" });
+  await until(p, async () => (await procs(p)).IRRIGATION.state === "MANUAL", 8000);
+  await show(p, "overview");
+  await pick(p, "valve.S1");
+  const t0 = await panelText(p);
+  posts.length = 0;
+  await panel(p).locator('button[data-act="equip"]').click();
+  const rep = await until(p, async () => (await panel(p).locator('[data-pending="reported"]').count()) > 0, 40000);
+  const pm = await procs(p), m1 = [...posts];
+  await until(p, async () => (await p.locator('section.view:not(.hidden) svg.diagram path.pipe.flow').count()) >= 3, 15000);
+  await p.waitForTimeout(6000);                           // the level's change needs a few readings
+  const route = await p.evaluate(() => [...document.querySelectorAll("section.view:not(.hidden) svg.diagram path.pipe.flow")].map(x => x.getAttribute("d")));
+  const trend = await p.evaluate(() => (document.querySelector('section.view:not(.hidden) svg.diagram [data-trend]') || {}).textContent || "");
+  const pt1 = await panelText(p);
+  await shot(p, "o02-watering-route-desktop-dark");
+  const pc = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+  const q = await pc.newPage();
+  await login(q, USER, PASS);
+  await show(q, "overview");
+  await phoneDiagram(q, 1);
+  await shot(q, "o02-watering-route-phone-dark", false);
+  check("O-04 Manual mode: open a valve from the diagram", /Opening this|In Manual mode/.test(t0) && rep && m1.length === 1 && m1[0] === "/api/processes/IRRIGATION/manual" &&
+    pm.IRRIGATION.manual_op && pm.IRRIGATION.manual_op.op.sector === "S1" && /Reported: open \(its open signal\)/.test(pt1),
+    `no confirmation in Manual mode; sent ${m1.join(", ")}; the controller runs ${JSON.stringify(pm.IRRIGATION.manual_op && pm.IRRIGATION.manual_op.op)}; panel: "${(pt1.match(/Reported:[^\n]*/) || [""])[0]}"`);
+  check("O-02 the active watering route and a falling main tank", route.some(d => d.startsWith("M660 410 H700 V290")) && route.some(d => d.startsWith("M776 290 H830 V200")) &&
+    route.some(d => d.startsWith("M893 200")) && /falling/.test(trend),
+    `${route.length} pipes with measured flow: main tank to main pump 1 to the Sector 1 valve to Sector 1; main tank "${trend}"`);
+  posts.length = 0;
+  await panel(p).locator('button[data-act="equip"]').click();
+  const closed = await until(p, async () => { const x = (await procs(p)).IRRIGATION; return x.state === "STOPPED" && !x.stopping && (await panel(p).locator('[data-pending="reported"]').count()) > 0; }, 40000);
+  const m2 = [...posts], pt2 = await panelText(p);
+  check("O-04 Manual mode: close it again", closed && m2.length === 1 && m2[0] === "/api/processes/IRRIGATION/state" && /Reported: closed/.test(pt2),
+    `sent ${m2.join(", ")} (stop); watering now STOPPED; panel: "${(pt2.match(/Reported:[^\n]*/) || [""])[0]}"`);
+
+  // O-04 in automatic mode: a confirmation that names the equipment and the effect; Cancel sends nothing
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "AUTO" });
+  await until(p, async () => { const x = (await procs(p)).IRRIGATION; return x.phase === "IRRIGATE" && x.pump === "MP1"; }, 40000);
+  await show(p, "overview");
+  await pick(p, "pump.MP1");
+  posts.length = 0;
+  await panel(p).locator('button[data-act="equip"]').click();
+  const cq = await until(p, async () => (await panel(p).locator('[role="alertdialog"]').count()) > 0 && panel(p).locator('[role="alertdialog"]').innerText(), 5000);
+  await shot(p, "o04-confirm-auto-stop");
+  await panel(p).locator('button[data-act="cancel"]').click();
+  await p.waitForTimeout(2500);
+  const afterCancel = (await procs(p)).IRRIGATION, cancelPosts = [...posts];
+  check("O-04 Automatic mode: confirmation, and Cancel changes nothing", /Stop Main pump 1\?/.test(cq || "") && /Watering is in automatic mode/.test(cq || "") && /stays stopped until you start it again/.test(cq || "") &&
+    cancelPosts.length === 0 && afterCancel.state === "AUTO" && afterCancel.phase === "IRRIGATE",
+    `"${(cq || "").replace(/\s+/g, " ").slice(0, 200)}"; after Cancel nothing was sent and watering is still ${afterCancel.state} / ${afterCancel.phase}`);
+  await panel(p).locator('button[data-act="equip"]').click();
+  await panel(p).locator('button[data-act="confirm"]').click();
+  const stoppedA = await until(p, async () => { const x = (await procs(p)).IRRIGATION; return x.state === "STOPPED" && !x.stopping && (await panel(p).locator('[data-pending="reported"]').count()) > 0; }, 40000);
+  const m3 = [...posts], pt3 = await panelText(p);
+  check("O-04 Automatic mode: confirmed stop of a pump", stoppedA && m3.length === 1 && m3[0] === "/api/processes/IRRIGATION/state" && /Reported: stopped/.test(pt3),
+    `sent ${m3.join(", ")}; watering STOPPED; panel "${(pt3.match(/Reported:[^\n]*/) || [""])[0]}"`);
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "AUTO" });
+  await until(p, async () => (await procs(p)).IRRIGATION.phase === "IRRIGATE", 40000);
+  await show(p, "overview");
+  await pick(p, "valve.S2");
+  posts.length = 0;
+  await panel(p).locator('button[data-act="equip"]').click();
+  const cq2 = await until(p, async () => (await panel(p).locator('[role="alertdialog"]').count()) > 0 && panel(p).locator('[role="alertdialog"]').innerText(), 5000);
+  await panel(p).locator('button[data-act="confirm"]').click();
+  const opened2 = await until(p, async () => (await panel(p).locator('[data-pending="reported"]').count()) > 0, 90000);
+  const pm4 = await procs(p), m4 = [...posts];
+  check("O-04 Automatic mode: the switch to Manual mode is stated and done by the controller", /switches watering to Manual mode/.test(cq2 || "") && /Automatic operation of watering stays off/.test(cq2 || "") &&
+    opened2 && JSON.stringify(m4) === JSON.stringify(["/api/processes/IRRIGATION/state", "/api/processes/IRRIGATION/state", "/api/processes/IRRIGATION/manual"]) &&
+    pm4.IRRIGATION.state === "MANUAL" && pm4.IRRIGATION.manual_op && pm4.IRRIGATION.manual_op.op.sector === "S2",
+    `confirmation "${(cq2 || "").replace(/\s+/g, " ").slice(0, 160)}…"; sent ${m4.join(", ")} (stop, Manual mode, run once); controller: ${pm4.IRRIGATION.state} running ${JSON.stringify(pm4.IRRIGATION.manual_op && pm4.IRRIGATION.manual_op.op)}`);
+  await pick(p, "pump.MP1");
+  const refuse = await panel(p).locator("[data-refusal]").innerText().catch(() => "");
+  check("O-04 a request that cannot be done is explained", /already running once/.test(refuse), `main pump 1 while Sector 2 is watered once: "${refuse}"`);
+  await stopAll(p);
+  // a refusal by the controller itself, in plain words
+  await show(p, "overview");
+  await pick(p, "pump.RP1");
+  await panel(p).locator('button[data-act="equip"]').click();
+  await panel(p).locator('[role="alertdialog"]').waitFor({ timeout: 8000 });
+  await panel(p).locator('input[aria-label="Run time (s)"]').fill("99999");
+  await panel(p).locator('input[aria-label="Run time (s)"]').dispatchEvent("change");
+  await panel(p).locator('button[data-act="confirm"]').click();
+  const refused = await until(p, async () => (await panel(p).locator('[data-pending="refused"]').count()) > 0 && panel(p).locator('[data-pending="refused"]').innerText(), 20000);
+  check("O-04 a refusal by the controller is shown in plain words", !!refused && !/[a-z_]+\.[a-z_]+|MANUAL|duration_s/.test(refused.split("\n")[0]),
+    `return pump 1 for 99,999 s: "${(refused || "").split("\n")[0]}"`);
+  await stopAll(p);
+
+  // O-04 sensors: the reading shown is the one acquired after the click; without a new one, its real age
+  await show(p, "overview");
+  const rd = p.waitForResponse(r => r.url().includes("/api/plant/reading?signal=main.ph"));
+  await pick(p, "main.ph");
+  const body = await (await rd).json();
+  await until(p, async () => (await panel(p).locator('[data-reading="fresh"]').count()) > 0, 8000);
+  const shown = await panel(p).locator("[data-acquired]").getAttribute("data-acquired");
+  const sTxt = await panelText(p);
+  check("O-04 a sensor click asks for a new reading and shows its own time", body.fresh && shown === body.sample.acquired_utc && Date.parse(shown) > Date.parse(body.requested_utc) &&
+    /New reading, taken after you asked/.test(sTxt) && /Measured at/.test(sTxt) && /Validity\s+Reading valid/.test(sTxt) && /pH/.test(sTxt),
+    `asked ${body.requested_utc}, acquired ${body.sample.acquired_utc} (shown ${shown}): ${body.sample.value} ${body.sample.unit}, ${body.sample.quality}`);
+  await api(p, "/api/twin/control", "POST", { action: "acq_stall" });
+  await p.waitForTimeout(1500);
+  const rd2 = p.waitForResponse(r => r.url().includes("/api/plant/reading?signal=main.ph"));
+  await panel(p).getByRole("button", { name: "Ask for a new reading" }).click();
+  const body2 = await (await rd2).json();
+  await until(p, async () => (await panel(p).locator('[data-reading="old"]').count()) > 0, 8000);
+  const oTxt = await panelText(p);
+  await shot(p, "o04-sensor-no-fresh-reading");
+  await api(p, "/api/twin/control", "POST", { action: "acq_resume" });
+  check("O-04 without a new reading, the newest is shown as old", body2.fresh === false && /No new reading arrived within 3 seconds\. This is the newest reading, not a new one/.test(oTxt) &&
+    Date.parse(body2.sample.acquired_utc) < Date.parse(body2.requested_utc) && /Age\s+\d+ seconds ago/.test(oTxt),
+    `acquisition stalled: "${(oTxt.match(/No new reading[^\n]*/) || [""])[0]}", measured ${body2.sample.acquired_utc}, ${(oTxt.match(/Age\s+[^\n]*/) || [""])[0]}`);
+  await p.waitForTimeout(2500);
+
+  // O-05: sector names, readings and their pages and history stay on the Overview
+  await show(p, "overview");
+  const sec = await p.locator("#overview-sectors").innerText();
+  await p.locator("#overview-sectors a", { hasText: "Open Sector 1" }).click();
+  const toS1 = await until(p, () => p.evaluate(() => location.hash === "#sector-S1"));
+  await show(p, "overview");
+  await p.locator('#overview-sectors tr[data-sector="S2"] a', { hasText: "History of these readings" }).click();
+  await show(p, "history");
+  const histSel = await p.evaluate(() => window.AqUI.S.trendSel.slice());
+  const pv = await get(p, "/api/plant");
+  check("O-05 sector data on the Overview", /Sector 1/.test(sec) && /Sector 2/.test(sec) && /L\/min/.test(sec) && /bar/.test(sec) && toS1 &&
+    histSel.includes(pv.signals["flow.S2"].point) && histSel.includes(pv.signals["pressure.S2"].point),
+    `Sectors card with valve, flow and pressure; Open Sector 1 opens #sector-S1; History of Sector 2 chooses ${histSel.join(", ")}`);
+
+  // O-02: a refill shows water entering the main tank and its level rising (opened from the diagram)
+  await show(p, "overview");
+  await pick(p, "valve.FILL_MAIN");
+  posts.length = 0;
+  await panel(p).locator('button[data-act="equip"]').click();
+  await panel(p).locator('[role="alertdialog"]').waitFor({ timeout: 8000 });
+  await panel(p).locator('input[aria-label="Amount (L)"]').fill("2000");
+  await panel(p).locator('input[aria-label="Amount (L)"]').dispatchEvent("change");
+  await panel(p).locator('button[data-act="confirm"]').click();
+  await until(p, async () => (await p.locator('section.view:not(.hidden) svg.diagram path.pipe.flow[d^="M620 40"]').count()) > 0, 30000);
+  await p.waitForTimeout(7000);
+  const rise = await p.evaluate(() => (document.querySelector('section.view:not(.hidden) svg.diagram [data-trend="rising"]') || {}).textContent || "");
+  const rf = await procs(p);
+  await shot(p, "o02-refill-rising-desktop-dark");
+  await show(q, "overview");
+  await q.waitForTimeout(6000);
+  await phoneDiagram(q, 0.45);
+  await shot(q, "o02-refill-rising-phone-dark", false);
+  check("O-02 a refill: water in and the main tank rising", /rising/.test(rise) && JSON.stringify(posts) === JSON.stringify(["/api/processes/REFILL/state", "/api/processes/REFILL/manual"]) &&
+    rf.REFILL.manual_op && rf.REFILL.manual_op.op.path === "WATER",
+    `water inlet valve of the main tank opened from the diagram (sent ${posts.join(", ")}); mains pipe with measured flow; main tank "${rise}"`);
+  await stopAll(p);
+
+  // O-03: the examples by name, with what loading does
+  await show(p, "twin");
+  const opts = await p.$$eval("#scn option", os => os.map(o => [o.value, o.textContent]));
+  await p.selectOption("#scn", "tour_low_main");
+  await p.waitForTimeout(300);
+  const ex1 = await p.locator("#v-twin").innerText();
+  await p.selectOption("#scn", "irrigation_alternation");
+  await p.waitForTimeout(300);
+  const ex2 = await p.locator("#scn-desc").innerText();
+  await p.selectOption("#scn", "tour_low_main");
+  await shot(p, "o03-examples");
+  posts.length = 0;
+  await p.getByRole("button", { name: "Load this example" }).click();
+  const loaded = await until(p, async () => (await get(p, "/api/status")).twin.scenario === "tour_low_main", 15000);
+  await p.waitForTimeout(1500);
+  const lv = (await get(p, "/api/plant")).signals["tank.MAIN.level"].sample.value, st5 = await procs(p);
+  check("O-03 Digital Twin examples", /Choose an example/.test(ex1) && /These examples set up the simulated greenhouse so you can try different situations\./.test(ex1) &&
+    opts.find(o => o[0] === "tour_low_main")[1] === "Try refilling the main tank" && /Sets the main tank level low \(7,600 L\) so you can try a refill/.test(ex1) &&
+    /only sets up this situation: nothing starts/.test(ex1) && /starts the model again/.test(ex1) && /starts processes or operations by itself/.test(ex2) &&
+    !opts.some(o => /tour_|UAT/.test(o[1])) && loaded && Math.abs(lv - 7600) < 200 && Object.values(st5).every(x => x.state === "STOPPED"),
+    `${opts.length} examples named in words (for example "${opts[0][1]}"); preview and what loading does shown; ids and UAT under Details; loaded: main tank ${lv} L, everything stopped`);
+
+  // R33-01: on a phone, the pinned Stop is the chosen tank's processes and stops exactly those
+  const r1 = [];
+  const qp = sentPosts(q);
+  for (const [tab, label, procsOf] of [["A", "Fertiliser tank A", ["REFILL", "STOCK_FILL_A"]], ["B", "Fertiliser tank B", ["REFILL", "STOCK_FILL_B"]], ["ACID", "Acid tank", ["ACID", "STOCK_FILL_ACID"]]]) {
+    for (const pid of procsOf) await api(q, `/api/processes/${pid}/state`, "POST", { target: "MANUAL" });
+    await show(q, "nutrients");
+    await q.locator(".tabs button", { hasText: label }).click();
+    await until(q, () => q.evaluate(pids => { const r = [...document.querySelectorAll(".stopbar .stoprow")].map(x => x.dataset.proc); return JSON.stringify(r) === JSON.stringify(pids); }, procsOf), 8000);
+    const rows = await q.$$eval(".stopbar .stoprow", rs => rs.map(r => [r.dataset.proc, r.innerText.replace(/\s+/g, " ")]));
+    if (tab === "ACID") await shot(q, "r33-01-phone-acid-tab-stopbar", false);
+    for (const pid of procsOf) {
+      qp.length = 0;
+      await q.locator(`.stopbar button.stop[data-proc="${pid}"]`).click();
+      const ok = await until(q, async () => (await procs(q))[pid].state === "STOPPED", 10000);
+      r1.push([tab, pid, rows.map(x => x[1]).join(" | "), qp.join(","), ok]);
+    }
+  }
+  check("R33-01 the pinned Stop follows the chosen tank", r1.length === 6 && r1.every(([, pid, , sent, ok]) => sent === `/api/processes/${pid}/state` && ok),
+    r1.map(([tab, pid, rows, sent, ok]) => `${tab}: [${rows}] → ${sent} → ${ok ? "STOPPED" : "NOT STOPPED"}`).join(" · "));
+
+  // R33-02: every recipe problem beside its field, with the typed value kept
+  await show(p, "recipes");
+  await p.locator("section.view:not(.hidden) tr", { hasText: /demo-sim@v\d+/ }).filter({ hasText: "In use" }).getByRole("button", { name: "Change settings" }).click();
+  await p.waitForSelector(".editor");
+  const acid = p.locator(".editor details.section", { has: p.locator("summary", { hasText: /^Acid dosing$/ }) });
+  if (!(await acid.evaluate(d => d.open))) await acid.locator("summary").first().click();
+  const adv = acid.locator("details.advanced");
+  if (!(await adv.evaluate(d => d.open))) await adv.locator("summary").first().click();
+  const help = await p.locator("#rf-acid-max_no_response-help").innerText();
+  await p.fill("#rf-acid-max_no_response", "1.5");
+  const toasts = [];
+  p.on("console", () => {});
+  await p.locator(".editor").getByRole("button", { name: "Check settings" }).click();
+  const e1 = await until(p, async () => (await p.locator('.editor [data-path="acid.max_no_response"] .error').count()) && p.locator('.editor [data-path="acid.max_no_response"] .error').innerText(), 10000);
+  const k1 = await p.inputValue("#rf-acid-max_no_response"), inv = await p.getAttribute("#rf-acid-max_no_response", "aria-invalid"), desc = await p.getAttribute("#rf-acid-max_no_response", "aria-describedby");
+  const toastTxt = await p.locator("#toast").innerText().catch(() => "");
+  await shot(p, "r33-02-whole-number-beside-field");
+  check("R33-02 a fractional count is marked at its field", /Enter a whole number, without decimals/.test(e1 || "") && k1 === "1.5" && inv === "true" && /-err/.test(desc || "") && /a whole number/.test(help) &&
+    !/Input should be|pydantic|int_from_float/.test(toastTxt),
+    `"${e1}" beside "Doses without a pH drop…", typed 1.5 kept, aria-invalid and described by the message; hint "${help.slice(0, 40)}…"; toast "${toastTxt}"`);
+  await p.fill("#rf-acid-max_no_response", "11");
+  await p.locator(".editor").getByRole("button", { name: "Check settings" }).click();
+  const e2 = await until(p, async () => { const t = await p.locator('.editor [data-path="acid.max_no_response"] .error').innerText().catch(() => ""); return /at most|10/.test(t) && t; }, 10000);
+  await p.fill("#rf-acid-max_no_response", "2");
+  await p.locator(".editor").getByRole("button", { name: "Discard changes" }).click();
+  await p.locator("section.view:not(.hidden) tr", { hasText: /demo-sim@v\d+/ }).filter({ hasText: "In use" }).getByRole("button", { name: "Copy to a new recipe" }).click();
+  await p.waitForSelector(".editor");
+  await p.fill("#rf-recipe-id", "Summer 2027");
+  await p.fill("#rf-recipe-name", "ui check (not saved)");
+  await p.locator(".editor").getByRole("button", { name: "Check settings" }).click();
+  const e3 = await until(p, async () => (await p.locator('.editor [data-path="recipe_id"] .error').count()) && p.locator('.editor [data-path="recipe_id"] .error').innerText(), 10000);
+  const k3 = await p.inputValue("#rf-recipe-id");
+  await p.locator(".editor").getByRole("button", { name: "Discard changes" }).click();
+  check("R33-02 out-of-range values and a bad recipe id", !!e2 && /Use 1 to 48 characters/.test(e3 || "") && k3 === "Summer 2027",
+    `11 doses: "${e2}"; recipe id "Summer 2027": "${e3}" beside the field, typed id kept`);
+
+  // R33-03: a valve that did not open is not reported as repaired; a drive fault that is gone is
+  await api(p, "/api/twin/actuator-fault", "POST", { kind: "valve", ident: "S1", fault: "STUCK_CLOSED" });
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "AUTO" });
+  await until(p, async () => (await procs(p)).IRRIGATION.state === "FAULT_LOCKOUT" && !(await procs(p)).IRRIGATION.stopping, 60000);
+  await show(p, "main-pumps");
+  const card = p.locator("section.view:not(.hidden) .card.proc").first();
+  await card.getByRole("button", { name: "Mark as seen" }).click();
+  await until(p, async () => !(await card.getByRole("button", { name: "Clear stop after fixing the problem" }).isDisabled()), 10000);
+  const v1 = await card.innerText();
+  await shot(p, "r33-03-valve-cannot-be-checked");
+  await card.getByRole("button", { name: "Clear stop after fixing the problem" }).click();
+  const cleared = await until(p, async () => (await procs(p)).IRRIGATION.state === "STOPPED", 10000);
+  await p.waitForTimeout(2000);
+  const still = (await procs(p)).IRRIGATION.state;
+  check("R33-03 a retained valve fault is not reported as fixed", /The program cannot check this while watering is stopped/.test(v1) && /Check the valve of Sector 1 yourself/.test(v1) &&
+    !/no longer sees the problem/.test(v1) && cleared && still === "STOPPED",
+    `"${(v1.match(/The program cannot check[^\n]*/) || [""])[0]}"; Mark as seen, then Clear stop (separate); stays ${still}`);
+  await api(p, "/api/twin/actuator-fault", "POST", { kind: "valve", ident: "S1", fault: null });
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "AUTO" });
+  await until(p, async () => (await procs(p)).IRRIGATION.phase === "IRRIGATE", 40000);
+  await api(p, "/api/twin/actuator-fault", "POST", { kind: "drive", ident: "MAIN", fault: "TRIP" });
+  await until(p, async () => (await procs(p)).IRRIGATION.state === "FAULT_LOCKOUT", 20000);
+  await show(p, "main-pumps");
+  const d1 = await until(p, async () => { const t = await p.locator("section.view:not(.hidden) .card.proc").first().innerText(); return /The program still sees the problem/.test(t) && t; }, 15000);
+  await api(p, "/api/twin/actuator-fault", "POST", { kind: "drive", ident: "MAIN", fault: null });
+  const d2 = await until(p, async () => { const t = await p.locator("section.view:not(.hidden) .card.proc").first().innerText(); return /no longer sees the problem/.test(t) && t; }, 20000);
+  check("R33-03 the drive fault case", !!d1 && !!d2 && !/cannot check this/.test(d2),
+    "drive tripped: \"The program still sees the problem\"; fault input released: \"The program no longer sees the problem; check the equipment yourself before starting again\"");
+  const occ = (await get(p, "/api/alarms")).open || [];
+  for (const o of (Array.isArray(occ) ? occ : [])) if (!o.acknowledged) await api(p, "/api/alarms/ack", "POST", { rule_id: o.rule_id, target: o.target });
+  await api(p, "/api/processes/IRRIGATION/reset", "POST");
+  await stopAll(p).catch(() => {});
+  await api(p, "/api/twin/control", "POST", { action: "reset" });
+  check("0.3.4 page errors", errs.length === 0, errs.join("; ") || "none");
+  await pc.close();
+  await ctx.close();
 }
 
 // The same pages on HARDWARE_READ_ONLY (fake bus): observation only, controls replaced by the reason.
@@ -476,9 +821,14 @@ async function hardware() {
   await show(p, "overview");
   await shot(p, "hw-overview");
   const ov = await p.evaluate(() => ({ hot: document.querySelectorAll("#v-overview svg.diagram g.hot").length, label: document.querySelector("#v-overview svg.diagram").getAttribute("aria-label") }));
-  check("HW overview diagram", ov.hot >= 25 && /read-only/.test(ov.label), `${ov.hot} parts that open read-only pages; ${ov.label}`);
-  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Main tank"]').click();
-  check("HW click-through", await until(p, () => p.evaluate(() => location.hash === "#main-tank")), "main tank opens #main-tank");
+  check("HW overview diagram", ov.hot >= 40 && /read-only/.test(ov.label), `${ov.hot} parts; ${ov.label}`);
+  await p.locator('#v-overview svg.diagram g.hot[data-key="pump.MP1"]').click();
+  const hwPanel = await until(p, async () => { const t = await p.locator("#v-overview aside.side-panel").innerText(); return /Main pump 1/.test(t) && t; }, 5000);
+  const hwBtns = await p.$$eval("#v-overview aside.side-panel button", bs => bs.map(x => x.textContent).filter(x => x !== "Close" && x !== "Ask for a new reading"));
+  await p.locator('#v-overview svg.diagram g.hot[data-key="tank.MAIN"]').click();
+  await p.locator("#v-overview aside.side-panel a", { hasText: "Open Main tank" }).click();
+  check("HW click-through", /Real equipment, read only: nothing can be operated/.test(hwPanel || "") && hwBtns.length === 0 && await until(p, () => p.evaluate(() => location.hash === "#main-tank")),
+    "a main pump's panel says it is read only and offers no action; the main tank's panel opens #main-tank");
   for (const v of ["nutrients", "main-tank", "main-pumps", "sector-S1", "sector-S2", "drainage"]) {
     await show(p, v);
     const t = await visibleText(p);

@@ -688,8 +688,17 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/scenarios")
     async def scenarios(p: Principal = Depends(require(Perm.READ))):
+        # what loading one does besides starting the model again (O-03): read from its own script
+        def effects(sc) -> list[str]:
+            kinds = {k for _, k, _ in sc.steps}
+            return [x for x, ks in (("starts", {"PROCESS_REQUEST", "PROCESS_MANUAL", "COMMAND"}),
+                                    ("confirms_tanks", {"STOCK_ACK"}), ("recipe", {"RECIPE_ACTIVATE"}),
+                                    ("faults", {"ACTUATOR_FAULT", "OVERRIDE_SET", "DEVICE_FAULT", "ACQ_STALL", "FREEZE"}),
+                                    ("recovery", {"ACK", "PROCESS_RESET"}))
+                    if kinds & ks]
         return [{"name": s.name, "description": s.description, "duration_s": s.duration_s,
-                 "twin_overrides": s.twin_overrides} for s in svc.presets().values()]
+                 "twin_overrides": s.twin_overrides, "effects": effects(s), "steps": len(s.steps)}
+                for s in svc.presets().values()]
 
     # ------------------------------------------------------------------ mutations: simulation only
     def _guard(fn):

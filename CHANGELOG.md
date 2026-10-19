@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.3.4 (2026-10-19): owner feedback on 0.3.3 and the reviewer's corrections
+
+The owner's ad hoc feedback on 0.3.3 (O-01 to O-05, 2026-10-19) and the reviewer's findings R33-01 to R33-03.
+This is feedback, not the formal tour: the 16 owner results stay NOT RUN. No control algorithm, production
+mapping, recipe limit, retention (365 d), cadence (60 s), storage budget (17 GiB), role or permission gate,
+bench lease policy, restart behaviour or hardware profile changed; physical AUTO still does not exist, the
+drive interface stays NOT_CONFIGURED, off-device backups stay disabled and the 32 added channels stay
+unassigned. Internal identifiers are unchanged.
+
+### Owner feedback
+- O-01: links and link-like text are white on a dark green ground, also when hovered, pressed, opened or
+  focused (focus ring amber), in the light and the dark colour scheme. No text is blue any more; chart
+  legends name their series in the text colour beside a coloured mark. Water keeps its water colour.
+- O-02: one style and one state vocabulary for pumps, valves, tanks, sensors and pipes, the same in the
+  diagram, its panel, the Sectors card and the process pages: Running / Open (the equipment reports it),
+  Starting… / Opening… and Stopping… / Closing… (asked for, not yet reported; amber, dashed, blinking),
+  Stopped / Closed, Fault, Not known (no feedback, or its reading is old). Water moves along a route, with
+  arrows in its direction, only where a flow is measured on it; a route asked for without measured flow is
+  dashed, one whose flow reading is old or missing dotted. Tanks show ▲ rising / ▼ falling with L/min from
+  the readings of the last 20 s. A valve without a position signal is confirmed by the measured flow on its
+  route, a tank inlet by the measured level rise; a command alone never shows as movement.
+- O-03: the Digital Twin's examples: "Choose an example", "Load this example" and "These examples set up the
+  simulated greenhouse so you can try different situations." Each example has a plain name and a one-sentence
+  preview; the page says what loading resets and whether the example only sets up a situation or also starts
+  operations, confirms tanks, puts its own recipe in use or applies simulated faults (read from the
+  example's own script). Example ids and owner-tour case numbers are under Details.
+- O-04: equipment and sensors on the Overview diagram (and the full and page diagrams) can be selected. A
+  panel beside the diagram shows the state, what was asked for, what is reported and the process that runs
+  it. A pump or valve is operated through that process, never directly: in Manual mode the action is sent at
+  once as the process's bounded operation (for example "water Sector 1 once with main pump 1 for 300 s"); in
+  automatic mode, or when the process is stopped, a confirmation names the equipment and the action, says how
+  automatic operation is affected and states any switch to Manual mode; Cancel sends nothing. The panel then
+  shows the request as pending, the controller's refusal in plain words, or what the equipment reports.
+  Amounts come from the recipe in use where it sets them. A sensor asks for a new reading
+  (`GET /api/plant/reading`, which waits for the next acquisition and sends nothing to any device) and shows
+  its value, unit, time measured, age and validity; if no new reading arrives within 3 s, the newest is shown
+  as such with its real age. Hardware profiles show readings only.
+- O-05: a Sectors card on the Overview keeps each sector's name, valve state, flow, pressure, its page and the
+  history of its readings; the sector boxes in the diagram keep their readings and say when being watered.
+- Nutrient strength (EC) is explained as electrical conductivity: dissolved salts raise it, fertiliser among
+  them, and it is not a direct measure of the fertiliser quantity.
+
+### Reviewer corrections
+- R33-01: on a narrow screen, the pinned Stop bar of Nutrients & acid shows the chosen tank's processes (refill
+  or acid dosing, and that tank's own water fill), each with its state and its own correctly named Stop.
+- R33-02: a recipe value of the wrong kind (1.5 doses, a text in a number, a bad recipe id or name) is refused
+  with each problem's field and a short message (`422 {"detail": {"message", "fields": [{path, message}]}}`);
+  the editor shows it beside the field, marks the field `aria-invalid` and keeps the typed value. Whole-number
+  fields say so and step by 1. Server validation is unchanged.
+- R33-03: when the reset checks cannot see a fault's cause while the process is stopped (a valve that did not
+  open, missing flow), the recovery step says so instead of "The program no longer sees the problem". Each
+  process view now reports `fault_checkable`; no check or permissive changed, and none reads the twin.
+
+### Release checks
+- CI's Windows upgrade test now goes 0.3.1 → 0.3.2 → 0.3.3 → this release.
+
 ## 0.3.3 (2026-10-19): corrections for a first-time operator
 
 The owner's first-time-operator review of 0.3.2 (2026-10-19, findings F-01 to F-09, CHANGES REQUESTED).
