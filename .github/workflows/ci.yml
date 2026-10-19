@@ -209,7 +209,7 @@ jobs:
           git worktree add "$RUNNER_TEMP/v032" 3f542a623aaaca50818ba2d9368ce77bd0e16bb4
           (cd "$RUNNER_TEMP/v032" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.2" --wheelhouse win_amd64:3.12)
           git worktree add "$RUNNER_TEMP/v033" c9fa0476cfc354c9734c32b58485788c1863b25e
-          (cd "$RUNNER_TEMP/v033" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.3")
+          (cd "$RUNNER_TEMP/v033" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.3" --windows-runtime download)
       - uses: actions/upload-artifact@v4
         with:
           name: release-earlier

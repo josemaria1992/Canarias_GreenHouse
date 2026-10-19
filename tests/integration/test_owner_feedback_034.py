@@ -118,6 +118,22 @@ def test_r33_03_a_drive_fault_is_one_the_checks_can_see(icfg):
     assert make_runtime(icfg).sup.by_id["IRRIGATION"].view()["fault_checkable"] is None   # nothing locked out
 
 
+@pytest.mark.parametrize("device, checkable", [("analog_B", False), ("analog_A", True)])
+def test_r33_03_a_lost_reading_is_checkable_only_if_the_reset_checks_read_it(icfg, device, checkable):
+    # analog_B carries sector 1's flow, read only while sector 1 runs; analog_A the main tank level, always read
+    rt = make_runtime(icfg)
+    irr = rt.sup.by_id["IRRIGATION"]
+    rt.process_request("op", "IRRIGATION", CS.AUTO)
+    rt.run_for(40)
+    rt.set_device_fault("op", device, "TIMEOUT")
+    rt.run_for(20)
+    rt.set_device_fault("op", device, None)
+    rt.run_for(10)
+    v = irr.view()
+    assert v["fault_reason"] == "OBSERVATION_UNAVAILABLE" and v["fault_present"] is None
+    assert v["fault_checkable"] is checkable
+
+
 # ------------------------------------------------------------------------------------------ O-04 readings
 def test_o04_a_requested_reading_is_the_next_acquisition_with_its_own_time(tmp_path, icfg):
     with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
