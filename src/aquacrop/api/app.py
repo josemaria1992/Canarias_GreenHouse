@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -303,6 +305,18 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.exception_handler(AuthError)
     async def _auth_err(request: Request, exc: AuthError):
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
+    @app.exception_handler(RequestValidationError)
+    async def _bad_request(request: Request, exc: RequestValidationError):
+        # a recipe draft's header (id, name) is checked here, before the handler: its problems go back to their
+        # fields like the body's own (R33-02); every other request keeps FastAPI's answer
+        if request.url.path == "/api/recipes/draft":
+            from ..control.recipes import field_errors
+            return JSONResponse({"detail": _draft_problems(field_errors(exc.errors()))}, status_code=422)
+        return await request_validation_exception_handler(request, exc)
+
+    def _draft_problems(fields: list[dict]) -> dict:
+        return {"message": f"{len(fields)} setting(s) need changing; each is shown beside its field", "fields": fields}
 
     # ------------------------------------------------------------------ auth dependencies
     def _origin_ok(request: Request) -> bool:
@@ -632,6 +646,38 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "signals": signals, "processes": procs,
                 "alarms": [o.to_dict() for o in list(_alarm_engine().open.values())]}
 
+    @app.get("/api/plant/reading")
+    async def plant_reading(signal: str = Query(min_length=1, max_length=80), wait_s: float = Query(default=3.0, ge=0, le=5),
+                            p: Principal = Depends(require(Perm.READ))):
+        """One reading, asked for from the diagram (O-04): waits up to `wait_s` for the next acquisition of the
+        signal's channel and returns that sample with its own acquisition time. Nothing is sent to any device;
+        the reading is the acquisition loop's next scan. If no new sample arrives in time, `fresh` is false and
+        the newest sample is returned with its real age, never as a new one."""
+        from ..twin.installation_params import InstallationFacts
+        if is_sim and cfg.topology != "installation":
+            raise HTTPException(409, "the installation view needs the installation topology (this is the demo)")
+        facts = cfg.twin.facts if is_sim else InstallationFacts()
+        cat = facts.signal_catalogue(extra_flows=cfg.twin.dynamics.flow_span_L_min if is_sim else ())
+        if not any(signal in names for names in cat.values()):
+            raise HTTPException(404, f"unknown signal {signal}")
+        asked = datetime.now(timezone.utc)
+        pt = cfg.point_for_signal(signal) if is_sim else None
+        out = {"signal": signal, "requested_utc": asked.isoformat(), "point": pt, "bound": pt is not None}
+        if pt is None:      # the drive's data link carries commands, not a measurement; unbound has no channel
+            return out | {"fresh": False, "sample": None,
+                          "why": "DRIVE_ADAPTER" if is_sim and cfg.adapter_for_signal(signal) else "UNBOUND"}
+        pid = PointId.parse(pt)
+        out["label"] = cfg.device(pid.device_uid).label_for(pid)
+        deadline = time.monotonic() + wait_s
+        s = _samples().get(pt)
+        while (s is None or s.acquired_utc <= asked) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+            s = _samples().get(pt)
+        now = datetime.now(timezone.utc)
+        fresh = s is not None and s.acquired_utc > asked
+        return out | {"fresh": fresh, "answered_utc": now.isoformat(),
+                      "sample": None if s is None else _sample(s) | {"age_s": (now - s.acquired_utc).total_seconds()}}
+
     @app.get("/api/twin")
     async def twin(p: Principal = Depends(require(Perm.READ))):
         r = rt()
@@ -642,8 +688,17 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/scenarios")
     async def scenarios(p: Principal = Depends(require(Perm.READ))):
+        # what loading one does besides starting the model again (O-03): read from its own script
+        def effects(sc) -> list[str]:
+            kinds = {k for _, k, _ in sc.steps}
+            return [x for x, ks in (("starts", {"PROCESS_REQUEST", "PROCESS_MANUAL", "COMMAND"}),
+                                    ("confirms_tanks", {"STOCK_ACK"}), ("recipe", {"RECIPE_ACTIVATE"}),
+                                    ("faults", {"ACTUATOR_FAULT", "OVERRIDE_SET", "DEVICE_FAULT", "ACQ_STALL", "FREEZE"}),
+                                    ("recovery", {"ACK", "PROCESS_RESET"}))
+                    if kinds & ks]
         return [{"name": s.name, "description": s.description, "duration_s": s.duration_s,
-                 "twin_overrides": s.twin_overrides} for s in svc.presets().values()]
+                 "twin_overrides": s.twin_overrides, "effects": effects(s), "steps": len(s.steps)}
+                for s in svc.presets().values()]
 
     # ------------------------------------------------------------------ mutations: simulation only
     def _guard(fn):
@@ -808,11 +863,17 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def _recipe_guard(fn):
         from ..control.recipes import RecipeError
 
+        from pydantic import ValidationError
+
+        from ..control.recipes import field_errors
+
         def call():
             try:
                 return fn()
             except RecipeError as e:            # a state conflict (immutable, already active), not bad input
                 raise HTTPException(409, str(e))
+            except ValidationError as e:        # a value of the wrong kind: back to its field (R33-02), not a ValueError text
+                raise HTTPException(422, _draft_problems(field_errors(e.errors())))
         return _guard(call)
 
     @app.get("/api/recipes")
@@ -825,12 +886,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.post("/api/recipes/draft")
     async def recipe_draft(body: RecipeDraftIn, p: Principal = Depends(require(Perm.RECIPE_EDIT))):
-        from pydantic import ValidationError
-        try:
-            rec = _recipe_guard(lambda: irt().recipe_save_draft(p.username, body.recipe_id, body.name, body.body,
-                                                                version=body.version, note=body.note))
-        except ValidationError as e:
-            raise HTTPException(422, [{"loc": ".".join(map(str, x["loc"])), "msg": x["msg"]} for x in e.errors()])
+        rec = _recipe_guard(lambda: irt().recipe_save_draft(p.username, body.recipe_id, body.name, body.body,
+                                                            version=body.version, note=body.note))
         return rec.view()
 
     @app.post("/api/recipes/{recipe_id}/{version}/validate")

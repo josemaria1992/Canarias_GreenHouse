@@ -12,8 +12,8 @@ Used by CI for the cold start, the restart and the upgrade over the earlier demo
 --hide-python the launcher sees no Python on the PC, as on an owner's PC without one. The password
 is random and kept in --secret (a temporary file, never uploaded). Simulation only; no hardware.
 
-    python scripts/release_smoke.py --launcher unpacked/aquacrop-0.3.3/AquaCrop-Demo.cmd --local T/cold \
-        --secret T/pw --first --record T/cold1.json --expect-version 0.3.3 --expect-release VERIFIED
+    python scripts/release_smoke.py --launcher unpacked/aquacrop-0.3.4/AquaCrop-Demo.cmd --local T/cold \
+        --secret T/pw --first --record T/cold1.json --expect-version 0.3.4 --expect-release VERIFIED
 """
 from __future__ import annotations
 

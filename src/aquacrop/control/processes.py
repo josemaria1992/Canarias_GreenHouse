@@ -27,6 +27,7 @@ def _fmt(v: float | None, unit: str = "") -> str:
 class Irrigation(Process):
     pid = "IRRIGATION"
     title = "Irrigation"
+    checkable_faults = Process.checkable_faults | {"SAFETY_CHAIN_OPEN", "DRIVE_FAULT", "MAIN_LOW_LOW"}
     ACTIVE = ("SELECT", "OPEN", "LEAD", "START", "VERIFY_FLOW", "IRRIGATE", "STOP_DRIVE", "STOP_SETTLE", "CLOSE",
               "DESELECT")
 
@@ -39,6 +40,7 @@ class Irrigation(Process):
         self.auto_pump = {s.sector_id: s.auto_pump for s in f.sectors}
         self.step_idx = 0
         self.cycle = 0
+        self.lost_obs: list[str] | None = None       # the signals an OBSERVATION_UNAVAILABLE fault named
         self.sector: str | None = None
         self.pump: str | None = None
         self.duration_s = 0.0
@@ -173,6 +175,8 @@ class Irrigation(Process):
         # ---- faults first (they take priority over any timing transition in this scan)
         miss = [f"{s} ({o.why(s)})" for s in self.required(sec) if o.get(s) is None]
         if miss:
+            if self.state != LOCKOUT:
+                self.lost_obs = [s for s in self.required(sec) if o.get(s) is None]
             return self.fault("OBSERVATION_UNAVAILABLE", f"required observations unusable: {miss}")
         if not o.get("safety.chain_ok"):
             return self.fault("SAFETY_CHAIN_OPEN", "safety chain reported open")
@@ -378,6 +382,14 @@ class Irrigation(Process):
 
     def on_reset(self) -> None:
         self.step_idx = 0
+
+    def fault_checkable(self) -> bool | None:
+        """A lost observation is checkable while stopped only if every lost signal is one the reset checks read
+        (a sector's flow or valve limit is read only while that sector runs)."""
+        v = super().fault_checkable()
+        if v is False and self.fault_reason == "OBSERVATION_UNAVAILABLE" and self.lost_obs is not None:
+            return set(self.lost_obs) <= set(self.required(None))
+        return v
 
     def view(self) -> dict:
         v = super().view()
@@ -921,6 +933,7 @@ class Refill(_PathProcess):
 class Acid(_PathProcess):
     pid = "ACID"
     title = "Acid pH dosing"
+    checkable_faults = Process.checkable_faults | {"PH_UNDERSHOOT"}
 
     def __init__(self, sup):
         super().__init__(sup)
@@ -1173,6 +1186,7 @@ class Acid(_PathProcess):
 class Return(Process):
     pid = "RETURN"
     title = "Drainage return"
+    checkable_faults = Process.checkable_faults | {"SAFETY_CHAIN_OPEN", "SUMP_DRY_RUN"}
 
     def __init__(self, sup):
         super().__init__(sup)

@@ -139,7 +139,7 @@ const proc = async (p, pid) => (await procs(p))[pid];
 async function twinPreset(p, name) {
   await show(p, "twin");
   await p.selectOption("#scn", name);
-  await viewButton(p, "Load scenario (new run)");
+  await viewButton(p, "Load this example");
   await until(p, async () => (await get(p, "/api/status")).twin.scenario === name, 15000);
   await p.waitForTimeout(800);
 }
@@ -251,18 +251,29 @@ CASES["UAT-01"] = async (p) => {
   check("Settings, Versions: inventory", inv === "6 modules: 16 AI + 32 DI + 32 DO = 80 points", inv);
   check("Settings, Versions: config", /installation-80@2026-10-13\.80\.1 \(SIMULATED\)/.test(t), (t.match(/Config\n(.*)/) || [])[1]);
   check("Settings, Versions: release line", process.env.AQ_EXPECT_RELEASE ? rel.includes("wheel verified") && rel.includes(process.env.AQ_EXPECT_RELEASE) : rel.length > 0, rel);
-  await p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Versions" }) }).first().screenshot({ path: path.join(OUT, "UAT-01-versions.png") });
+  for (let i = 0; ; i++) {         // the page may rebuild the card between finding it and capturing it
+    try { await p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Versions" }) }).first().screenshot({ path: path.join(OUT, "UAT-01-versions.png") }); break; }
+    catch (e) { if (i >= 4 || !/not attached/.test(String(e))) throw e; await p.waitForTimeout(300); }
+  }
 };
 
 CASES["UAT-02"] = async (p) => {
-  const targets = [["Fertiliser A", "nutrients"], ["Main tank", "main-tank"], ["Main pump 1 (selector K1)", "main-pumps"], ["Sector 1", "sector-S1"],
-    ["Sector 2", "sector-S2"], ["Drainage tank", "drainage"]];
-  for (const [label, view] of targets) {
+  // 0.3.4 (O-04): a click selects the part and shows its panel; the panel's "Open ..." link opens its page
+  const targets = [["tank.A", "nutrients"], ["tank.MAIN", "main-tank"], ["pump.MP1", "main-pumps"], ["sector.S1", "sector-S1"],
+    ["sector.S2", "sector-S2"], ["tank.SUMP", "drainage"]];
+  for (const [key, view] of targets) {
     await show(p, "overview");
-    await p.locator(`section.view:not(.hidden) svg.diagram g.hot[aria-label^="${label}:"]`).first().click();
-    const ok = await until(p, () => p.evaluate(v => location.hash === "#" + v && window.AqUI.S.rendered === v, view), 8000);
+    const part = p.locator(`section.view:not(.hidden) svg.diagram g.hot[data-key="${key}"]`).first();
+    const label = await part.getAttribute("aria-label");
+    await part.click();
+    const panel = p.locator(`section.view:not(.hidden) aside.side-panel[data-selected="${key}"]`);
+    const sel = await until(p, async () => (await panel.count()) > 0, 5000);
+    const link = panel.locator(`a[href="#${view}"]`).first();
+    const linkText = sel && (await link.count()) ? (await link.innerText()).trim() : "";
+    if (linkText) await link.click();
+    const ok = sel && !!linkText && await until(p, () => p.evaluate(v => location.hash === "#" + v && window.AqUI.S.rendered === v, view), 8000);
     await p.waitForTimeout(500);
-    check(`diagram part "${label}" opens ${view}`, ok, ok ? "opened" : await p.evaluate(() => location.hash));
+    check(`diagram part "${label.split(":")[0]}" is selected and its panel opens ${view}`, ok, ok ? `"${linkText}" opened` : `selected ${sel}, link "${linkText}", at ${await p.evaluate(() => location.hash)}`);
     await shot(p, `UAT-02-${view}`);
   }
   await show(p, "main-tank");
@@ -292,7 +303,7 @@ CASES["UAT-03"] = async (p) => {
   const valve = await p.locator("section.view:not(.hidden) tr", { has: p.locator("td > strong", { hasText: exact("Sector 1") }) }).first().locator("td").nth(1).innerText();
   const k1 = await ddText(p, "Selector K1 (main pump 1)");
   check("sector 1 with main pump 1, asked and reported apart", s1 && s1 !== "SIM_LIMIT" && /^Automatic watering: Sector 1 with main pump 1/.test(lead) &&
-    /^asked: open · reports: open/.test(valve) && /^asked: on · reports: closed/.test(k1), `${lead} · Sector 1 valve: ${valve} · Selector K1: ${k1}`);
+    /^Open asked: open · reports: open/.test(valve) && /^Running asked: on · reports: closed/.test(k1), `${lead} · Sector 1 valve: ${valve} · Selector K1: ${k1}`);
   const changeover = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); return x.phase !== "IRRIGATE" && x.phase !== "IDLE" && x.phase; }, 400);
   await show(p, "main-pumps");
   await shot(p, "UAT-03-changeover");

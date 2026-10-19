@@ -1,4 +1,14 @@
-# Release readiness: AquaCrop 0.3.3 (owner demo release of the pre-hardware software)
+# Release readiness: AquaCrop 0.3.4 (owner demo release of the pre-hardware software)
+
+**0.3.4, 2026-10-19:** the owner's feedback on 0.3.3 (O-01 to O-05) and the reviewer's corrections
+(R33-01 to R33-03, `operator/owner-tour/issues.md`): white-on-green links, one diagram with flow
+direction, tank trends and the same equipment states everywhere, operating a pump or valve from the
+diagram through its process's existing bounded operation (confirmed first unless in Manual mode),
+new sensor readings with their own time, plain example names on the Digital Twin page, a Sectors card,
+the pinned Stop following the tank tab, recipe errors at their field, and neutral wording after a fault
+the reset checks cannot see. No control algorithm, production mapping, recipe limit, role gate,
+retention, cadence, budget or hardware profile changed; real equipment profiles stay read only. Every
+owner result is NOT RUN.
 
 **0.3.3, 2026-10-19:** corrections from the owner's first-time-operator review of 0.3.2 (F-01 to F-09,
 `operator/owner-tour/issues.md`): the Windows ZIP carries its own Python, a guided first administrator,

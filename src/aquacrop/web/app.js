@@ -64,7 +64,10 @@
       .map(([k, f]) => [k, f.type === "checkbox" || f.type === "radio" ? f.checked : f.value])) : new Map();
     const same = el.dataset.view === view;
     const opened = new Map(same ? [...el.querySelectorAll("details > summary")].map(x => [x.textContent, x.parentElement.open]) : []);
+    // a part scrolled sideways (the diagram on a phone, a wide table) stays where the user scrolled it
+    const scrolled = same ? [...el.querySelectorAll(".diagram-wrap, table")].map(x => x.scrollLeft) : [];
     el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
+    if (scrolled.some(Boolean)) [...el.querySelectorAll(".diagram-wrap, table")].forEach((x, i) => { if (scrolled[i]) x.scrollLeft = scrolled[i]; });
     el.dataset.view = view;
     el.dataset.drawn = String(++drawn);    // lets a page that redraws only on change tell a skipped draw
     for (const x of el.querySelectorAll("details > summary")) if (opened.has(x.textContent)) x.parentElement.open = opened.get(x.textContent);
@@ -128,7 +131,11 @@
     if (r.status === 401) { showLogin(); throw new Error("not authenticated"); }
     const ct = r.headers.get("content-type") || "";
     const data = ct.includes("json") ? await r.json() : await r.text();
-    if (!r.ok) throw new Error((data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.status);
+    if (!r.ok) {
+      // a structured answer (the recipe draft's field problems) keeps its parts for the page that asked
+      const d = data && data.detail, e = new Error(d ? (typeof d === "string" ? d : d.message || JSON.stringify(d)) : r.status);
+      e.status = r.status; e.detail = d; throw e;
+    }
     return data;
   }
   async function act(method, path, body, okMsg) {
@@ -614,16 +621,28 @@
     const pr = await api("GET", "/api/processes").catch(() => null);
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
     const tc = (action, extra, msg) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), msg || action);
-    // owner-tour start conditions first (they start nothing), then the scripted test scenarios
-    const opt = x => h("option", { value: x.name }, x.name);
-    const tour = S.scenarios.filter(x => x.name.startsWith("tour_")), scripted = S.scenarios.filter(x => !x.name.startsWith("tour_"));
+    // O-03: examples by plain name; the ones that only set up a situation first, then those that run by themselves
+    const ex = x => W.example(x.name, x.description);
+    const opt = x => h("option", { value: x.name }, ex(x).name);
+    const setup = S.scenarios.filter(x => !x.steps), scripted = S.scenarios.filter(x => x.steps);
     const sel = h("select", { id: "scn" },
-      tour.length ? h("optgroup", { label: "Owner tour presets (simulation only)" }, tour.map(opt)) : null,
-      h("optgroup", { label: "Scripted test scenarios (they run by themselves)" }, scripted.map(opt)));
+      h("optgroup", { label: "Set up a situation (nothing starts)" }, setup.map(opt)),
+      h("optgroup", { label: "Run a situation (it starts by itself)" }, scripted.map(opt)));
     if (S.scnSel && S.scenarios.some(x => x.name === S.scnSel)) sel.value = S.scnSel;
-    const describe = () => (S.scenarios.find(x => x.name === sel.value) || {}).description || "";
-    const desc = h("p", { class: "muted", id: "scn-desc" }, describe());
-    sel.addEventListener("change", () => { S.scnSel = sel.value; desc.textContent = describe(); });
+    const EFFECT = { starts: "starts processes or operations by itself while it runs", confirms_tanks: "confirms the fertiliser and acid tanks as prepared",
+      recipe: "puts its own synthetic recipe in use", faults: "applies simulated faults or hand-set readings at set times", recovery: "marks problems as seen and clears stops by itself" };
+    const desc = h("div", { id: "scn-desc" });
+    const describe = () => {
+      const x = S.scenarios.find(y => y.name === sel.value);
+      if (!x) return desc.replaceChildren();
+      const e = ex(x), uat = (x.description.match(/UAT-\d+/g) || []).join(", ");
+      desc.replaceChildren(h("p", { class: "lead", "data-preview": x.name }, e.preview),
+        h("p", null, h("strong", null, "Loading it "), x.steps ? "starts the model again, sets up this situation and then " + (x.effects || []).map(k => EFFECT[k]).filter(Boolean).join("; ") + "."
+          : "starts the model again and only sets up this situation: nothing starts until you start it."),
+        h("details", { class: "inline" }, h("summary", null, "Details"), h("p", { class: "muted small" }, `Example id ${x.name}${uat ? " · owner tour case " + uat : ""}${x.steps ? ` · runs for ${x.duration_s} s of simulated time with ${x.steps} scripted steps` : ""}. ${x.description}`)));
+    };
+    describe();
+    sel.addEventListener("change", () => { S.scnSel = sel.value; describe(); });
     const equipName = (kind, id) => kind === "valve" && /^S\d+$/.test(id) ? W.sectorName(id) + " valve" : kind === "mains" || kind === "safety" ? FAULT_KIND[kind]
       : W.cap(W.equip(id)) + (W.equip(id) === id ? "" : ` (${id})`);
     const fsel = (kind, ids, faults) => {
@@ -653,9 +672,12 @@
           cbtn("Run", () => tc("run", null, "model running")), cbtn("Pause", () => tc("pause", null, "model paused")), cbtn("Step", () => tc("step", null, "one step")),
           ...[1, 10, 60].map(sp => cbtn(sp + "×", () => tc("speed", { speed: sp }, sp === 1 ? "normal speed" : sp + "× speed"), tw.speed === sp ? "" : "ghost")),
           cbtn("Reset run", () => confirm("Start the model again from the beginning? History is kept.") && tc("reset", null, "the model starts again"), "ghost")),
-        h("div", { class: "row" }, h("label", null, "Start condition (scenario)", sel), cbtn("Load scenario (new run)", () => act("POST", "/api/twin/scenario", { name: sel.value }, "scenario loaded")),
-          h("span", { class: "muted" }, tw.scenario ? "Loaded: " + tw.scenario : "")), desc,
-        h("p", { class: "muted" }, "Load scenario and Reset run start the model again: levels go back to the start condition, every process is stopped, simulated faults and hand-set readings are cleared. History, accounts, recipes and tank confirmations are kept; the speed stays as set.")),
+        h("h3", null, "Examples"),
+        h("p", null, "These examples set up the simulated greenhouse so you can try different situations."),
+        h("p", { class: "muted" }, "Before anything else, loading an example starts the model again: levels go back to the example's start, every process is stopped, simulated faults and hand-set readings are cleared. History, accounts, recipes and tank confirmations are kept, unless the example itself changes them (said below); the speed stays as set."),
+        h("div", { class: "row" }, h("label", null, "Choose an example", sel), cbtn("Load this example", () => act("POST", "/api/twin/scenario", { name: sel.value },
+          `${W.example(sel.value).name}: loaded`)),
+          h("span", { class: "muted" }, tw.scenario ? "Loaded now: " + W.example(tw.scenario).name : "")), desc),
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "Simulated fertiliser and acid"),
           h("p", { class: "muted" }, "In the real greenhouse a person mixes fertiliser into the tank by hand. Here these buttons add the simulated fertiliser to the model. Afterwards the tank still has to be confirmed prepared on the ",
@@ -1061,7 +1083,7 @@
     if (!tr) return;
     const series = trendSeries(tr, S.trendSel, pid => ({ kind: (S.allPoints.find(p => p.id === pid) || {}).kind, label: nameOf(pid) }));
     const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz, note: aggNote });
-    legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
+    legend.replaceChildren(...leg.map(l => h("span", null, h("span", { style: "color:" + l.color, "aria-hidden": "true" }, l.suspect ? "◌ " : "■ "), l.name)));   // O-01: the name in the text colour, the line colour on the mark
   };
   VIEWS.trends = VIEWS.history;
 

@@ -1,6 +1,6 @@
 """DL-08: check an extracted release folder before it is handed over, with the Python that will run it.
 
-    python scripts/verify_release.py --release unpacked/aquacrop-0.3.3 [--zip dist/aquacrop-0.3.3.zip] \
+    python scripts/verify_release.py --release unpacked/aquacrop-0.3.4 [--zip dist/aquacrop-0.3.4.zip] \
         [--python <venv python with the release wheel installed>] [--json out.json]
 
 Checks: the ZIP's SHA-256 file and every MANIFEST.sha256 entry; RELEASE.json (version, wheel SHA-256, targets,

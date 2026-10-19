@@ -1,4 +1,11 @@
-# Handover: AquaCrop platform 0.3.3, the owner demo release (2026-10-19)
+# Handover: AquaCrop platform 0.3.4, the owner demo release (2026-10-19)
+
+**0.3.4, owner feedback on 0.3.3 and reviewer corrections (2026-10-19):** O-01 to O-05 (white link
+text, consistent equipment graphics with flow direction and tank trends, plain Digital Twin examples,
+operating equipment and asking for readings from the diagram, sector data on the Overview) and R33-01 to
+R33-03 (pinned Stop per tank tab, recipe errors at their field, neutral reset wording). Equipment is
+operated only through its process's existing bounded operations and the real controller; real equipment
+profiles stay read only. Per item: `operator/owner-tour/issues.md`. Owner results NOT RUN.
 
 **0.3.3, corrections for a first-time operator (2026-10-19):** the owner reviewed 0.3.2 as a first-time
 operator (F-01 to F-09, CHANGES REQUESTED). The Windows ZIP now carries its own Python (`runtime/`,

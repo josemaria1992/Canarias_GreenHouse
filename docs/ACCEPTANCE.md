@@ -317,6 +317,24 @@ whether each finding is fixed, and every owner case stays **NOT RUN** until the 
 | F-08 tank preparation in plain words; the synthetic preparation on the Digital Twin page | Nutrients & acid, Digital Twin | `ui_check` "F-08 tank preparation in plain words"; tour UAT-07 |
 | F-09 narrow screens: menu, stacked cards, Stop near the top, the diagram as its own view | layout | `ui_check` "UI-05 viewport phone 390px / tablet 820px / pc 1366px" (no sideways page scroll, Stop position), "F-09 keyboard only: water one sector once and stop it"; tour UAT-16a |
 
+## Owner feedback on 0.3.3 and reviewer corrections (19 October 2026, O-01 to O-05, R33-01 to R33-03)
+
+O-01 to O-05 are the owner's ad hoc feedback, not tour results; R33-01 to R33-03 are the external
+reviewer's corrections. The rows below are software checks, not owner results: every owner case stays
+**NOT RUN**.
+
+| Item | 0.3.4 | Automated evidence |
+|---|---|---|
+| O-01 white text instead of blue, including hover, selection and focus | link colours in `web/app.css` | `ui_check` "O-01 white text instead of blue" (6 pages, light and dark, hover and focus) |
+| O-02 one diagram: flow direction, tank trends, the same states everywhere, animation from readings only | `web/plant.js` diagram | `ui_check` "O-02 the active watering route and a falling main tank", "O-02 a refill" |
+| O-03 plain example names, previews, what loading does, ids under Details | Digital Twin page, `web/words.js` | `ui_check` "O-03 Digital Twin examples"; tour UAT-06, UAT-08, UAT-09, UAT-11 |
+| O-04 operate from the diagram (Manual direct, otherwise confirmed; Cancel changes nothing; pending, reported, refused) | the owning process's existing operations | `ui_check` "O-04 Manual mode", "O-04 Automatic mode" (×3), "O-04 a request that cannot be done is explained", "O-04 a refusal by the controller is shown in plain words" |
+| O-04 sensor readings with their own time, or the newest with its real age | `GET /api/plant/reading` | `test_owner_feedback_034.py` (fresh, stalled, unbound, signed in only, bounded wait); `ui_check` "O-04 a sensor click asks for a new reading …", "O-04 without a new reading, the newest is shown as old" |
+| O-05 sector data on the Overview, with links to the sector page and its history | Sectors card | `ui_check` "O-05 sector data on the Overview" |
+| R33-01 the pinned Stop follows the tank tab, including the fertiliser and acid fills | stop bar on Nutrients & acid | `ui_check` "R33-01 the pinned Stop follows the chosen tank" (3 tabs × 2 processes: request sent and resulting state) |
+| R33-02 every recipe error reaches its field | structured 422 for `/api/recipes/draft` | `test_owner_feedback_034.py` (4 tests); `ui_check` "R33-02 …" (×2) |
+| R33-03 neutral wording when a fault cannot be checked while stopped | `fault_checkable` in the process view | `test_owner_feedback_034.py` (valve case, drive case); `ui_check` "R33-03 …" (×2) |
+
 ## Milestone 5: hardware arrival
 
 | ID | Status | Evidence |

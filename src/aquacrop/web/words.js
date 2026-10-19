@@ -102,7 +102,7 @@
     twin: "The Digital Twin is a computer model of the greenhouse. Everything shown and done in this program happens in the model; no real pump or valve moves.",
     bench: "The I/O test bench shows every input and output channel of the I/O modules. In the Digital Twin the channels are simulated; it is used to test wiring and signals.",
     ph: "Acidity (pH) says how acidic the water is. Lower is more acidic. Plants usually want about 6; acid lowers it.",
-    ec: "Nutrient strength (EC) says how much fertiliser is dissolved in the water, in mS/cm. Higher means stronger.",
+    ec: "Nutrient strength (EC) is the water's electrical conductivity, in mS/cm. Dissolved salts raise it, fertiliser among them, so it rises as fertiliser is added. It is not a direct measure of how much fertiliser is in the water: salts already in the water count too.",
     stop: "This stops the process in the program and switches its equipment off in a safe order. It is not an emergency stop: use the emergency stop on the equipment for that.",
   };
 
@@ -259,6 +259,61 @@
     return cap(t);
   }
 
-  window.AqWords = { TANK, PROC, proc, state, phase, equip, signal, signalGroup, GROUP_ORDER, quality, QUALITY_HELP, HELP,
+
+  // ------------------------------------------------------------------ Digital Twin examples (O-03)
+  // preset id -> [plain name, one-sentence preview]. The preview says what the example sets up and, for the
+  // ones with a script, what it does by itself; the id and the owner-tour case stay under Details.
+  const EXAMPLES = {
+    tour_low_main: ["Try refilling the main tank", "Sets the main tank level low (7,600 L) so you can try a refill; nothing starts until you start it."],
+    tour_ph_high: ["Try acid dosing", "Sets the main tank's acidity high (pH 6.8) so you can try acid dosing; nothing starts until you start it."],
+    tour_sump_high: ["Try returning drainage water", "Fills the drainage tank above its start level (2,700 L) so you can try the drainage return; nothing starts until you start it."],
+    tour_main_full_sump_high: ["See the return wait for a full main tank", "Sets a full main tank and a high drainage tank so you can see the drainage return hold; nothing starts until you start it."],
+    tour_ec_lost_at_valve_opening: ["See a refill stop when EC is lost", "Starts a refill by itself and loses the nutrient strength (EC) reading as fertiliser A's valve opens, so you can see both fertilisers stop."],
+    irrigation_alternation: ["Watch automatic watering take turns", "Starts automatic watering by itself: Sector 1 with main pump 1, then Sector 2 with main pump 2, twice."],
+    recipe_edit_next_cycle: ["Watch a recipe change apply at the next step", "Starts watering by itself and puts new settings in use halfway, so you can see them apply from the next sector."],
+    manual_irrigation_operator_pump: ["Watch watering once by hand", "Switches watering to Manual mode by itself, waters Sector 1 once with main pump 2 for 60 s, then starts automatic watering."],
+    manual_bounds_rejected: ["See out-of-limit manual requests refused", "Asks by itself for manual operations outside the recipe's limits, so you can see them refused."],
+    raw_command_refused: ["See a direct output command refused", "Sends a direct output command by itself, so you can see that the greenhouse model refuses it."],
+    vfd_trip_recovery: ["Recover from a pump drive fault", "Starts watering by itself, then the pump drive trips, so you can follow the recovery steps."],
+    vfd_stop_feedback_missing: ["See a pump drive that does not report stopping", "Starts watering by itself and the drive keeps reporting running after the stop, so the valve and pump stay as they are."],
+    drive_no_run: ["See a pump drive that does not start", "Starts watering by itself and the drive never reports running."],
+    drive_modbus_comm_loss: ["See the pump drive stop answering", "Starts watering by itself and the drive's data link goes quiet, so you can see the drive stop and watering lock out."],
+    drive_modbus_refused: ["See the pump drive refuse commands", "Starts watering by itself and the drive answers every command with an error, so nothing runs."],
+    drive_modbus_ignores_writes: ["See the pump drive ignore commands", "Starts watering by itself and the drive repeats the commands but does not start."],
+    main_pump_no_flow: ["See a main pump with no water flow", "Starts watering by itself and main pump 1 runs without delivering water."],
+    contactor_no_close: ["See a pump selector that does not close", "Starts watering by itself and main pump 1's selector (K1) never closes."],
+    contactor_welded: ["See a pump selector stuck closed", "Starts watering by itself and main pump 1's selector (K1) stays closed after the step."],
+    sector_valve_stuck_closed: ["See a sector valve that does not open", "Starts watering by itself and Sector 1's valve stays closed, so the pump never starts."],
+    sector_valve_stuck_open: ["See a sector valve that does not close", "Starts watering by itself and Sector 1's valve stays open after the step."],
+    safety_chain_open: ["See the safety circuit open", "Starts processes by itself and opens the safety circuit, so every running process locks out."],
+    main_low_low: ["See watering refused with a nearly empty main tank", "Sets the main tank nearly empty (2,000 L) and asks for automatic watering by itself, which does not start."],
+    main_source_empty: ["See watering stop as the main tank runs dry", "Starts watering by itself from a low main tank, which falls below the dry-run limit."],
+    main_level_open_loop: ["See the main tank level reading fail", "Starts watering by itself and the main tank level sensor's wire breaks."],
+    stale_acquisition: ["See readings stop arriving", "Starts watering by itself and the readings stop updating, so watering stops."],
+    module_timeout: ["See an input module stop answering", "Starts watering by itself and one input module stops answering, so the sector flow is lost."],
+    refill_ec_target: ["Watch a refill to a nutrient strength (EC) target", "Starts a refill by itself that adds water and fertilisers A and B until the EC target is reached."],
+    refill_fixed_volumes: ["Watch a refill with set amounts", "Starts a refill by itself that adds set amounts of water and fertilisers A and B, then checks the EC."],
+    refill_fixed_ec_out_of_band: ["See a refill end outside the EC limits", "Starts a refill by itself whose set amounts are too small, so the EC check fails."],
+    refill_stock_not_prepared: ["See a refill wait for unprepared tanks", "Starts a refill by itself without confirmed fertiliser tanks, so no fertiliser is added."],
+    refill_stock_empty: ["See a refill with an empty fertiliser tank", "Starts a refill by itself with fertiliser tank A at its reserve, so no fertiliser is added."],
+    refill_transfer_no_flow: ["See a transfer pump with no flow", "Starts a refill by itself and fertiliser A's transfer pump runs without water flow."],
+    refill_transfer_timeout: ["See a fertiliser transfer take too long", "Starts a refill by itself and one fertiliser transfer runs past its longest time."],
+    stock_fill_invalidates: ["See a water fill undo a tank's preparation", "Fills fertiliser tank A with water by itself, so the tank must be confirmed prepared again."],
+    refill_concurrency: ["Watch several processes run together", "Starts refill, watering, drainage return and acid dosing by itself at the same time."],
+    acid_to_target: ["Watch acid dosing reach its target", "Sets a high pH and starts acid dosing by itself, in doses with waits, until the target is reached."],
+    acid_already_in_band: ["See acid dosing with pH already right", "Starts acid dosing by itself with pH already at its target, so no acid is added."],
+    acid_undershoot: ["See pH below its lower limit", "Sets the pH too low (5.3) and starts acid dosing by itself, which stops with a problem."],
+    acid_no_response: ["See acid dosing with a frozen pH probe", "Starts acid dosing by itself while the pH reading does not change, so it stops after the set number of doses."],
+    acid_batch_limit: ["See acid dosing reach its batch limit", "Starts acid dosing by itself until the most acid allowed in one batch is reached."],
+    acid_ph_unavailable: ["See acid dosing without a pH reading", "Starts acid dosing by itself and the pH sensor's wire breaks, so no dose starts."],
+    return_alternation: ["Watch the return pumps take turns", "Starts the drainage return by itself; the two return pumps take turns at each start."],
+    sump_high_main_full: ["See the return hold for a full main tank", "Sets a full main tank and a high drainage tank and starts the return by itself, which holds."],
+    return_pump_no_flow: ["See a return pump with no water flow", "Starts the drainage return by itself and the pump runs without water flow."],
+  };
+  function example(id, description) {
+    const x = EXAMPLES[id];
+    return x ? { name: x[0], preview: x[1] } : { name: id.replace(/_/g, " "), preview: description || "" };
+  }
+  window.AqWords = { EXAMPLES, example, TANK, PROC, proc, state, phase, equip, signal, signalGroup, GROUP_ORDER, quality, QUALITY_HELP, HELP,
                      problem, SEVERITY, plain, refusal, sectorName, n0, fixed, cap };
 })();

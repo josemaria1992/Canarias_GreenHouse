@@ -202,12 +202,14 @@ jobs:
           path: |
             dist-release/*.zip
             dist-release/*.zip.sha256
-      - name: Build the earlier demos from their own commits, for the upgrade test (0.3.1 main bcd6200, 0.3.2 3f542a6)
+      - name: Build the earlier demos from their own commits, for the upgrade test (0.3.1 main bcd6200, 0.3.2 3f542a6, 0.3.3 c9fa047)
         run: |
           git worktree add "$RUNNER_TEMP/v031" bcd620094fdfadbe466a973f27d67b5592c600d9
           (cd "$RUNNER_TEMP/v031" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.1" --wheelhouse win_amd64:3.12)
           git worktree add "$RUNNER_TEMP/v032" 3f542a623aaaca50818ba2d9368ce77bd0e16bb4
           (cd "$RUNNER_TEMP/v032" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.2" --wheelhouse win_amd64:3.12)
+          git worktree add "$RUNNER_TEMP/v033" c9fa0476cfc354c9734c32b58485788c1863b25e
+          (cd "$RUNNER_TEMP/v033" && python scripts/build_release.py --out "$RUNNER_TEMP/old/0.3.3" --windows-runtime download)
       - uses: actions/upload-artifact@v4
         with:
           name: release-earlier
@@ -226,8 +228,9 @@ jobs:
     # python and python3 are stand-ins that fail if called. A cold start on the Python bundled in runtime/ (package
     # index disabled) with the first administrator, sign-in, browser assets, version and release check, a clean
     # stop and a restart that keeps the data; the installed-wheel check outside any source tree with the bundled
-    # Python; and an upgrade over the provisional 0.3.1 demo and then the 0.3.2 demo (rebuilt from their commits in
-    # the release job; they still use the PC's Python 3.12), keeping accounts, recipes, history and backups.
+    # Python; and an upgrade over the provisional 0.3.1 demo, then the 0.3.2 demo, then 0.3.3 (rebuilt from their
+    # commits in the release job; 0.3.1 and 0.3.2 still use the PC's Python 3.12, 0.3.3 its bundled one), keeping
+    # accounts, recipes, history and backups.
     # The hosted runner has Python installed; it is hidden from the launcher, not removed. Simulation only.
     needs: release
     runs-on: windows-2022
@@ -275,24 +278,27 @@ jobs:
         with:
           name: release-earlier
           path: old
-      - name: Upgrade over the provisional 0.3.1 demo, then the 0.3.2 demo
+      - name: Upgrade over the provisional 0.3.1 demo, then the 0.3.2 demo, then 0.3.3
         shell: bash
         env:
           PIP_NO_INDEX: "1"
         run: |
           T="$RUNNER_TEMP"; E="$T/evidence"
-          for v in 0.3.1 0.3.2; do
+          for v in 0.3.1 0.3.2 0.3.3; do
             (cd old/$v && sha256sum -c aquacrop-*.zip.sha256) && unzip -q old/$v/aquacrop-*.zip -d old-unpacked-$v
           done
           O1=$(ls -d old-unpacked-0.3.1/aquacrop-*)/AquaCrop-Demo.cmd; O2=$(ls -d old-unpacked-0.3.2/aquacrop-*)/AquaCrop-Demo.cmd
+          O3=$(ls -d old-unpacked-0.3.3/aquacrop-*)/AquaCrop-Demo.cmd
           NEW=$(ls -d "$PWD"/trial*/aquacrop-*)/AquaCrop-Demo.cmd
           V=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$(dirname "$NEW")/RELEASE.json")
           python scripts/release_smoke.py --launcher "$O1" --local "$T/upgrade" --secret "$T/pw-up" --first --seed \
             --record "$E/upgrade-0.3.1.json" --expect-version 0.3.1 --expect-release ANY
           python scripts/release_smoke.py --launcher "$O2" --local "$T/upgrade" --secret "$T/pw-up" \
             --compare "$E/upgrade-0.3.1.json" --record "$E/upgrade-0.3.2.json" --expect-version 0.3.2
+          python scripts/release_smoke.py --launcher "$O3" --local "$T/upgrade" --secret "$T/pw-up" \
+            --compare "$E/upgrade-0.3.2.json" --record "$E/upgrade-0.3.3.json" --expect-version 0.3.3 --hide-python
           python scripts/release_smoke.py --launcher "$NEW" --local "$T/upgrade" --secret "$T/pw-up" \
-            --compare "$E/upgrade-0.3.2.json" --record "$E/upgrade-new.json" --expect-version "$V" --hide-python
+            --compare "$E/upgrade-0.3.3.json" --record "$E/upgrade-new.json" --expect-version "$V" --hide-python
       - uses: actions/upload-artifact@v4
         if: always()
         with:
