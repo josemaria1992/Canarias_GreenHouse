@@ -79,3 +79,16 @@ def test_a_release_folder_without_its_release_json_stops_the_launcher(tmp_path, 
     sh = (ROOT / "launchers" / "aquacrop-demo.sh").read_text(encoding="utf-8")
     assert 'if defined WSHA set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"' in cmd
     assert 'if [ -n "$WSHA" ]; then export AQUACROP_RELEASE_INFO="$HERE/RELEASE.json"' in sh
+
+
+def test_the_windows_launcher_reaches_each_path_only_through_its_label():
+    # every goto names a label defined exactly once; the bundled-Python start is entered only from the top,
+    # and the venv install falls back to its own cleanup, never into the bundled start
+    cmd = (ROOT / "launchers" / "AquaCrop-Demo.cmd").read_text(encoding="utf-8")
+    labels = re.findall(r"^:(\w+)", cmd, re.M)
+    assert sorted(labels) == sorted(set(labels)) == ["bundled", "fail", "failvenv"]
+    assert set(re.findall(r"goto :(\w+)", cmd)) <= set(labels)
+    assert [ln for ln in cmd.splitlines() if "goto :bundled" in ln] == ['if exist "%HERE%runtime\\python.exe" goto :bundled']
+    body = cmd.split("\n:bundled", 1)[1].split("\n:failvenv", 1)[0]
+    assert '"%PY%" -I -X utf8 -m aquacrop launch %*' in body and "(" not in body.replace("(3,1", "")
+    assert cmd.index("\n:bundled") > cmd.index('"!VENV!\\Scripts\\python.exe" -m aquacrop launch %*')

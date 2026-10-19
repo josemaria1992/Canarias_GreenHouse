@@ -20,7 +20,7 @@ rem 1. 64-bit Python 3.11 to 3.14 on the PC (the tested range), for a source che
 set "PY="
 py -3.12 -c "import sys; raise SystemExit(sys.maxsize < 2**32)" >nul 2>&1 && set "PY=py -3.12"
 if not defined PY (
-  python -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,11),(3,12),(3,13)) and sys.maxsize > 2**32 else 1)" >nul 2>&1 && set "PY=python"
+  python -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,11),(3,12),(3,13),(3,14)) and sys.maxsize > 2**32 else 1)" >nul 2>&1 && set "PY=python"
 )
 for %%V in (3.13 3.14 3.11) do (
   if not defined PY (
@@ -84,20 +84,7 @@ if not exist "!VENV!\Scripts\python.exe" (
   for /f %%T in ('!PY! -c "import sys; print('py%%d%%d' %% sys.version_info[:2])"') do set "PYTAG=%%T"
   if exist "%HERE%wheelhouse-win_amd64-!PYTAG!\" set "OFFLINE=--no-index --find-links "%HERE%wheelhouse-win_amd64-!PYTAG!""
   if defined OFFLINE (echo Installing from the bundled wheelhouse ^(no internet needed^).) else (echo Installing the locked packages from the internet.)
-  "!VENV!\Scripts\python.exe" -m pip install --disable-pip-version-check -q !OFFLINE! --require-hashes -r "!LOCK!" || goto :bundled
-rem The release check compares RELEASE.json with the wheel installed in runtime\ when the release was built.
-set "PY=%HERE%runtime\python.exe"
-set "WSHA="
-if exist "%HERE%runtime\aquacrop-wheel.sha256" set /p WSHA=<"%HERE%runtime\aquacrop-wheel.sha256"
-set "AQUACROP_WHEEL_SHA256=%WSHA%"
-set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"
-echo Using the Python bundled with this release: "%PY%"
-rem -I: no user packages, PYTHON* variables or current folder on the path; -X utf8 for names such as Jose
-"%PY%" -I -X utf8 -m aquacrop launch %*
-if errorlevel 1 goto :fail
-endlocal & exit /b 0
-
-:failvenv
+  "!VENV!\Scripts\python.exe" -m pip install --disable-pip-version-check -q !OFFLINE! --require-hashes -r "!LOCK!" || goto :failvenv
   "!VENV!\Scripts\python.exe" -m pip install --disable-pip-version-check -q --no-deps !EDITABLE! "!WHEEL!" || goto :failvenv
   if defined WSHA (>"!MARKER!" echo !WSHA!)
 )
@@ -108,6 +95,19 @@ if defined WSHA set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"
 
 rem 3. Start (prerequisite checks, first administrator, browser) and wait until stopped
 "!VENV!\Scripts\python.exe" -m aquacrop launch %*
+if errorlevel 1 goto :fail
+endlocal & exit /b 0
+
+:bundled
+rem The release check compares RELEASE.json with the wheel installed in runtime\ when the release was built.
+set "PY=%HERE%runtime\python.exe"
+set "WSHA="
+if exist "%HERE%runtime\aquacrop-wheel.sha256" set /p WSHA=<"%HERE%runtime\aquacrop-wheel.sha256"
+set "AQUACROP_WHEEL_SHA256=%WSHA%"
+set "AQUACROP_RELEASE_INFO=%HERE%RELEASE.json"
+echo Using the Python bundled with this release: "%PY%"
+rem -I: no user packages, PYTHON* variables or current folder on the path; -X utf8 for names such as Jose
+"%PY%" -I -X utf8 -m aquacrop launch %*
 if errorlevel 1 goto :fail
 endlocal & exit /b 0
 
