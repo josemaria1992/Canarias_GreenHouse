@@ -52,6 +52,7 @@
       return [sig + "#" + seen[sig], f];
     });
   }
+  let drawn = 0;
   function mount(id, ...kids) {
     const el = $(id);
     if (rendering !== null && edits.seq !== rendering && edits.id === id) return el;
@@ -65,6 +66,7 @@
     const opened = new Map(same ? [...el.querySelectorAll("details > summary")].map(x => [x.textContent, x.parentElement.open]) : []);
     el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
     el.dataset.view = view;
+    el.dataset.drawn = String(++drawn);    // lets a page that redraws only on change tell a skipped draw
     for (const x of el.querySelectorAll("details > summary")) if (opened.has(x.textContent)) x.parentElement.open = opened.get(x.textContent);
     if (keep.size) for (const [k, f] of fieldKeys(el)) {
       if (!keep.has(k)) continue;

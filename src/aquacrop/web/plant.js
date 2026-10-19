@@ -807,7 +807,9 @@
     kids.push(h("details", { class: "card" }, h("summary", null, h("strong", null, "History of settings in use")),
       table(["Time", "What", "Recipe", "By", "Why"], R.activations.slice().reverse().map(a => h("tr", null,
         h("td", null, fmtTime(a.utc)), h("td", null, a.action), h("td", { class: "mono" }, a.recipe + (a.previous ? " (was " + a.previous + ")" : "")), h("td", null, a.actor || ""), h("td", null, a.reason || ""))))));
+    const el = document.getElementById("v-plant"), drawn = el.dataset.drawn;
     mount("v-plant", kids);
+    if (el.dataset.drawn === drawn) recipesKey = null;     // not drawn now (a button was held): draw at the next refresh
   }
   function effect() {
     return "New settings apply from each process's next step: watering from its next sector, refill from its next refill, acid from its next dose. Anything running now finishes with the settings it started with.";
