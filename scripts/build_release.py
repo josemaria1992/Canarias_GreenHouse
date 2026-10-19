@@ -229,6 +229,13 @@ def main() -> int:
     ap.add_argument("--built-utc", help="build time to record (the first pass's, when rebuilding with the guide)")
     args = ap.parse_args()
     out = args.out.resolve()
+    # the checkout as it is before this build writes anything; the build's own output folder never counts
+    inside = out.is_relative_to(ROOT) and out != ROOT
+    skip = [f":(exclude){out.relative_to(ROOT).as_posix()}"] if inside else []
+    changes = git("status", "--porcelain", "--", ".", *skip)
+    commit, dirty = git("rev-parse", "HEAD"), bool(changes)
+    if dirty:
+        print("building from a checkout with changes:\n" + changes, file=sys.stderr)
     out.mkdir(parents=True, exist_ok=True)
     work = out / "build"
     shutil.rmtree(work, ignore_errors=True)
@@ -262,11 +269,10 @@ def main() -> int:
     shutil.copy2(tour / "feedback-template.md", stage / "owner-feedback-template.md")
     if args.owner_tour:
         subprocess.run([sys.executable, str(ROOT / "scripts" / "ui_check" / "make_tour_guide.py"), "--evidence",
-                        str(args.owner_tour), "--out", str(stage / "owner-tour")], check=True)
+                        str(args.owner_tour), "--out", str(stage / "owner-tour"), "--release-version", version], check=True)
     houses = [wheelhouse(stage, spec) for spec in args.wheelhouse]
     runtime = (windows_runtime(stage, args.windows_runtime, out / "runtime-cache", stage / "wheels" / built[0].name)
                if args.windows_runtime else None)
-    commit, dirty = git("rev-parse", "HEAD"), bool(git("status", "--porcelain"))
     report = acceptance_manifest((ROOT / "docs" / "ACCEPTANCE.md").read_text(encoding="utf-8"))
     report |= {"version": version, "commit": commit, "tree_clean": not dirty}
     (stage / "acceptance-manifest.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n",
@@ -286,6 +292,7 @@ def main() -> int:
                                "commissioning)"},
             "normal_demo": "installation-80",
             "owner_tour": {"guide": "owner-tour/index.html" if args.owner_tour else None,
+                           "result_form": "owner-tour/results.html" if args.owner_tour else None,
                            "checklist": "owner-checklist.csv", "owner_results": "NOT RUN"},
             "evidence": "software and simulation only; no hardware, CM4 or cloud account was tested "
                         "(docs/RELEASE_READINESS.md)",
