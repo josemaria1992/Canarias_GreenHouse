@@ -4,7 +4,8 @@
 (function () {
   const S = { csrf: null, user: null, perms: [], status: null, lastOk: 0, stale: false, view: "overview",
               cfgVersion: null, tz: "Europe/Stockholm", trendSel: ["analog_A.AI1", "analog_A.AI2", "relay_A.DI1"],
-              trendMin: 10, settingsLoaded: false };
+              trendRange: "hour", settingsLoaded: false, plantAt: 0 };
+  const W = window.AqWords;
   const STALE_AFTER_MS = 4000;
   const OK_OUTCOMES = new Set(["READBACK_CONFIRMED", "ECHO_CONFIRMED"]);   // an echo is not actuator proof either
 
@@ -19,7 +20,7 @@
       else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
       else e.setAttribute(k, v === true ? "" : v);
     }
-    for (const k of kids.flat()) {
+    for (const k of kids.flat(Infinity)) {
       if (k == null || k === false) continue;
       e.appendChild(typeof k === "string" || typeof k === "number" ? document.createTextNode(String(k)) : k);
     }
@@ -34,17 +35,58 @@
     if (v) { edits.seq += 1; edits.id = v.id; }
   }, true);
   let rendering = null;          // the edit count when the current refresh started
+  let renderingView = null;      // the page the current refresh is drawing (the user may already have moved on)
+  // Fields and choices the user has changed survive the once-a-second rebuild of the page, so a pump picked
+  // in a form is still the pump that the button next to it sends, even after the user clicked elsewhere.
+  document.addEventListener("input", e => { if (e.target && e.target.dataset) e.target.dataset.dirty = "1"; }, true);
+  document.addEventListener("change", e => { if (e.target && e.target.dataset) e.target.dataset.dirty = "1"; }, true);
+  function fieldKeys(el) {
+    const seen = {};
+    return [...el.querySelectorAll("input,select,textarea")].map(f => {
+      const card = f.closest(".card"), row = f.closest("tr"), lab = f.closest("label");
+      const sig = [f.tagName, f.type, f.placeholder, f.getAttribute("aria-label"), f.name,
+        card && card.querySelector("h2") ? card.querySelector("h2").textContent : "",
+        row && row.querySelector("td") ? row.querySelector("td").textContent : "",
+        lab ? lab.firstChild && lab.firstChild.textContent : ""].join("|");
+      seen[sig] = (seen[sig] || 0) + 1;
+      return [sig + "#" + seen[sig], f];
+    });
+  }
+  let drawn = 0;
   function mount(id, ...kids) {
     const el = $(id);
     if (rendering !== null && edits.seq !== rendering && edits.id === id) return el;
-    el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false)); return el;
+    const view = renderingView || S.view;
+    if (view !== S.view) return el;      // the user moved to another page meanwhile: the next refresh draws that one
+    // a refresh must not replace a button held down since it started its requests: the click would be lost
+    if (renderingView !== null && el.dataset.view === view && pressed && Date.now() - pressed < 2000) return el;
+    const keep = el.dataset.view === view ? new Map(fieldKeys(el).filter(([, f]) => f.dataset.dirty && f.type !== "file")
+      .map(([k, f]) => [k, f.type === "checkbox" || f.type === "radio" ? f.checked : f.value])) : new Map();
+    const same = el.dataset.view === view;
+    const opened = new Map(same ? [...el.querySelectorAll("details > summary")].map(x => [x.textContent, x.parentElement.open]) : []);
+    el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
+    el.dataset.view = view;
+    el.dataset.drawn = String(++drawn);    // lets a page that redraws only on change tell a skipped draw
+    for (const x of el.querySelectorAll("details > summary")) if (opened.has(x.textContent)) x.parentElement.open = opened.get(x.textContent);
+    if (keep.size) for (const [k, f] of fieldKeys(el)) {
+      if (!keep.has(k)) continue;
+      const v = keep.get(k);
+      if (f.type === "checkbox" || f.type === "radio") f.checked = v;
+      else if (f.tagName !== "SELECT" || [...f.options].some(o => o.value === v)) f.value = v;
+      f.dataset.dirty = "1";
+    }
+    return el;
   }
-  function toast(msg, bad) {
-    const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
+  function toast(msg, bad, raw) {
+    const t = $("toast"); t.textContent = msg; t.title = raw && raw !== msg ? raw : ""; t.classList.remove("hidden");
     t.style.background = bad ? "var(--bad)" : "";
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), 5000);
   }
   function can(p) { return S.perms.includes(p); }
+  function simClock(sec) {          // simulated seconds since the run started, as h:mm:ss
+    const t = Math.max(0, Math.floor(sec)), hh = Math.floor(t / 3600), mm = Math.floor(t / 60) % 60, ss = t % 60;
+    return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  }
   function fmtTime(iso) {
     if (!iso) return "—";
     return new Intl.DateTimeFormat("sv-SE", { timeZone: S.tz, dateStyle: "short", timeStyle: "medium" }).format(new Date(iso));
@@ -55,7 +97,25 @@
     return ((ref - Date.parse(iso)) / 1000).toFixed(1) + " s";
   }
   function num(v, d = 2) { return v == null ? "—" : (typeof v === "boolean" ? (v ? "ON" : "OFF") : Number(v).toFixed(d)); }
-  function qBadge(q) { return h("span", { class: "q q-" + q }, q); }
+  /** "1 second ago", "12 seconds ago", "3 min ago": how old a reading is, in words. */
+  function ago(ageS) {
+    if (ageS == null || !isFinite(ageS)) return "";
+    const s = Math.max(1, Math.round(ageS));
+    if (s < 60) return s === 1 ? "1 second ago" : `${s} seconds ago`;
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 172800) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} days ago`;
+  }
+  /** The site clock time (HH:MM:SS) a reading of this age was taken. */
+  function agoClock(ageS) {
+    const ref = S.status ? Date.parse(S.status.freshness.server_utc) + (Date.now() - S.lastOk) : Date.now();
+    return new Intl.DateTimeFormat("sv-SE", { timeZone: S.tz, timeStyle: "medium" }).format(new Date(ref - 1000 * (ageS || 0)));
+  }
+  /** A reading's quality in plain words (F-03); the code stays in data-q and the help text explains it. */
+  function qBadge(q, ageS) {
+    const text = q === "STALE" && ageS != null ? `${W.quality(q)} (last update ${agoClock(ageS)})` : W.quality(q);
+    return h("span", { class: "q q-" + q, "data-q": q, title: W.QUALITY_HELP[q] || q }, text);
+  }
   function oBadge(o) { return h("span", { class: "origin origin-" + o }, o === "SIMULATED" ? "SIM" : o); }
   function pill(text, cls) { return h("span", { class: "pill " + (cls || "") }, text); }
 
@@ -73,8 +133,12 @@
   }
   async function act(method, path, body, okMsg) {
     if (S.stale) { toast("Connection stale: command not sent", true); return null; }
-    try { const r = await api(method, path, body); if (okMsg) toast(okMsg); refresh(); return r; }
-    catch (e) { toast(String(e.message || e), true); return null; }
+    try {
+      const r = await api(method, path, body); if (okMsg) toast(okMsg);
+      document.querySelectorAll("section [data-dirty]").forEach(f => { delete f.dataset.dirty; });   // done: the form starts afresh
+      refresh(); return r;
+    }
+    catch (e) { const raw = String(e.message || e); toast(W.refusal(raw), true, raw); return null; }
   }
   function rid() { return "ui_" + crypto.getRandomValues(new Uint32Array(4)).join("").slice(0, 24); }
   function cmd(target, desired) {
@@ -123,10 +187,30 @@
   // ---------------------------------------------------------------- routing / polling
   function section(view) { return document.getElementById("v-" + view) ? "v-" + view : "v-plant"; }
   function highlightNav() {
-    document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + S.view));
+    let cur = null;
+    document.querySelectorAll("#nav a").forEach(a => {
+      const on = a.getAttribute("href") === "#" + S.view;
+      a.classList.toggle("active", on);
+      if (on) { a.setAttribute("aria-current", "page"); cur = a.textContent; } else a.removeAttribute("aria-current");
+    });
+    $("nav-current").textContent = cur || "";
   }
+  // On a narrow screen the menu is one button (F-09); choosing a page closes it again.
+  function menu(open) {
+    $("nav").classList.toggle("open", open);
+    $("menu-btn").setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  $("menu-btn").addEventListener("click", () => menu(!$("nav").classList.contains("open")));
+  $("nav").addEventListener("click", e => { if (e.target.closest("a")) menu(false); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && $("nav").classList.contains("open")) { menu(false); $("menu-btn").focus(); } });
+  $("status-more").addEventListener("click", () => {
+    const open = $("status-tech").classList.toggle("hidden") === false;
+    $("status-more").setAttribute("aria-expanded", open ? "true" : "false");
+    $("status-more").textContent = open ? "Hide details" : "Details";
+  });
   function route() {
     S.view = (location.hash || "#overview").slice(1);
+    if (S.view === "trends") { history.replaceState(null, "", "#history"); S.view = "history"; }   // the page's earlier name
     S.rendered = null;
     highlightNav();
     const sec = section(S.view);
@@ -135,6 +219,9 @@
   }
   window.addEventListener("hashchange", route);
 
+  let pressed = 0;                   // time a pointer button went down; 0 once it is released
+  window.addEventListener("pointerdown", () => { pressed = Date.now(); }, true);
+  ["pointerup", "pointercancel", "blur"].forEach(ev => window.addEventListener(ev, () => { pressed = 0; }, true));
   let busy = false, again = false;
   async function refresh(queue = true) {
     if ($("app").classList.contains("hidden")) return;
@@ -142,21 +229,32 @@
     busy = true; again = false;
     rendering = edits.seq;
     const view = S.view;
+    renderingView = view;
     try {
       S.status = await api("GET", "/api/status");
       S.lastOk = Date.now(); S.cfgVersion = S.status.config_version; S.tz = S.status.timezone;
       setStale(false);
+      await plantForStatus();
       renderBanner();
       const ae = document.activeElement;   // don't rebuild a view while the user is typing in it
-      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
+      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)
+        || Date.now() - pressed < 2000;     // nor between pressing and releasing a button: the click would be lost
       const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
-      if (fn && !typing) await fn();
-      else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
+      try {
+        if (fn && !typing) await fn();
+        else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
+      } catch (e) {
+        // a page that cannot be drawn says so; it is not a lost connection unless a request failed
+        if (e instanceof TypeError && !/fetch/i.test(e.message)) {
+          console.error(e);
+          mount(section(S.view), h("div", { class: "card" }, h("p", { class: "error" }, "This page could not be shown: " + e.message), h("p", { class: "muted" }, "Reload the page. If it happens again, note the time and what you pressed.")));
+        } else throw e;
+      }
       if (S.view === view) S.rendered = view;
     } catch (e) {
       if (String(e.message) !== "not authenticated") setStale(true);
     } finally {
-      busy = false; rendering = null;
+      busy = false; rendering = null; renderingView = null;
       if (again) refresh();
     }
   }
@@ -179,18 +277,43 @@
     const real = st.profile !== "SIMULATED";
     document.querySelectorAll('#nav a[href="#twin"]').forEach(a => a.classList.toggle("hidden", real));
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
+    if ((real || isInst()) && window.AqPlant) window.AqPlant.buildNav();   // process pages (read-only on hardware, ADR-0009 addendum)
+    plainStatus(st);
+    const lines = [];
     if (real) {
-      $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${st.physical_writes}` +
-        ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
-      if (window.AqPlant) window.AqPlant.buildNav();   // read-only process pages (ADR-0009 addendum)
-      return;
+      lines.push(`AquaCrop ${st.software_version} · Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${st.physical_writes}` +
+        ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`);
+    } else {
+      const t = st.twin, c = st.controller;
+      const ctl = isInst() ? `processes ${c.state} · recipe ${c.recipe || "none active"}` : `controller ${c.state}/${c.phase}`;
+      lines.push(W.HELP.twin,
+        `AquaCrop ${st.software_version} · Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${ctl}` +
+        ` · twin ${t.activity} ${t.speed}× · simulated time ${simClock(t.sim_s)} since the run started · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
+        ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · site clock ${fmtTime(new Date().toISOString())} ${S.tz}`);
     }
-    if (isInst() && window.AqPlant) window.AqPlant.buildNav();
-    const t = st.twin, c = st.controller;
-    const ctl = isInst() ? `processes ${c.state} · recipe ${c.recipe || "none active"}` : `controller ${c.state}/${c.phase}`;
-    $("statusline").textContent = `Profile ${st.profile} · config ${st.config_id}@${st.config_version} · ${ctl}` +
-      ` · twin ${t.activity} ${t.speed}× sim ${t.sim_s.toFixed(1)} s · source ${t.source}${t.scenario ? " · scenario " + t.scenario : ""}` +
-      ` · newest data ${num(st.freshness.newest_sample_age_s, 1)} s old · ${S.tz}`;
+    $("status-tech").replaceChildren(...lines.map(x => h("div", null, x)));
+  }
+  /** The first line an operator reads (F-03): where this runs, watering, the main tank, how fresh the readings are. */
+  function plainStatus(st) {
+    const parts = [];
+    parts.push(st.profile === "SIMULATED" ? h("strong", { title: W.HELP.twin }, "Digital Twin") : h("strong", null, "Real equipment, read only"));
+    const ir = st.controller && st.controller.processes ? st.controller.processes.IRRIGATION : null;
+    if (ir) parts.push({ STOPPED: "Watering stopped", AUTO: "Watering automatically", MANUAL: "Watering in manual mode",
+      FAULT_LOCKOUT: "Watering stopped because of a problem" }[ir.state] || "Watering: " + W.state(ir.state));
+    else if (st.profile === "SIMULATED" && st.controller && st.controller.state) parts.push(`Controller ${W.state(st.controller.state).toLowerCase()}`);
+    const lvl = S.plant && S.plant.signals && S.plant.signals["tank.MAIN.level"], m = lvl && lvl.sample;
+    if (m && m.value != null && ["GOOD", "OVERRIDDEN"].includes(m.quality)) parts.push(`Main tank ${Math.round(100 * m.value / S.plant.layout.tanks_L.MAIN)}%`);
+    else if (lvl) parts.push(`Main tank: ${W.quality(m ? m.quality : "UNAVAILABLE").toLowerCase()}`);
+    const age = st.freshness.newest_sample_age_s;
+    parts.push(age == null ? "No reading yet" : `Last reading ${ago(age)}`);
+    const n = st.alarms ? st.alarms.active + 0 : 0;
+    if (n) parts.push(h("a", { href: "#alarms" }, n === 1 ? "1 problem" : `${n} problems`));
+    $("status-plain").replaceChildren(...parts.flatMap((x, i) => i ? [" · ", x] : [x]));
+  }
+  // the plant readings behind the status line, at most every 5 s (the process pages fetch them anyway)
+  async function plantForStatus() {
+    if (!(isInst() || isReal()) || Date.now() - S.plantAt < 5000) return;
+    try { S.plant = await api("GET", "/api/plant"); S.plantAt = Date.now(); } catch (e) { /* the line shows what it has */ }
   }
 
   // ---------------------------------------------------------------- views
@@ -473,84 +596,157 @@
   // ------------------------------------------------ installation topology (simulation; interim pages)
   function procPill(s) { return pill(s, s === "FAULT_LOCKOUT" ? "bad" : s === "AUTO" ? "ok" : s === "MANUAL" ? "warn" : ""); }
   function instWaterCard(pl) {
-    return h("div", { class: "card" }, h("h2", null, "Water (simulated installation)"), h("dl", { class: "kv" },
-      ...Object.entries(pl.tanks).flatMap(([k, t]) => [h("dt", null, k), h("dd", null, `${t.volume_L.toFixed(0)} / ${t.capacity_L} L`)]),
-      ...Object.entries(pl.flows_L_min).filter(([, q]) => q > 0.05).flatMap(([k, q]) => [h("dt", null, "Flow " + k), h("dd", null, q.toFixed(1) + " L/min")]),
-      h("dt", null, "pH / EC (probe, synthetic)"), h("dd", null, `${num(pl.chemistry.probe_ph)} / ${num(pl.chemistry.probe_ec_mS_cm)} mS/cm`),
-      h("dt", null, "Ledger residual"), h("dd", null, pl.ledger.residual_L.toExponential(2) + " L")),
-      h("p", { class: "muted" }, "Sizes and equipment confirmed by the owner; dynamics, levels and chemistry are DEMO."));
+    const T = { MAIN: "Main tank", A: "Fertiliser tank A", B: "Fertiliser tank B", ACID: "Acid tank", SUMP: "Drainage tank" };
+    return h("div", { class: "card" }, h("h2", null, "Water in the model"), h("dl", { class: "kv" },
+      ...Object.entries(pl.tanks).flatMap(([k, t]) => [h("dt", null, W.TANK[k] || T[k] || k), h("dd", null, `${W.n0(t.volume_L.toFixed(0))} of ${W.n0(t.capacity_L)} L`)]),
+      ...Object.entries(pl.flows_L_min).filter(([, q]) => q > 0.05).flatMap(([k, q]) => [h("dt", null, "Flow: " + W.signal("flow." + k).replace(/ water flow$| flow$/, "")), h("dd", null, q.toFixed(1) + " L/min")]),
+      h("dt", null, "Acidity (pH) / nutrient strength (EC)"), h("dd", null, `${num(pl.chemistry.probe_ph)} / ${num(pl.chemistry.probe_ec_mS_cm)} mS/cm (synthetic)`)),
+      h("p", { class: "muted" }, "These are the model's own values. The process pages show what the program reads from the simulated sensors instead. Tank sizes and equipment are the owner's; the behaviour of the water, levels and chemistry is a demonstration model."));
   }
+  // simulated faults, in plain words; the codes stay the values sent
+  const FAULT_KIND = { drive: "Pump drive", drive_comm: "Pump drive data link", contactor: "Pump selector", pump: "Pump", valve: "Valve",
+    mains: "Mains water", safety: "Safety circuit" };
+  const FAULT_NAME = { TRIP: "trips (drive fault)", NO_RUN: "does not start", NO_FLOW: "runs but no water flows", STUCK_ON: "does not switch off",
+    WELDED: "stays closed (welded)", NO_CLOSE: "does not close", STUCK_CLOSED: "stays closed", STUCK_OPEN: "stays open", NO_SUPPLY: "no mains water",
+    CHAIN_OPEN: "safety circuit opens", NO_RESPONSE: "does not answer", EXCEPTION: "answers with an error", IGNORES_WRITES: "ignores commands" };
   async function instTwin() {
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
+    const pr = await api("GET", "/api/processes").catch(() => null);
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
-    const tc = (action, extra) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), action);
-    const sel = h("select", { id: "scn" }, S.scenarios.map(s => h("option", { value: s.name }, s.name)));
+    const tc = (action, extra, msg) => act("POST", "/api/twin/control", Object.assign({ action }, extra || {}), msg || action);
+    // owner-tour start conditions first (they start nothing), then the scripted test scenarios
+    const opt = x => h("option", { value: x.name }, x.name);
+    const tour = S.scenarios.filter(x => x.name.startsWith("tour_")), scripted = S.scenarios.filter(x => !x.name.startsWith("tour_"));
+    const sel = h("select", { id: "scn" },
+      tour.length ? h("optgroup", { label: "Owner tour presets (simulation only)" }, tour.map(opt)) : null,
+      h("optgroup", { label: "Scripted test scenarios (they run by themselves)" }, scripted.map(opt)));
+    if (S.scnSel && S.scenarios.some(x => x.name === S.scnSel)) sel.value = S.scnSel;
+    const describe = () => (S.scenarios.find(x => x.name === sel.value) || {}).description || "";
+    const desc = h("p", { class: "muted", id: "scn-desc" }, describe());
+    sel.addEventListener("change", () => { S.scnSel = sel.value; desc.textContent = describe(); });
+    const equipName = (kind, id) => kind === "valve" && /^S\d+$/.test(id) ? W.sectorName(id) + " valve" : kind === "mains" || kind === "safety" ? FAULT_KIND[kind]
+      : W.cap(W.equip(id)) + (W.equip(id) === id ? "" : ` (${id})`);
     const fsel = (kind, ids, faults) => {
-      const id = h("select", null, ids.map(x => h("option", { value: x }, x)));
-      const f = h("select", null, h("option", { value: "" }, "no fault"), faults.map(x => h("option", { value: x }, x)));
-      return h("div", { class: "row" }, h("span", null, kind), id, f, cbtn("Apply", () => act("POST", "/api/twin/actuator-fault", { kind, ident: id.value, fault: f.value || null }, "fault applied")));
+      const lid = "fault-" + kind;
+      const id = h("select", { id: lid + "-what", "aria-label": `${FAULT_KIND[kind]}: which one` }, ids.map(x => h("option", { value: x }, equipName(kind, x))));
+      const f = h("select", { id: lid + "-fault", "aria-label": `${FAULT_KIND[kind]}: simulated fault` }, h("option", { value: "" }, "no fault (working)"),
+        faults.map(x => h("option", { value: x }, FAULT_NAME[x] || x)));
+      return h("div", { class: "row" }, h("strong", { class: "w-kind" }, FAULT_KIND[kind]), id, f,
+        cbtn("Apply", () => act("POST", "/api/twin/actuator-fault", { kind, ident: id.value, fault: f.value || null }, f.value ? "simulated fault applied" : "simulated fault removed")));
     };
+    const faults = [];
+    for (const [k, c] of Object.entries(pl.contactors)) if (c.fault) faults.push(`${equipName("contactor", k)}: ${FAULT_NAME[c.fault] || c.fault}`);
+    for (const [k, x] of Object.entries(pl.pumps)) if (x.fault) faults.push(`${equipName("pump", k)}: ${FAULT_NAME[x.fault] || x.fault}`);
+    for (const [k, x] of Object.entries(pl.valves)) if (x.fault) faults.push(`${equipName("valve", k)}: ${FAULT_NAME[x.fault] || x.fault}`);
+    if (pl.drive.tripped) faults.push(`Pump drive: ${FAULT_NAME[pl.drive.tripped] || pl.drive.tripped}`);
+    // F-08: the simulated stand-in for mixing fertiliser into a tank by hand; it never confirms the tank
+    const stockPrep = ["A", "B", "ACID"].map(s => {
+      const r = pr && pr.stocks ? pr.stocks[s] : null, t = s === "ACID" ? "the acid tank" : "tank " + s;
+      return h("div", { class: "row" }, cbtn(s === "ACID" ? "Add simulated acid to the acid tank" : `Add simulated fertiliser to tank ${s}`,
+        () => act("POST", `/api/twin/stock/${s}/prepare`, undefined, `${W.TANK[s]}: simulated ${s === "ACID" ? "acid" : "fertiliser"} added; confirm ${t} is prepared on Nutrients & acid`)),
+        r ? h("span", { class: "muted" }, r.status === "PREPARED" ? "confirmed prepared" : "not confirmed") : null);
+    });
     const lg = pl.ledger;
     mount("v-twin",
-      h("div", { class: "card" }, h("div", { class: "row" },
-        cbtn("Run", () => tc("run")), cbtn("Pause", () => tc("pause")), cbtn("Step", () => tc("step")),
-        ...[1, 10, 60].map(sp => cbtn(sp + "×", () => tc("speed", { speed: sp }), tw.speed === sp ? "" : "ghost")),
-        cbtn("Reset run", () => confirm("Start a new simulation run? History remains.") && tc("reset"), "ghost"),
-        h("span", { class: "muted" }, `${tw.activity} · ${tw.speed}× · t=${sn.sim_s.toFixed(1)} s · tick ${sn.tick}`)),
-        h("div", { class: "row" }, h("label", null, "Scenario preset", sel), cbtn("Load scenario (new run)", () => act("POST", "/api/twin/scenario", { name: sel.value }, "scenario loaded")),
-          h("span", { class: "muted" }, tw.scenario ? "Active: " + tw.scenario : ""))),
-      h("div", { class: "grid" }, instWaterCard(pl),
-        h("div", { class: "card" }, h("h3", null, "Equipment (requested / actual)"), h("dl", { class: "kv" },
-          h("dt", null, "Drive"), h("dd", null, `run ${pl.drive.run_requested ? "ON" : "OFF"}, speed ${(pl.drive.speed * 100).toFixed(0)} %${pl.drive.tripped ? " TRIPPED: " + pl.drive.tripped : ""}`),
-          ...Object.entries(pl.contactors).flatMap(([k, c]) => [h("dt", null, "Contactor " + k), h("dd", null, `${c.requested ? "ON" : "OFF"} / ${c.closed ? "closed" : "open"}${c.fault ? " FAULT " + c.fault : ""}`)]),
-          ...Object.entries(pl.pumps).flatMap(([k, p]) => [h("dt", null, "Pump " + k), h("dd", null, `${p.requested ? "ON" : "OFF"} / ${(p.speed * 100).toFixed(0)} %${p.fault ? " FAULT " + p.fault : ""}`)]),
-          ...Object.entries(pl.valves).flatMap(([k, v]) => [h("dt", null, "Valve " + k), h("dd", null, `${v.requested ? "OPEN" : "CLOSED"} / ${(v.position * 100).toFixed(0)} %${v.fault ? " FAULT " + v.fault : ""}`)]))),
-        h("div", { class: "card" }, h("h3", null, "Volume ledger (L)"), h("dl", { class: "kv" },
-          ...[["initial stored", lg.initial_stored_L], ["stored", lg.stored_L], ["consumption", lg.consumption_L], ["spill", lg.spill_total_L],
-             ["drained to sump", lg.drained_to_sump_L], ["returned to main", lg.returned_to_main_L], ["residual", lg.residual_L]]
-            .flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: "mono" }, k === "residual" ? v.toExponential(3) : v.toFixed(1))]))),
-        h("div", { class: "card" }, h("h3", null, "Actuator faults (change plant dynamics)"),
+      h("div", { class: "card" }, h("h2", null, "Digital Twin"), h("p", null, W.HELP.twin),
+        h("div", { class: "row" }, h("span", null, "The model is ", h("strong", null, tw.activity === "RUN" ? "running" : "paused"), ` at ${tw.speed === 1 ? "normal speed" : tw.speed + "× speed"}.`),
+          cbtn("Run", () => tc("run", null, "model running")), cbtn("Pause", () => tc("pause", null, "model paused")), cbtn("Step", () => tc("step", null, "one step")),
+          ...[1, 10, 60].map(sp => cbtn(sp + "×", () => tc("speed", { speed: sp }, sp === 1 ? "normal speed" : sp + "× speed"), tw.speed === sp ? "" : "ghost")),
+          cbtn("Reset run", () => confirm("Start the model again from the beginning? History is kept.") && tc("reset", null, "the model starts again"), "ghost")),
+        h("div", { class: "row" }, h("label", null, "Start condition (scenario)", sel), cbtn("Load scenario (new run)", () => act("POST", "/api/twin/scenario", { name: sel.value }, "scenario loaded")),
+          h("span", { class: "muted" }, tw.scenario ? "Loaded: " + tw.scenario : "")), desc,
+        h("p", { class: "muted" }, "Load scenario and Reset run start the model again: levels go back to the start condition, every process is stopped, simulated faults and hand-set readings are cleared. History, accounts, recipes and tank confirmations are kept; the speed stays as set.")),
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h2", null, "Simulated fertiliser and acid"),
+          h("p", { class: "muted" }, "In the real greenhouse a person mixes fertiliser into the tank by hand. Here these buttons add the simulated fertiliser to the model. Afterwards the tank still has to be confirmed prepared on the ",
+            h("a", { href: "#nutrients" }, "Nutrients & acid"), " page; adding it never confirms the tank."), stockPrep),
+        h("div", { class: "card" }, h("h2", null, "Simulated faults"),
+          h("p", null, faults.length ? ["Active now: ", h("strong", null, faults.join("; "))] : "No simulated fault is active."),
+          fsel("valve", Object.keys(pl.valves), ["STUCK_CLOSED", "STUCK_OPEN"]),
+          fsel("pump", Object.keys(pl.main_pumps).concat(Object.keys(pl.pumps)), ["NO_RUN", "NO_FLOW", "STUCK_ON"]),
+          fsel("contactor", Object.keys(pl.contactors), ["WELDED", "NO_CLOSE"]),
           fsel("drive", ["MAIN"], ["TRIP", "NO_RUN", "STUCK_ON"]),
           (sn.drive_adapters || []).some(a => a.kind === "MODBUS_RTU") ? fsel("drive_comm", sn.drive_adapters.filter(a => a.kind === "MODBUS_RTU").map(a => a.adapter_id), ["NO_RESPONSE", "EXCEPTION", "IGNORES_WRITES"]) : null,
-          fsel("contactor", Object.keys(pl.contactors), ["WELDED", "NO_CLOSE"]),
-          fsel("pump", Object.keys(pl.main_pumps).concat(Object.keys(pl.pumps)), ["NO_RUN", "NO_FLOW", "STUCK_ON"]),
-          fsel("valve", Object.keys(pl.valves), ["STUCK_CLOSED", "STUCK_OPEN"]),
           fsel("mains", ["MAINS"], ["NO_SUPPLY"]), fsel("safety", ["CHAIN"], ["CHAIN_OPEN"]),
-          h("p", { class: "muted" }, "Main pumps accept NO_RUN and NO_FLOW only. drive_comm faults act on the simulated drive's Modbus interface. Sensor overrides are on the I/O test bench."))));
+          h("p", { class: "muted" }, "A simulated fault changes how the model behaves, so the program sees a problem the way it would on real equipment. Choose \"no fault (working)\" and Apply to remove it. Readings can be set by hand on the I/O test bench."),
+          h("div", { class: "row" }, cbtn("Stall acquisition", () => tc("acq_stall", null, "readings stopped"), "ghost"), cbtn("Resume acquisition", () => tc("acq_resume", null, "readings resumed"), "ghost"),
+            h("span", { class: "muted" }, "(stops or resumes new readings, to see how the pages show old readings)"))),
+        instWaterCard(pl)),
+      h("details", { class: "card tech" }, h("summary", null, h("strong", null, "Technical details of the model")),
+        h("p", { class: "muted" }, `${tw.activity} · ${tw.speed}× · t = ${sn.sim_s.toFixed(1)} s · tick ${sn.tick} · run ${sn.run_id}`),
+        h("div", { class: "grid" },
+          h("div", null, h("h3", null, "Equipment (requested / actual)"), h("dl", { class: "kv" },
+            h("dt", null, "Drive"), h("dd", null, `run ${pl.drive.run_requested ? "ON" : "OFF"}, speed ${(pl.drive.speed * 100).toFixed(0)} %${pl.drive.tripped ? " TRIPPED: " + pl.drive.tripped : ""}`),
+            ...Object.entries(pl.contactors).flatMap(([k, c]) => [h("dt", null, "Contactor " + k), h("dd", null, `${c.requested ? "ON" : "OFF"} / ${c.closed ? "closed" : "open"}${c.fault ? " FAULT " + c.fault : ""}`)]),
+            ...Object.entries(pl.pumps).flatMap(([k, p]) => [h("dt", null, "Pump " + k), h("dd", null, `${p.requested ? "ON" : "OFF"} / ${(p.speed * 100).toFixed(0)} %${p.fault ? " FAULT " + p.fault : ""}`)]),
+            ...Object.entries(pl.valves).flatMap(([k, v]) => [h("dt", null, "Valve " + k), h("dd", null, `${v.requested ? "OPEN" : "CLOSED"} / ${(v.position * 100).toFixed(0)} %${v.fault ? " FAULT " + v.fault : ""}`)]))),
+          h("div", null, h("h3", null, "Volume ledger (L)"), h("dl", { class: "kv" },
+            ...[["initial stored", lg.initial_stored_L], ["stored", lg.stored_L], ["consumption", lg.consumption_L], ["spill", lg.spill_total_L],
+               ["drained to sump", lg.drained_to_sump_L], ["returned to main", lg.returned_to_main_L], ["residual", lg.residual_L]]
+              .flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: "mono" }, k === "residual" ? v.toExponential(3) : v.toFixed(1))]))))));
   }
+  function releaseLine(r) {
+    if (!r) return "unknown";
+    if (r.status === "NOT_A_RELEASE") return `not started from a release folder (${r.detail})`;
+    const commit = (r.commit || "unknown").slice(0, 12);
+    return [`${r.release_version} · source commit ${commit} · built ${r.built_utc || "?"} `,
+      pill(r.status === "VERIFIED" ? "wheel verified" : r.status, r.status === "VERIFIED" ? "ok" : "bad"),
+      r.status === "VERIFIED" ? null : ` ${r.detail}`];
+  }
+
+  // The installation's processes are run from their own pages; this page only points there.
   async function instControl() {
     const pr = await api("GET", "/api/processes");
-    const pc = can("process_control");
-    const pbtn = (label, onclick, cls, perm) => h("button", { class: "cmd small " + (cls || ""), onclick, disabled: !can(perm || "process_control") }, label);
-    const setState = (pid, target) => act("POST", `/api/processes/${pid}/state`, { target }, `${pid} → ${target}`);
-    const rows = pr.order.map(pid => {
-      const p = pr.processes[pid];
-      return h("tr", null, h("td", null, h("strong", null, p.title || pid), h("div", { class: "muted mono" }, pid)),
-        h("td", null, procPill(p.state)), h("td", null, p.phase),
-        h("td", null, p.fault_reason ? h("span", { class: "error" }, p.fault_reason + (p.fault_detail ? ": " + p.fault_detail : "")) : (p.inhibit || "")),
-        h("td", { class: "muted" }, p.next || ""),
-        h("td", null, pbtn("AUTO", () => setState(pid, "AUTO")), " ", pbtn("MANUAL", () => setState(pid, "MANUAL"), "ghost"), " ",
-          pbtn("STOP", () => setState(pid, "STOPPED"), "danger"), " ",
-          p.state === "FAULT_LOCKOUT" ? pbtn("Reset", () => act("POST", `/api/processes/${pid}/reset`, undefined, "reset"), "ghost", "lockout_reset") : null));
-    });
-    const stocks = Object.entries(pr.stocks).map(([s, r]) => h("tr", null, h("td", null, s),
-      h("td", null, pill(r.status, r.status === "PREPARED" ? "ok" : "warn")),
-      h("td", { class: "muted" }, r.actor ? `${r.actor} ${fmtTime(r.utc)}${r.level_at_ack_L != null ? " at " + r.level_at_ack_L.toFixed(0) + " L" : ""}` : ""),
-      h("td", { class: "muted" }, r.reason || r.note || ""),
-      h("td", null, pbtn("Acknowledge prepared", () => { const note = prompt(`Stock ${s}: what was prepared (recorded)?`); if (note != null) act("POST", `/api/stocks/${s}/acknowledge`, { note }, "acknowledged"); }))));
-    mount("v-control",
-      h("div", { class: "card" }, h("h2", null, "Process controllers (simulation only)"),
-        h("p", null, "Active recipe: ", h("strong", null, pr.recipe.active || "none"), pr.recipe.provenance ? " · " + pr.recipe.provenance : ""),
-        h("table", null, h("thead", null, h("tr", null, ["Process", "State", "Phase", "Fault / inhibit", "Next", ""].map(x => h("th", null, x)))), h("tbody", null, rows)),
-        h("div", { class: "row" }, pbtn("Stop all processes", () => confirm("Stop every process?") && act("POST", "/api/processes/stop-all", { reason: "operator stop all" }, "stop all"), "danger"),
-          pc ? null : h("span", { class: "muted" }, "Process control needs the operator role.")),
-        h("p", { class: "muted" }, "Physical AUTO does not exist in this release. Bounded MANUAL operations and recipe editing are available through the API; their pages follow.")),
-      h("div", { class: "card" }, h("h2", null, "Stock preparation (operator acknowledgement)"),
-        h("table", null, h("tbody", null, stocks)),
-        h("p", { class: "muted" }, "Water filling never marks a stock as prepared. A fill or an unexplained level rise invalidates the acknowledgement.")),
-      h("div", { class: "card" }, h("h2", null, "Not verified on any physical profile"),
-        h("ul", null, (pr.recipe.physical_readiness || []).map(x => h("li", null, x)))));
+    mount("v-control", h("div", { class: "card" }, h("h2", null, "Processes"),
+      h("p", null, "Each process is started and stopped on its own page:"),
+      h("ul", null, pr.order.map(pid => { const w = W.proc(pid); return h("li", null, h("a", { href: w.page }, w.name), " · ", W.state(pr.processes[pid].state)); })),
+      h("p", null, "Fertiliser tank confirmations are on ", h("a", { href: "#nutrients" }, "Nutrients & acid"), "; all processes can be stopped at once from the ", h("a", { href: "#overview" }, "Overview"), ".")));
   }
+
+  // ------------------------------------------------ getting started (F-03)
+  // Four tasks, one action per step, with the exact button names and a picture of the screen.
+  const START = [
+    ["Read the tank level", "start-1.png", "The Main tank page: the water level in litres, “Reading valid” and how old the reading is.", [
+      ["Open the menu and choose ", ["Main tank"], "."],
+      ["Find ", ["Water level"], ": the litres, then “Reading valid” and how long ago the reading arrived."],
+      ["The line at the top of every page also shows the main tank, for example “Main tank 60%”."]],
+      "“Reading valid” means the reading arrived correctly and in time. It does not say whether the level is right for the plants."],
+    ["Water one sector", "start-2.png", "The Watering page in manual mode, with the Run once form: sector, main pump and watering time.", [
+      ["Open the menu and choose ", ["Watering"], "."],
+      ["Press ", ["Manual mode"], "."],
+      ["Under Run once, choose the sector in ", ["Sector"], ", for example Sector 1."],
+      ["Type the watering time in seconds in ", ["Watering time (s)"], ", for example 60."],
+      ["Press ", ["Run once"], ". The card says “Running once: Sector 1 …”, and “Manual mode: nothing is running” when it has finished."]],
+      "Run once uses the same safety checks as automatic watering."],
+    ["Stop watering", "start-3.png", "The top of the Watering page: what it is doing now and the Stop watering button.", [
+      ["On the Watering page, press ", ["Stop watering"], ". It is at the top of the page; on a narrow screen it stays at the top of the screen."],
+      ["The card says “stopping safely”, then “Watering is stopped.”"]],
+      "Stop watering stops the process in the program and switches its equipment off in a safe order. It is not an emergency stop: use the emergency stop on the equipment for that."],
+    ["Recover from a simulated problem", "start-4.png", "Watering stopped because of a problem, with the steps under What to do: Mark as seen, Fix the problem, Clear stop after fixing the problem.", [
+      ["Open the menu and choose ", ["Digital Twin"], "."],
+      ["Under Simulated faults, in the Valve row, choose ", ["Sector 1 valve"], " and ", ["stays closed"], ", then press ", ["Apply"], "."],
+      ["Open ", ["Watering"], " and press ", ["Start automatic watering"], "."],
+      ["After a few seconds the card says “Watering stopped because of a problem: the valve for Sector 1 did not open”. Press ", ["Mark as seen"], "."],
+      ["Fix the problem: on ", ["Digital Twin"], ", in the Valve row, choose ", ["no fault (working)"], " and press ", ["Apply"], "."],
+      ["Back on Watering, press ", ["Clear stop after fixing the problem"], ". Nothing starts."],
+      ["To water again, press ", ["Start automatic watering"], "."]],
+      "If a step is not available yet, the page says why next to its button."],
+  ];
+  VIEWS.start = async function () {
+    const inst = isInst() && !isReal();
+    const task = ([title, img, alt, steps, note], i) => h("div", { class: "card start-task", id: "start-" + (i + 1) },
+      h("h2", null, `${i + 1}. ${title}`),
+      h("div", { class: "start-body" }, h("img", { src: "/static/" + img, alt, loading: "lazy", width: 640 }),
+        h("div", null, h("ol", null, steps.map(st => h("li", null, st.map(x => Array.isArray(x) ? h("strong", null, x[0]) : x)))),
+          h("p", { class: "muted" }, note))));
+    mount("v-start",
+      h("div", { class: "card" }, h("h2", null, "Getting started"),
+        h("p", null, "AquaCrop runs the greenhouse's watering, main tank refill, nutrients and acid, and drainage return. ", W.HELP.twin),
+        h("p", null, "These four short tasks show the main screens. Each step is one action, with the name of the button to press in bold."),
+        inst ? null : h("p", { class: "muted" }, "The tasks use the greenhouse pages of the installation profile; this profile shows them read-only or not at all."),
+        h("p", { class: "muted" }, "The owner's acceptance tour is a separate document, ", h("strong", null, "owner-tour\\index.html"), " in the release folder, with its own result form.")),
+      START.map(task));
+  };
 
   VIEWS.overview = async function () {
     if (isReal()) return hwOverview();
@@ -689,6 +885,8 @@
     const groups = d.devices.map(g => {
       const rows = g.points.map(p => {
         const s = p.sample || {};
+        // an input with no plant signal reads "no value" in TWIN mode: show it as unassigned, not as a fault
+        const unassigned = !ioTest && !s.override && s.reason === "UNMAPPED";
         let ctl = null;
         if (p.kind === "DO") ctl = h("span", null, cbtn("ON", () => cmd(p.id, true)), " ", cbtn("OFF", () => cmd(p.id, false), "ghost"));
         else if (ioTest && p.kind === "DI") ctl = h("span", null, cbtn("Inject 1", () => act("POST", "/api/io/inject", { point: p.id, raw: true })), " ", cbtn("Inject 0", () => act("POST", "/api/io/inject", { point: p.id, raw: false }), "ghost"));
@@ -705,8 +903,9 @@
           h("td", { class: "mono" }, "0x" + p.register_address.toString(16).padStart(4, "0")), h("td", null, p.mode || ""),
           h("td", { class: "mono" }, s.raw == null ? "—" : String(s.raw) + (s.raw_unit && s.raw_unit !== "bool" ? " " + s.raw_unit : "")),
           h("td", { class: "mono" }, s.value == null ? "—" : num(s.value) + (s.unit ? " " + s.unit : "")),
-          h("td", null, qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
-          h("td", { class: "muted" }, s.override ? `override by ${s.override.owner}: ${s.override.reason} (base ${s.override.base_raw})` : (s.reason || "")),
+          h("td", null, unassigned ? h("span", { class: "q q-UNASSIGNED", "data-q": "UNASSIGNED", title: W.QUALITY_HELP.UNASSIGNED }, W.quality("UNASSIGNED")) : qBadge(s.quality || "UNAVAILABLE"), " ", s.origin ? oBadge(s.origin) : null),
+          h("td", { class: "muted" }, s.override ? `override by ${s.override.owner}: ${s.override.reason} (base ${s.override.base_raw})` :
+            unassigned ? "nothing is connected to this channel (not a fault)" : (s.reason || "")),
           h("td", null, age(s.acquired_utc)), h("td", null, ctl));
       });
       return h("div", { class: "card" },
@@ -759,44 +958,112 @@
         h("table", null, h("tbody", null, c.cycles.slice().reverse().map(x => h("tr", null, h("td", null, x.sector), h("td", null, `end ${num(x.end_sim_s, 1)} s`), h("td", null, `${num(x.irrigated_s, 1)} s`), h("td", null, `~${num(x.delivered_L_observed, 2)} L observed`)))))));
   };
 
-  // ------------------------------------------------ trends
-  VIEWS.trends = async function () {
+  // ------------------------------------------------ history (F-07)
+  // Times of day are the site's (Europe/Stockholm on the bench, Atlantic/Canary on site).
+  function tzOffset(t) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: S.tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - Math.floor(t / 1000) * 1000;
+  }
+  /** Midnight at the site, `daysBack` days before today, as a time in ms. */
+  function siteMidnight(daysBack) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: S.tz, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(new Date()).map(x => [x.type, x.value]));
+    const wall = Date.UTC(+p.year, +p.month - 1, +p.day - daysBack);
+    let t = wall - tzOffset(wall);
+    t = wall - tzOffset(t);            // again, for a day that changes summer time
+    return t;
+  }
+  const RANGES = [["hour", "Last hour"], ["today", "Today"], ["yesterday", "Yesterday"], ["7d", "Last 7 days"],
+    ["30d", "Last 30 days"], ["90d", "Last 90 days"], ["365d", "Last 365 days"]];
+  function rangeOf(key, now) {
+    const day = 86400000;
+    if (key === "today") return [siteMidnight(0), now];
+    if (key === "yesterday") return [siteMidnight(1), siteMidnight(0)];
+    const n = { hour: 3600000, "7d": 7 * day, "30d": 30 * day, "90d": 90 * day, "365d": 365 * day }[key] || 3600000;
+    return [now - n, now];
+  }
+  /** Every channel with the name an operator uses, grouped; channels that carry no plant signal last, as unused. */
+  async function historyChoices() {
     if (!S.allPoints) { const d = await api("GET", "/api/points"); S.allPoints = d.devices.flatMap(g => g.points); }
+    if (!S.histNames) {
+      S.histNames = {};
+      const P = (isInst() || isReal()) ? await api("GET", "/api/plant").catch(() => null) : null;
+      if (P) for (const [name, x] of Object.entries(P.signals)) if (x.point && !S.histNames[x.point]) S.histNames[x.point] = name;
+    }
+    const groups = new Map(W.GROUP_ORDER.map(g => [g, []]));
+    const unused = [];
+    for (const p of S.allPoints) {
+      const name = S.histNames[p.id];
+      if (name) groups.get(W.signalGroup(name)).push({ id: p.id, name: W.signal(name), kind: p.kind });
+      else if (p.mapping && p.label) { if (!groups.has("Other channels")) groups.set("Other channels", []); groups.get("Other channels").push({ id: p.id, name: p.label, kind: p.kind }); }
+      else unused.push({ id: p.id, name: p.label || "Unused channel", kind: p.kind });
+    }
+    return { groups: [...groups].filter(([, xs]) => xs.length), unused };
+  }
+  VIEWS.history = async function () {
+    const C = await historyChoices();
+    const known = new Set(S.allPoints.map(p => p.id));
+    S.trendSel = S.trendSel.filter(x => known.has(x));
+    const nameOf = id => { for (const [, xs] of C.groups) { const x = xs.find(y => y.id === id); if (x) return x.name; } return id; };
     // ranges over a day are drawn from buckets of an hour or more: fetched again once a minute, not every refresh
-    const key = S.trendSel.join(",") + "|" + S.trendMin, f = S.trendFetch;
-    let end = new Date(Date.now()), start = new Date(end - S.trendMin * 60000), tr;
-    if (S.trendMin > 1440 && f && f.key === key && end - f.end < 60000) ({ start, end, tr } = f);
+    const now = Date.now(), [t0, t1] = rangeOf(S.trendRange, now), span = t1 - t0;
+    const key = S.trendSel.join(",") + "|" + S.trendRange, f = S.trendFetch;
+    let start = new Date(t0), end = new Date(t1), tr;
+    if (span > 86400000 && f && f.key === key && now - f.at < 60000) ({ start, end, tr } = f);
     const q = `points=${encodeURIComponent(S.trendSel.join(","))}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
-    if (!tr) { tr = await api("GET", "/api/trends?" + q); S.trendFetch = { key, start, end, tr }; }
-    const series = trendSeries(tr, S.trendSel, pid => ({ kind: (S.allPoints.find(p => p.id === pid) || {}).kind }));
+    if (!tr && S.trendSel.length) { tr = await api("GET", "/api/trends?" + q); S.trendFetch = { key, start, end, tr, at: now }; }
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute("class", "chart");
-    const picker = h("select", { multiple: true, size: 8 }, S.allPoints.map(p => h("option", { value: p.id, selected: S.trendSel.includes(p.id) }, `${p.id}${p.label ? " — " + p.label : ""}`)));
-    picker.addEventListener("change", () => { S.trendSel = Array.from(picker.selectedOptions).map(o => o.value).slice(0, 8); refresh(); });
-    const ranges = [[5, "5 min"], [10, "10 min"], [30, "30 min"], [120, "2 h"], [720, "12 h"], [1440, "1 day"], [10080, "7 days"],
-      [43200, "30 days"], [129600, "90 days"], [525600, "365 days"]];
-    const rng = h("select", null, ranges.map(([m, l]) => h("option", { value: m, selected: m === S.trendMin }, l)));
-    rng.addEventListener("change", () => { S.trendMin = Number(rng.value); refresh(); });
-    // the analytics estimate reads every sample: only for ranges up to a day
-    const an = S.trendMin <= 1440 ? await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()))
-      : { estimates: {}, note: "Runtime and volume estimates are shown for ranges up to one day." };
-    const agg = Object.entries(tr.aggregated || {});
-    const aggNote = agg.length ? `aggregated: one point per ${agg[0][1].bucket}, solid = mean, dashed = min and max` : "";
+    svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Chart of the chosen readings: " + (S.trendSel.map(nameOf).join(", ") || "none chosen"));
+    const full = S.trendSel.length >= 8;
+    const box = x => {
+      const id = "h-" + x.id.replace(/[^A-Za-z0-9]/g, "-"), on = S.trendSel.includes(x.id);
+      const c = h("input", { type: "checkbox", id, checked: on, disabled: !on && full });
+      c.addEventListener("change", () => {
+        S.trendSel = c.checked ? S.trendSel.concat([x.id]).slice(0, 8) : S.trendSel.filter(y => y !== x.id);
+        refresh();
+      });
+      return h("div", { class: "check" }, c, h("label", { for: id }, x.name, " ", h("span", { class: "muted small" }, x.id)));
+    };
+    const picker = h("div", { class: "picker" },
+      C.groups.map(([g, xs]) => h("fieldset", null, h("legend", null, g), xs.map(box))),
+      C.unused.length ? h("details", null, h("summary", null, `Unused channels (${C.unused.length})`),
+        h("p", { class: "muted small" }, "Nothing is connected to these channels. This is not a fault."), C.unused.map(box)) : null);
+    const ranges = h("div", { class: "row", role: "group", "aria-label": "Time range" }, RANGES.map(([k, l]) =>
+      h("button", { class: "small" + (k === S.trendRange ? "" : " ghost"), "aria-pressed": k === S.trendRange ? "true" : "false",
+        onclick: () => { S.trendRange = k; refresh(); } }, l)));
     const legend = h("div", { class: "legend" });
-    mount("v-trends",
-      h("div", { class: "card" }, h("div", { class: "row" }, h("label", null, "Points (max 8)", picker), h("label", null, "Range", rng),
-        h("a", { href: "/api/export.csv?" + q, download: "aquacrop-samples.csv" }, "Export CSV (complete, paginated)")),
-        svg, legend, tr.truncated ? h("p", { class: "error" }, `Truncated at ${tr.limit} rows per point — narrow the range.`) : null,
+    const agg = tr ? Object.entries(tr.aggregated || {}) : [];
+    const aggNote = agg.length ? `one point per ${agg[0][1].bucket}: solid = average, dashed = lowest and highest` : "";
+    const dl = S.trendSel.length ? h("a", { class: "button", href: "/api/export.csv?" + q, download: "aquacrop-readings.csv" }, "Download readings")
+      : h("span", { class: "muted" }, "Choose a reading to download it.");
+    // the runtime and volume estimate reads every sample: only for ranges up to a day
+    const an = span <= 86400000 ? await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()))
+      : { estimates: {}, note: "Running time and volume estimates are shown for ranges up to one day." };
+    mount("v-history",
+      h("div", { class: "card" }, h("h2", null, "History"),
+        h("p", { class: "muted" }, `Choose up to 8 readings (${S.trendSel.length} chosen) and a time range. Times are site time (${S.tz}). A reading is recorded every minute.`),
+        ranges,
+        h("p", null, `From ${fmtTime(start.toISOString())} to ${fmtTime(end.toISOString())}`),
+        S.trendSel.length ? svg : h("p", { class: "muted" }, "No reading chosen."), legend,
+        tr && tr.truncated ? h("p", { class: "error" }, `Only the first ${tr.limit} readings of each are drawn; choose a shorter range. The download has all of them.`) : null,
+        h("p", { class: "muted small" }, "Shaded bands are times with no valid reading. Dotted grey lines are readings whose time stamps an administrator marked as suspect."),
+        h("div", { class: "row" }, dl, h("span", { class: "muted small" }, "A CSV file (opens in Excel) with every recorded reading of the chosen range: time in UTC and site time, value, unit and whether the reading was valid. Its last line says COMPLETE; if it says TRUNCATED (more than 100,000 readings), choose a shorter range or fewer readings."))),
+      h("div", { class: "card" }, h("h2", null, "Readings to show"), picker),
+      h("details", { class: "card tech" }, h("summary", null, h("strong", null, "Running time and volume estimates")),
         agg.length ? h("p", { class: "muted", id: "trend-aggregation" }, `Aggregated: ${agg.map(([pid, a]) => `${pid} ${a.samples} samples in ${a.buckets} buckets of ${a.bucket}${a.samples_in_range > a.samples ? ` (${a.samples_in_range - a.samples} simulation-time recorder samples not drawn)` : ""}`).join("; ")}. `,
-          "Each point is the mean of the valid samples in its bucket; the dashed lines are their minimum and maximum. The CSV export has every sample.") : null),
-      h("div", { class: "card" }, h("h3", null, "Runtime / volume estimates (from sampled history; coverage disclosed)"),
+          "Each point is the mean of the valid samples in its bucket; the dashed lines are their minimum and maximum. The download has every sample.") : null,
         h("table", null, h("thead", null, h("tr", null, ["Signal", "Kind", "Origin", "Estimate", "Coverage"].map(x => h("th", null, x)))),
           h("tbody", null, Object.entries(an.estimates).flatMap(([sig, e]) => Object.entries(e.by_origin).map(([o, v]) =>
             h("tr", null, h("td", null, sig), h("td", null, e.kind), h("td", null, oBadge(o)), h("td", null, num(v.estimate, 2)), h("td", null, (v.coverage * 100).toFixed(0) + " %")))))),
         h("p", { class: "muted" }, an.note)));
+    if (!tr) return;
+    const series = trendSeries(tr, S.trendSel, pid => ({ kind: (S.allPoints.find(p => p.id === pid) || {}).kind, label: nameOf(pid) }));
     const leg = AqChart.render(svg, { series, events: tr.events.map(e => [Date.parse(e[0]), e[1] + (e[2] ? " by " + e[2] : "")]), tStart: start.getTime(), tEnd: end.getTime(), timezone: S.tz, note: aggNote });
     legend.replaceChildren(...leg.map(l => h("span", { style: "color:" + l.color }, (l.suspect ? "◌ " : "■ ") + l.name)));
   };
+  VIEWS.trends = VIEWS.history;
 
   /** Chart series from an /api/trends answer. Records whose stamps an administrator quarantined are split into
    * their own dashed grey series; neither half draws a line across the other, so a suspect stamp never joins a
@@ -846,24 +1113,33 @@
   // ------------------------------------------------ alarms/events
   VIEWS.alarms = async function () {
     const al = await api("GET", "/api/alarms"), ev = await api("GET", "/api/events?limit=200"), ch = await api("GET", "/api/commands/history?limit=100");
-    const occRow = o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")), h("td", null, o.rule_id), h("td", { class: "mono" }, o.target),
-      h("td", null, o.message), h("td", null, o.active ? pill("ACTIVE", "bad") : pill("cleared")), h("td", null, o.acknowledged ? `ack ${o.ack_user}` : pill("UNACK", "warn")),
-      h("td", null, o.latched ? (o.reset_required ? pill("RESET REQUIRED", "warn") : "reset " + (o.reset_user || "")) : "—"),
+    // problems first (F-05), each with its equipment, next step and a link to its page; the tables follow under Details
+    const plant = window.AqPlant && (isInst() || isReal());
+    const P = plant ? await api("GET", "/api/plant").catch(() => null) : null;
+    const PR = plant && !isReal() ? await api("GET", "/api/processes").catch(() => null) : null;
+    if (P) P.alarms = al.open;
+    const cards = window.AqPlant ? al.open.map(o => window.AqPlant.problemCard(o, PR, P)) : [];
+    const occRow = o => h("tr", null, h("td", null, pill(W.SEVERITY[o.severity] || o.severity, o.severity === "CRITICAL" ? "bad" : "warn")), h("td", { class: "mono" }, o.rule_id), h("td", { class: "mono" }, o.target),
+      h("td", null, o.message), h("td", null, o.active ? pill("still present", "bad") : pill("gone")), h("td", null, o.acknowledged ? `seen by ${o.ack_user}` : pill("not yet seen", "warn")),
+      h("td", null, o.latched ? (o.reset_required ? pill("needs clearing", "warn") : "cleared " + (o.reset_user || "")) : "—"),
       h("td", null, fmtTime(o.first_seen_utc), susPill(o)), h("td", null, fmtTime(o.last_seen_utc)), h("td", { class: "mono" }, o.value == null ? "" : String(o.value)),
-      h("td", null, !o.closed && !o.acknowledged ? h("button", { class: "cmd small", disabled: !can("alarm_ack"), onclick: () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "acknowledged") }, "Ack") : null,
-        !o.closed && o.reset_required && !o.active && o.acknowledged && o.target !== "controller" ? h("button", { class: "cmd small ghost", disabled: !can("lockout_reset"), onclick: () => act("POST", "/api/alarms/reset", { rule_id: o.rule_id, target: o.target }, "reset") }, "Reset") : null));
-    const hdr = ["Sev", "Rule", "Target", "Message", "Condition", "Ack", "Latch/reset", "First", "Last", "Value", ""];
+      h("td", null, !o.closed && !o.acknowledged ? h("button", { class: "cmd small", disabled: !can("alarm_ack"), onclick: () => act("POST", "/api/alarms/ack", { rule_id: o.rule_id, target: o.target }, "marked as seen") }, "Mark as seen") : null,
+        !o.closed && o.reset_required && !o.active && o.acknowledged && o.target !== "controller" ? h("button", { class: "cmd small ghost", disabled: !can("lockout_reset"), onclick: () => act("POST", "/api/alarms/reset", { rule_id: o.rule_id, target: o.target }, "cleared") }, "Clear") : null));
+    const hdr = ["Severity", "Code", "Where", "Message", "Condition", "Seen", "Latch", "First", "Last", "Value", ""];
     mount("v-alarms",
-      h("div", { class: "card" }, h("h2", null, "Open alarm occurrences"), h("p", { class: "muted" }, "Acknowledging never clears a condition or resets a lockout."),
+      h("div", { class: "card" }, h("h2", null, al.open.length ? `Problems now (${al.open.length})` : "Problems now"),
+        al.open.length ? (cards.length ? cards : h("p", null, al.open.map(o => o.message).join("; "))) : h("p", null, "There are no problems now."),
+        h("p", { class: "muted" }, "Marking a problem as seen only records that you have seen it. Clearing a stop does not start anything: each process is started again on its own page.")),
+      h("details", { class: "card tech" }, h("summary", null, h("strong", null, `Alarm table (${al.open.length} open)`)),
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.open.map(occRow)))),
-      h("div", { class: "card" }, h("h2", null, "Commands (incl. rejected / uncertain)"),
-        h("table", null, h("thead", null, h("tr", null, ["Time", "Actor", "Target", "Desired", "Origin", "Outcome", "Detail"].map(x => h("th", null, x)))),
+      h("details", { class: "card tech" }, h("summary", null, h("strong", null, "Commands sent to the equipment (including refused ones)")),
+        h("table", null, h("thead", null, h("tr", null, ["Time", "By", "Target", "Asked", "Origin", "Outcome", "Detail"].map(x => h("th", null, x)))),
           h("tbody", null, ch.map(c => h("tr", null, h("td", null, fmtTime(c.intent_utc), susPill(c)), h("td", null, c.actor), h("td", { class: "mono" }, c.target), h("td", null, c.desired ? "ON" : "OFF"),
             h("td", null, c.origin), h("td", null, pill(c.outcome, OK_OUTCOMES.has(c.outcome) ? "ok" : c.outcome === "REJECTED" ? "warn" : "bad")), h("td", { class: "muted" }, c.detail || "")))))),
-      h("div", { class: "card" }, h("h2", null, "Events"),
+      h("details", { class: "card tech" }, h("summary", null, h("strong", null, "Event log (newest first)")),
         h("table", null, h("tbody", null, ev.events.map(e => h("tr", null, h("td", null, fmtTime(e.utc), susPill(e)), h("td", null, e.kind), h("td", null, e.actor || ""),
           h("td", { class: "mono" }, JSON.stringify(e.payload).slice(0, 200))))))),
-      h("div", { class: "card" }, h("h2", null, "Alarm history (closed)"),
+      h("details", { class: "card tech" }, h("summary", null, h("strong", null, `Past alarms (${al.history.length})`)),
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.history.map(occRow)))));
   };
 
@@ -886,8 +1162,12 @@
     mount("v-settings",
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
-          h("dt", null, "Software"), h("dd", null, s.software_version), h("dt", null, "Python"), h("dd", null, s.python), h("dt", null, "Platform"), h("dd", null, s.platform),
-          h("dt", null, "Config"), h("dd", null, `${c.config_id}@${c.config_version} (${c.profile})`))),
+          h("dt", null, "Software"), h("dd", null, s.software_version),
+          h("dt", null, "Release"), h("dd", null, releaseLine(s.release)),
+          h("dt", null, "Config"), h("dd", null, `${c.config_id}@${c.config_version} (${c.profile})`),
+          h("dt", null, "Inventory"), h("dd", null, s.inventory ? `${s.inventory.modules} modules: ${s.inventory.AI} AI + ${s.inventory.DI} DI + ${s.inventory.DO} DO = ${s.inventory.points} points` : "—"),
+          s.state_dir ? [h("dt", null, "Data folder"), h("dd", null, s.state_dir)] : null,
+          h("dt", null, "Python"), h("dd", null, s.python), h("dt", null, "Platform"), h("dd", null, s.platform))),
         h("div", { class: "card" }, h("h2", null, "Storage"), h("dl", { class: "kv" },
           h("dt", null, "Recording"), h("dd", null, `complete snapshot every ${s.storage.recording_interval_s} s of wall time` +
             (s.storage.sim_time_recording_s ? `; plus a separate simulation-time series every ${s.storage.sim_time_recording_s} simulated s` : ""),
@@ -922,7 +1202,7 @@
   };
 
   // ---------------------------------------------------------------- shared with plant.js
-  window.AqUI = { h, $, mount, toast, can, fmtTime, age, num, qBadge, oBadge, pill, api, act, cbtn, S, VIEWS, trendSeries,
+  window.AqUI = { h, $, mount, toast, can, fmtTime, age, ago, agoClock, num, qBadge, oBadge, pill, api, act, cbtn, S, VIEWS, trendSeries,
                   refresh: () => refresh(), highlightNav, isReal, isInst };
 
   // ---------------------------------------------------------------- boot

@@ -174,90 +174,129 @@ class FieldRule:
     required: str = "always"          # always | <mode condition> | optional
     help: str = ""
     options: tuple[str, ...] = ()     # enumerated (text) fields
+    option_labels: tuple[str, ...] = ()   # what the editor shows for each option (same order)
+    advanced: bool = False            # timing, tolerances and verification: under "Advanced settings"
+    example: str = ""
 
 
 def _rules(cap: dict[str, float]) -> list[FieldRule]:
+    # The labels are display text (validation messages use them too); the paths, units, ranges and required
+    # conditions are the rules. F-04: owner-confirmed plain wording, timing and tolerances marked advanced.
     M, S = cap["MAIN"], cap["SUMP"]
     st = min(cap["A"], cap["B"], cap["ACID"])
     R = FieldRule
     return [
-        R("main.low_low_L", "Main dry-run guard", "L", lo=0, hi=M),
-        R("main.refill_trigger_L", "Refill trigger level", "L", lo=0, hi=M),
-        R("main.rearm_hysteresis_L", "Refill re-arm hysteresis", "L", gt=0, hi=M),
-        R("main.fill_stop_L", "Refill stop level", "L", lo=0, hi=M),
-        R("main.high_inhibit_L", "High-level inflow inhibit", "L", lo=0, hi=M),
-        R("main.min_dosing_L", "Minimum volume for dosing", "L", lo=0, hi=M),
-        R("refill.trigger_debounce_s", "Trigger debounce", "s", lo=0, hi=3600),
-        R("refill.endpoint_mode", "Refill endpoint", "", help="FIXED_ADDITIONS or FINAL_LEVEL",
-          options=("FIXED_ADDITIONS", "FINAL_LEVEL")),
-        R("refill.final_level_L", "Final operating level", "L", lo=0, hi=M, required="refill.endpoint_mode=FINAL_LEVEL"),
-        R("refill.water.target_L", "Mains water addition", "L", gt=0, hi=M,
-          required="refill.endpoint_mode=FIXED_ADDITIONS"),
-        R("refill.water.max_time_s", "Mains water maximum time", "s", gt=0, hi=86400),
-        R("refill.water.min_flow_L_min", "Mains water minimum flow", "L/min", gt=0, hi=10000),
-        R("refill.water.flow_grace_s", "Mains water flow grace", "s", lo=0, hi=600),
-        R("refill.nutrient_mode", "Nutrient mode", "", help="FIXED_VOLUMES or EC_TARGET",
-          options=("FIXED_VOLUMES", "EC_TARGET")),
-        R("refill.fixed.a_L", "Stock A addition", "L", lo=0, hi=st, required="refill.nutrient_mode=FIXED_VOLUMES"),
-        R("refill.fixed.b_L", "Stock B addition", "L", lo=0, hi=st, required="refill.nutrient_mode=FIXED_VOLUMES"),
-        R("refill.fixed.ec_min_mS_cm", "EC validation minimum", "mS/cm", gt=0, hi=20,
-          required="refill.nutrient_mode=FIXED_VOLUMES"),
-        R("refill.fixed.ec_max_mS_cm", "EC validation maximum", "mS/cm", gt=0, hi=20,
-          required="refill.nutrient_mode=FIXED_VOLUMES"),
-        R("refill.fixed.validation_settle_s", "EC validation settling window", "s", gt=0, hi=86400,
-          required="refill.nutrient_mode=FIXED_VOLUMES"),
-        R("refill.ec.ec_target_mS_cm", "EC target", "mS/cm", gt=0, hi=20, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.ec.ec_tolerance_mS_cm", "EC tolerance", "mS/cm", gt=0, hi=5, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.ec.ratio_a_to_b", "A:B ratio (A per B)", "L/L", gt=0, hi=100, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.ec.step_total_L", "A+B per staged dose", "L", gt=0, hi=st, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.ec.max_a_L", "Stock A maximum per batch", "L", gt=0, hi=st, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.ec.max_b_L", "Stock B maximum per batch", "L", gt=0, hi=st, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.ec.settle_s", "EC settling window", "s", gt=0, hi=86400, required="refill.nutrient_mode=EC_TARGET"),
-        R("refill.transfer_max_time_s", "Stock transfer maximum time", "s", gt=0, hi=86400),
-        R("refill.transfer_min_flow_L_min", "Stock transfer minimum flow", "L/min", gt=0, hi=1000),
-        R("refill.transfer_flow_grace_s", "Stock transfer flow grace", "s", lo=0, hi=600),
-        R("refill.stock_reserve_L", "Stock reserve (never drawn)", "L", lo=0, hi=st),
-        R("acid.ph_target", "pH target", "pH", lo=3, hi=9, help="owner preference about 6; adjustable"),
-        R("acid.ph_tolerance", "pH tolerance (dose above target + this)", "pH", gt=0, hi=2),
-        R("acid.undershoot_margin", "pH undershoot margin", "pH", gt=0, hi=3),
-        R("acid.dose_step_L", "Acid dose step", "L", gt=0, hi=st),
-        R("acid.settle_s", "pH settling window", "s", gt=0, hi=86400),
-        R("acid.max_batch_L", "Acid maximum per batch", "L", gt=0, hi=st),
-        R("acid.max_day_L", "Acid maximum per 24 h", "L", gt=0, hi=st),
-        R("acid.min_response_ph", "Expected pH drop per dose", "pH", gt=0, hi=2),
-        R("acid.max_no_response", "Doses without response before fault", "", lo=1, hi=10),
-        R("acid.dose_max_time_s", "Acid dose maximum time", "s", gt=0, hi=3600),
-        R("acid.min_flow_L_min", "Acid transfer minimum flow", "L/min", gt=0, hi=1000),
-        R("acid.flow_grace_s", "Acid transfer flow grace", "s", lo=0, hi=600),
-        R("irrigation.min_flow_L_min", "Sector minimum flow", "L/min", gt=0, hi=10000),
-        R("irrigation.flow_grace_s", "Flow verification grace", "s", lo=0, hi=600),
-        R("irrigation.no_flow_sustain_s", "No-flow confirmation time", "s", lo=0, hi=600),
-        R("irrigation.valve_open_timeout_s", "Valve open timeout", "s", gt=0, hi=600),
-        R("irrigation.valve_close_timeout_s", "Valve close timeout", "s", gt=0, hi=600),
-        R("irrigation.open_lead_s", "Valve lead before pump start", "s", lo=1, hi=600,
-          help="owner: the valve opens at least one second before the pump starts"),
-        R("irrigation.drive_start_timeout_s", "Drive start timeout", "s", gt=0, hi=600),
-        R("irrigation.drive_stop_timeout_s", "Drive stop timeout", "s", gt=0, hi=600),
-        R("irrigation.contactor_timeout_s", "Pump selection timeout", "s", gt=0, hi=60),
-        R("irrigation.stop_settle_s", "Dwell after verified stop", "s", lo=0, hi=60),
-        R("irrigation.max_manual_s", "Maximum MANUAL irrigation", "s", gt=0, hi=86400),
-        R("return.sump_start_L", "Return start (sump)", "L", lo=0, hi=S),
-        R("return.sump_stop_L", "Return stop (sump)", "L", lo=0, hi=S),
-        R("return.main_inhibit_L", "Return destination-full inhibit (main)", "L", lo=0, hi=M),
-        R("return.main_resume_L", "Return resume below (main)", "L", lo=0, hi=M),
-        R("return.duty_policy", "Return pump duty policy", "", help="FIXED_RP1, FIXED_RP2 or ALTERNATE_EACH_START",
-          options=("FIXED_RP1", "FIXED_RP2", "ALTERNATE_EACH_START")),
-        R("return.max_runtime_s", "Return maximum run time", "s", gt=0, hi=86400),
-        R("return.min_flow_L_min", "Return minimum flow", "L/min", gt=0, hi=10000),
-        R("return.flow_grace_s", "Return flow grace", "s", lo=0, hi=600),
-        R("return.run_feedback_timeout_s", "Return run feedback timeout", "s", gt=0, hi=600),
-    ] + [r for s in ("A", "B", "ACID") for r in (
-        R(f"stock_fill.{s}.target_L", f"Stock {s} fill target", "L", gt=0, hi=cap[s]),
-        R(f"stock_fill.{s}.auto_trigger_L", f"Stock {s} auto-fill trigger", "L", lo=0, hi=cap[s]),
-        R(f"stock_fill.{s}.high_inhibit_L", f"Stock {s} high inhibit", "L", gt=0, hi=cap[s]),
-        R(f"stock_fill.{s}.max_time_s", f"Stock {s} fill maximum time", "s", gt=0, hi=86400),
-        R(f"stock_fill.{s}.min_rise_L", f"Stock {s} fill verification rise", "L", gt=0, hi=cap[s]),
-        R(f"stock_fill.{s}.rise_window_s", f"Stock {s} fill verification window", "s", gt=0, hi=3600))]
+        R("main.low_low_L", "Lowest level for watering (dry-run protection)", "L", lo=0, hi=M,
+          help="Watering stops below this level so that the main pumps never run dry."),
+        R("main.refill_trigger_L", "Refill starts below", "L", lo=0, hi=M,
+          help="When the main tank falls to this level, a refill can start."),
+        R("main.rearm_hysteresis_L", "Level rise needed before another refill can start", "L", gt=0, hi=M,
+          help="After a refill the tank must rise this much above the start level before a later drop can start "
+               "another refill. Reaching that level makes another refill possible; it does not start one."),
+        R("main.fill_stop_L", "Refill never fills above", "L", lo=0, hi=M,
+          help="A refill always ends at this level, whatever else is set."),
+        R("main.high_inhibit_L", "No water is let in above", "L", lo=0, hi=M,
+          help="Above this level no refill or drainage-return water enters the main tank."),
+        R("main.min_dosing_L", "Least water in the main tank before adding nutrients or acid", "L", lo=0, hi=M),
+        R("refill.trigger_debounce_s", "Wait before starting refill", "s", lo=0, hi=3600, advanced=True,
+          help="The level must stay at or below the start level this long, so a ripple does not start a refill."),
+        R("refill.endpoint_mode", "How much water to add", "", options=("FIXED_ADDITIONS", "FINAL_LEVEL"),
+          option_labels=("Add a set amount of water", "Fill to a water level")),
+        R("refill.final_level_L", "Fill up to", "L", lo=0, hi=M, required="refill.endpoint_mode=FINAL_LEVEL",
+          example="15000"),
+        R("refill.water.target_L", "Water to add", "L", gt=0, hi=M, required="refill.endpoint_mode=FIXED_ADDITIONS",
+          example="5000"),
+        R("refill.water.max_time_s", "Longest time for adding water", "s", gt=0, hi=86400, advanced=True),
+        R("refill.water.min_flow_L_min", "Lowest acceptable mains water flow", "L/min", gt=0, hi=10000, advanced=True),
+        R("refill.water.flow_grace_s", "Time allowed for the mains water flow to start", "s", lo=0, hi=600,
+          advanced=True),
+        R("refill.nutrient_mode", "How to add nutrients", "", options=("FIXED_VOLUMES", "EC_TARGET"),
+          option_labels=("Add set amounts of nutrients", "Add nutrients until the EC target is reached")),
+        R("refill.fixed.a_L", "Fertiliser A to add", "L", lo=0, hi=st, required="refill.nutrient_mode=FIXED_VOLUMES",
+          example="60"),
+        R("refill.fixed.b_L", "Fertiliser B to add", "L", lo=0, hi=st, required="refill.nutrient_mode=FIXED_VOLUMES",
+          example="60"),
+        R("refill.fixed.ec_min_mS_cm", "Nutrient strength (EC) afterwards: at least", "mS/cm", gt=0, hi=20,
+          required="refill.nutrient_mode=FIXED_VOLUMES", example="1.4",
+          help="Checked after the nutrients have mixed; outside this range the refill reports a problem."),
+        R("refill.fixed.ec_max_mS_cm", "Nutrient strength (EC) afterwards: at most", "mS/cm", gt=0, hi=20,
+          required="refill.nutrient_mode=FIXED_VOLUMES", example="2.2"),
+        R("refill.fixed.validation_settle_s", "Wait after adding nutrients before checking EC", "s", gt=0, hi=86400,
+          required="refill.nutrient_mode=FIXED_VOLUMES", advanced=True),
+        R("refill.ec.ec_target_mS_cm", "Nutrient strength (EC) target", "mS/cm", gt=0, hi=20,
+          required="refill.nutrient_mode=EC_TARGET", example="1.8",
+          help="Nutrients are added in steps until the EC reaches this value."),
+        R("refill.ec.ec_tolerance_mS_cm", "Allowed difference from the EC target", "mS/cm", gt=0, hi=5,
+          required="refill.nutrient_mode=EC_TARGET", advanced=True, example="0.1"),
+        R("refill.ec.ratio_a_to_b", "Fertiliser A for each litre of B", "L/L", gt=0, hi=100,
+          required="refill.nutrient_mode=EC_TARGET", example="1", help="1 means equal amounts of A and B."),
+        R("refill.ec.step_total_L", "Fertiliser A + B added in each step", "L", gt=0, hi=st,
+          required="refill.nutrient_mode=EC_TARGET", example="20"),
+        R("refill.ec.max_a_L", "Most fertiliser A in one refill", "L", gt=0, hi=st, required="refill.nutrient_mode=EC_TARGET",
+          example="150"),
+        R("refill.ec.max_b_L", "Most fertiliser B in one refill", "L", gt=0, hi=st, required="refill.nutrient_mode=EC_TARGET",
+          example="150"),
+        R("refill.ec.settle_s", "Wait after adding nutrients before checking EC", "s", gt=0, hi=86400,
+          required="refill.nutrient_mode=EC_TARGET", advanced=True),
+        R("refill.transfer_max_time_s", "Longest time for one fertiliser transfer", "s", gt=0, hi=86400, advanced=True),
+        R("refill.transfer_min_flow_L_min", "Lowest acceptable fertiliser transfer flow", "L/min", gt=0, hi=1000,
+          advanced=True),
+        R("refill.transfer_flow_grace_s", "Time allowed for the transfer flow to start", "s", lo=0, hi=600,
+          advanced=True),
+        R("refill.stock_reserve_L", "Always keep in each fertiliser tank", "L", lo=0, hi=st,
+          help="This much is never drawn from fertiliser tanks A and B."),
+        R("acid.ph_target", "Acidity (pH) target", "pH", lo=3, hi=9, example="6",
+          help="Acid is added when the water is less acidic than this (higher pH). Acid can only lower pH. "
+               "The owner prefers about 6."),
+        R("acid.ph_tolerance", "Add acid only when pH is above the target by more than", "pH", gt=0, hi=2,
+          advanced=True),
+        R("acid.undershoot_margin", "Stop with a problem when pH falls below the target by more than", "pH", gt=0, hi=3,
+          advanced=True),
+        R("acid.dose_step_L", "Acid added in each dose", "L", gt=0, hi=st, example="2"),
+        R("acid.settle_s", "Wait after each acid dose before measuring pH", "s", gt=0, hi=86400, advanced=True),
+        R("acid.max_batch_L", "Most acid in one batch", "L", gt=0, hi=st),
+        R("acid.max_day_L", "Most acid in 24 hours", "L", gt=0, hi=st),
+        R("acid.min_response_ph", "Expected pH drop from each dose", "pH", gt=0, hi=2, advanced=True),
+        R("acid.max_no_response", "Doses without a pH drop before stopping with a problem", "", lo=1, hi=10,
+          advanced=True),
+        R("acid.dose_max_time_s", "Longest time for one acid dose", "s", gt=0, hi=3600, advanced=True),
+        R("acid.min_flow_L_min", "Lowest acceptable acid transfer flow", "L/min", gt=0, hi=1000, advanced=True),
+        R("acid.flow_grace_s", "Time allowed for the acid flow to start", "s", lo=0, hi=600, advanced=True),
+        R("irrigation.min_flow_L_min", "Lowest acceptable sector water flow", "L/min", gt=0, hi=10000, advanced=True),
+        R("irrigation.flow_grace_s", "Time allowed for the sector water flow to start", "s", lo=0, hi=600, advanced=True),
+        R("irrigation.no_flow_sustain_s", "How long a missing flow must last before watering stops", "s", lo=0, hi=600,
+          advanced=True),
+        R("irrigation.valve_open_timeout_s", "Time allowed for a sector valve to open", "s", gt=0, hi=600, advanced=True),
+        R("irrigation.valve_close_timeout_s", "Time allowed for a sector valve to close", "s", gt=0, hi=600,
+          advanced=True),
+        R("irrigation.open_lead_s", "The valve opens this long before the pump starts", "s", lo=1, hi=600,
+          advanced=True, help="The owner asked for at least one second."),
+        R("irrigation.drive_start_timeout_s", "Time allowed for the pump drive to start", "s", gt=0, hi=600,
+          advanced=True),
+        R("irrigation.drive_stop_timeout_s", "Time allowed for the pump drive to stop", "s", gt=0, hi=600, advanced=True),
+        R("irrigation.contactor_timeout_s", "Time allowed to select a main pump", "s", gt=0, hi=60, advanced=True),
+        R("irrigation.stop_settle_s", "Pause after a confirmed stop", "s", lo=0, hi=60, advanced=True),
+        R("irrigation.max_manual_s", "Longest manual watering (Run once)", "s", gt=0, hi=86400, example="1800"),
+        R("return.sump_start_L", "The return pump starts when the drainage tank reaches", "L", lo=0, hi=S),
+        R("return.sump_stop_L", "The return pump stops when the drainage tank is down to", "L", lo=0, hi=S),
+        R("return.main_inhibit_L", "Hold the return when the main tank reaches", "L", lo=0, hi=M),
+        R("return.main_resume_L", "Resume the return when the main tank is below", "L", lo=0, hi=M),
+        R("return.duty_policy", "Which return pump runs", "", options=("FIXED_RP1", "FIXED_RP2", "ALTERNATE_EACH_START"),
+          option_labels=("Always return pump 1", "Always return pump 2", "Take turns at each start")),
+        R("return.max_runtime_s", "Longest return pump run", "s", gt=0, hi=86400, advanced=True),
+        R("return.min_flow_L_min", "Lowest acceptable return flow", "L/min", gt=0, hi=10000, advanced=True),
+        R("return.flow_grace_s", "Time allowed for the return flow to start", "s", lo=0, hi=600, advanced=True),
+        R("return.run_feedback_timeout_s", "Time allowed for the return pump to report running", "s", gt=0, hi=600,
+          advanced=True),
+    ] + [r for s, name in (("A", "fertiliser tank A"), ("B", "fertiliser tank B"), ("ACID", "the acid tank"))
+         for r in (
+        R(f"stock_fill.{s}.target_L", f"Fill {name} with water up to", "L", gt=0, hi=cap[s]),
+        R(f"stock_fill.{s}.auto_trigger_L", f"Fill {name} automatically when it falls to", "L", lo=0, hi=cap[s]),
+        R(f"stock_fill.{s}.high_inhibit_L", f"Never fill {name} above", "L", gt=0, hi=cap[s]),
+        R(f"stock_fill.{s}.max_time_s", f"Longest water fill of {name}", "s", gt=0, hi=86400, advanced=True),
+        R(f"stock_fill.{s}.min_rise_L", f"Level rise that proves water is entering {name}", "L", gt=0, hi=cap[s],
+          advanced=True),
+        R(f"stock_fill.{s}.rise_window_s", f"Time allowed for that rise ({name})", "s", gt=0, hi=3600, advanced=True))]
 
 
 def _get(body: dict, path: str) -> Any:
@@ -291,19 +330,19 @@ def validate_body(body: RecipeBody, capacities: dict[str, float], sectors: list[
             need = _get(b, k) == want
         if v is None:
             if need:
-                out.append(Issue(r.path, f"{r.label} is required"))
+                out.append(Issue(r.path, f"{r.label}: a value is needed"))
             continue
         if isinstance(v, str):
             continue
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
-            out.append(Issue(r.path, f"{r.label} must be a finite number ({r.unit})"))
+            out.append(Issue(r.path, f"{r.label}: type a number ({r.unit})"))
             continue
         if r.lo is not None and v < r.lo:
-            out.append(Issue(r.path, f"{r.label} must be at least {r.lo:g} {r.unit}"))
+            out.append(Issue(r.path, f"{r.label}: at least {r.lo:g} {r.unit}"))
         if r.gt is not None and v <= r.gt:
-            out.append(Issue(r.path, f"{r.label} must be greater than {r.gt:g} {r.unit}"))
+            out.append(Issue(r.path, f"{r.label}: more than {r.gt:g} {r.unit}"))
         if r.hi is not None and v > r.hi:
-            out.append(Issue(r.path, f"{r.label} must not exceed {r.hi:g} {r.unit}"))
+            out.append(Issue(r.path, f"{r.label}: at most {r.hi:g} {r.unit}"))
     if out:
         return out     # ordering checks only make sense on numbers that passed the range checks
     m, rf, ac, ir, rt = body.main, body.refill, body.acid, body.irrigation, body.return_
@@ -313,67 +352,69 @@ def validate_body(body: RecipeBody, capacities: dict[str, float], sectors: list[
         vals = [(n, v) for n, v in names if v is not None]
         for (n1, v1), (n2, v2) in zip(vals, vals[1:]):
             if not v1 < v2:
-                out.append(Issue(path, f"thresholds must be ordered: {n1} ({v1:g} L) < {n2} ({v2:g} L)"))
+                out.append(Issue(path, f"levels must be in this order: {n1} ({v1:g} L) lower than {n2} ({v2:g} L)"))
 
-    order("main", [("dry-run guard", m.low_low_L), ("refill trigger", m.refill_trigger_L),
-                   ("trigger + re-arm hysteresis", (m.refill_trigger_L or 0) + (m.rearm_hysteresis_L or 0)),
-                   ("refill stop", m.fill_stop_L), ("high inhibit", m.high_inhibit_L), ("capacity", M + 1e-9)])
+    order("main", [("lowest level for watering", m.low_low_L), ("refill starts below", m.refill_trigger_L),
+                   ("refill start + the rise needed before another refill",
+                    (m.refill_trigger_L or 0) + (m.rearm_hysteresis_L or 0)),
+                   ("refill never fills above", m.fill_stop_L), ("no water is let in above", m.high_inhibit_L),
+                   ("tank size", M + 1e-9)])
     if m.min_dosing_L is not None and m.min_dosing_L > (m.fill_stop_L or M):
-        out.append(Issue("main.min_dosing_L", "minimum dosing volume is above the refill stop level"))
+        out.append(Issue("main.min_dosing_L", "the least water before adding nutrients or acid is above the level a refill never fills above"))
     if rf.endpoint_mode == "FINAL_LEVEL":
         if rf.water.target_L is not None:
-            out.append(Issue("refill.water.target_L", "a fixed water addition is incompatible with the FINAL_LEVEL "
-                                                      "endpoint (the final level decides the water volume); clear it"))
+            out.append(Issue("refill.water.target_L", "a set amount of water cannot be combined with filling to a water level "
+                                                      "(the level decides the amount); clear it"))
         lo_ok = (m.refill_trigger_L or 0) + (m.rearm_hysteresis_L or 0)
         if rf.final_level_L is not None and not (lo_ok <= rf.final_level_L <= (m.fill_stop_L or M)):
-            out.append(Issue("refill.final_level_L", f"final level must lie between trigger + hysteresis ({lo_ok:g} L) "
-                                                     f"and the refill stop level ({m.fill_stop_L:g} L)"))
+            out.append(Issue("refill.final_level_L", f"the fill level must lie between the refill start plus the rise needed "
+                                                     f"({lo_ok:g} L) and the level a refill never fills above ({m.fill_stop_L:g} L)"))
     if rf.endpoint_mode == "FIXED_ADDITIONS":
         if rf.final_level_L is not None:
-            out.append(Issue("refill.final_level_L", "a final level is incompatible with FIXED_ADDITIONS; clear it"))
+            out.append(Issue("refill.final_level_L", "a fill level cannot be combined with adding a set amount of water; clear it"))
         adds = (rf.water.target_L or 0) + (_nutrient_max(rf) or 0)
         room = (m.fill_stop_L or M) - (m.refill_trigger_L or 0)
         if adds > room:
-            out.append(Issue("refill.water.target_L", f"water + maximum nutrient additions ({adds:g} L) exceed the usable "
-                                                      f"headroom between trigger and refill stop ({room:g} L); the "
-                                                      "refill-stop guard would end the batch early"))
+            out.append(Issue("refill.water.target_L", f"water plus the most nutrients ({adds:g} L) is more than fits between "
+                                                      f"the refill start and the level a refill never fills above ({room:g} L); "
+                                                      "the refill would end early"))
     if rf.nutrient_mode == "FIXED_VOLUMES":
         f = rf.fixed
         if f.ec_min_mS_cm is not None and f.ec_max_mS_cm is not None and f.ec_min_mS_cm >= f.ec_max_mS_cm:
-            out.append(Issue("refill.fixed.ec_max_mS_cm", "EC validation maximum must exceed the minimum"))
+            out.append(Issue("refill.fixed.ec_max_mS_cm", "the highest EC afterwards must be above the lowest"))
     if rf.nutrient_mode == "EC_TARGET":
         e = rf.ec
         if e.ec_tolerance_mS_cm is not None and e.ec_target_mS_cm is not None and e.ec_tolerance_mS_cm >= e.ec_target_mS_cm:
-            out.append(Issue("refill.ec.ec_tolerance_mS_cm", "EC tolerance must be smaller than the target"))
+            out.append(Issue("refill.ec.ec_tolerance_mS_cm", "the allowed difference must be smaller than the EC target"))
         if e.step_total_L is not None and e.max_a_L is not None and e.max_b_L is not None and \
                 e.step_total_L > e.max_a_L + e.max_b_L:
-            out.append(Issue("refill.ec.step_total_L", "one staged dose exceeds the batch maxima"))
+            out.append(Issue("refill.ec.step_total_L", "one step adds more than the most fertiliser A and B in one refill together"))
     if ac.dose_step_L is not None and ac.max_batch_L is not None and ac.dose_step_L > ac.max_batch_L:
-        out.append(Issue("acid.dose_step_L", "acid dose step exceeds the batch maximum"))
+        out.append(Issue("acid.dose_step_L", "one acid dose is more than the most acid in one batch"))
     if ac.max_batch_L is not None and ac.max_day_L is not None and ac.max_batch_L > ac.max_day_L:
-        out.append(Issue("acid.max_batch_L", "acid batch maximum exceeds the 24 h maximum"))
+        out.append(Issue("acid.max_batch_L", "the most acid in one batch is more than the most acid in 24 hours"))
     if ac.ph_target is not None and ac.undershoot_margin is not None and ac.ph_tolerance is not None and \
             ac.undershoot_margin <= ac.ph_tolerance:
-        out.append(Issue("acid.undershoot_margin", "undershoot margin must be wider than the dosing tolerance"))
+        out.append(Issue("acid.undershoot_margin", "the stop margin below the target must be wider than the margin above it for adding acid"))
     if not ir.sequence:
-        out.append(Issue("irrigation.sequence", "the irrigation sequence needs at least one sector step"))
+        out.append(Issue("irrigation.sequence", "the watering sequence needs at least one sector"))
     for i, step in enumerate(ir.sequence):
         if step.sector not in sectors:
             out.append(Issue(f"irrigation.sequence.{i}.sector", f"unknown sector {step.sector}"))
         if step.duration_s is None or not (0 < step.duration_s <= 86400):
-            out.append(Issue(f"irrigation.sequence.{i}.duration_s", "sector duration must be 1..86400 s"))
-    order("return", [("sump stop", rt.sump_stop_L), ("sump start", rt.sump_start_L)])
-    order("return.main_resume_L", [("return resume level", rt.main_resume_L), ("return inhibit level", rt.main_inhibit_L)])
+            out.append(Issue(f"irrigation.sequence.{i}.duration_s", "the watering time of a sector must be 1 to 86400 s"))
+    order("return", [("return pump stops at", rt.sump_stop_L), ("return pump starts at", rt.sump_start_L)])
+    order("return.main_resume_L", [("resume the return below", rt.main_resume_L), ("hold the return at", rt.main_inhibit_L)])
     if rt.main_inhibit_L is not None and m.high_inhibit_L is not None and rt.main_inhibit_L > m.high_inhibit_L:
-        out.append(Issue("return.main_inhibit_L", "return may not fill the main tank above the high-level inhibit"))
+        out.append(Issue("return.main_inhibit_L", "the return may not fill the main tank above the level where no water is let in"))
     for s in ("A", "B", "ACID"):
         sf = body.stock_fill.get(s)
         if sf is None:
-            out.append(Issue(f"stock_fill.{s}", f"stock {s} filling settings are required"))
+            out.append(Issue(f"stock_fill.{s}", f"the water filling settings of tank {s} are required"))
             continue
         if None not in (sf.auto_trigger_L, sf.target_L, sf.high_inhibit_L) and \
                 not (sf.auto_trigger_L < sf.target_L < sf.high_inhibit_L):
-            out.append(Issue(f"stock_fill.{s}", "stock thresholds must be ordered: auto trigger < target < high inhibit"))
+            out.append(Issue(f"stock_fill.{s}", "levels must be in this order: fill automatically at, lower than fill up to, lower than never fill above"))
     return out
 
 
@@ -388,7 +429,8 @@ def _nutrient_max(rf: Refill) -> float | None:
 def form_schema(capacities: dict[str, float]) -> list[dict]:
     return [{"path": r.path, "label": r.label, "unit": r.unit, "min": r.lo if r.lo is not None else r.gt,
              "min_exclusive": r.gt is not None, "max": r.hi, "required": r.required, "help": r.help,
-             "options": list(r.options)}
+             "options": list(r.options), "option_labels": list(r.option_labels or r.options), "advanced": r.advanced,
+             "example": r.example}
             for r in _rules(capacities)]
 
 

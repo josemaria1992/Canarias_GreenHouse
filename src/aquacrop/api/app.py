@@ -394,7 +394,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/static/{name}", include_in_schema=False)
     def static(name: str):
-        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png"}
         ext = Path(name).suffix
         if "/" in name or ".." in name or ext not in allowed:
             raise HTTPException(404)
@@ -627,7 +627,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                            "channel": facts.channel.model_dump() | {"retained_L": facts.channel.retained_L,
                                                                      "capacity_L": facts.channel.capacity_L},
                            "agitators": facts.agitators},
-                "mapping": ("SIMULATED proposal (configs/installation-48.yaml); not wiring" if is_sim else
+                "mapping": (f"SIMULATED proposal ({cfg.config_id}, docs/model/signal_budget.md); not wiring" if is_sim else
                             "physical mapping empty: no approved wiring, every signal UNBOUND"),
                 "signals": signals, "processes": procs,
                 "alarms": [o.to_dict() for o in list(_alarm_engine().open.values())]}
@@ -1037,7 +1037,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 w.writerow([f"# COMPLETE: {len(rows)} rows"])
             yield buf.getvalue()
 
-        headers = {"Content-Disposition": "attachment; filename=aquacrop-samples.csv",
+        headers = {"Content-Disposition": "attachment; filename=aquacrop-readings.csv",
                    "X-Truncated": "true" if more else "false"}
         if more:
             headers["X-Next-After-Id"] = str(rows[-1]["id"])
@@ -1105,11 +1105,19 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         "reported separately and never summed. Twin ledger totals are in /api/twin."}
 
     # ------------------------------------------------------------------ settings / admin
+    def _inventory() -> dict:
+        kinds = [p.kind.value for p in cfg.all_points()]
+        return {"modules": len(cfg.devices), "points": len(kinds),
+                **{k: kinds.count(k) for k in ("AI", "DI", "DO")}}
+
     @app.get("/api/settings")
     async def settings(p: Principal = Depends(require(Perm.READ))):
         import platform
         import sys
+        from ..release import release_info
         d = {"config": json.loads(cfg.model_dump_json()), "software_version": __version__,
+             "release": release_info(), "state_dir": str(state_dir.resolve()),
+             "inventory": _inventory(),
              "python": sys.version.split()[0], "platform": platform.platform(),
              "storage": hist.storage(), "migrations": hist.applied_migrations,
              "commissioning_evidence": "No hardware commissioning performed. Templates: docs/commissioning/",

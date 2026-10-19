@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import __version__
 
-SUPPORTED = ((3, 11), (3, 12), (3, 13))      # the tested range (CI matrix)
+SUPPORTED = ((3, 11), (3, 12), (3, 13), (3, 14))   # the tested range (CI matrix)
 MIN_FREE_BYTES = 2 * 2**30                   # a first year of demo history is far smaller; this is headroom
 REQUIRED_MODULES = ("fastapi", "uvicorn", "pydantic", "yaml", "argon2", "starlette")
 
@@ -68,9 +68,14 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
     from .cli import _cfg
     chk = Check()
     print(f"AquaCrop {__version__}: checking prerequisites")
+    from .release import describe, release_info
+    rel = release_info()
+    chk(rel["status"] in ("VERIFIED", "NOT_A_RELEASE"), describe(rel),
+        "this environment does not hold the release next to the launcher: unpack the whole release ZIP into a "
+        "new folder and start AquaCrop-Demo.cmd from there")
     v = sys.version_info[:2]
     chk(v in SUPPORTED, f"Python {platform.python_version()} ({sys.executable})",
-        "install Python 3.11, 3.12 or 3.13 from python.org and run the launcher again")
+        "use the Python bundled in the release folder (runtime), or install Python 3.11 to 3.14 from python.org")
     missing = []
     for m in REQUIRED_MODULES:
         try:
@@ -82,7 +87,7 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
         "or the offline wheelhouse in the release ZIP")
     from importlib import resources
     web = resources.files("aquacrop") / "web"
-    assets = [n for n in ("index.html", "app.js", "plant.js", "chart.js", "app.css") if not (web / n).is_file()]
+    assets = [n for n in ("index.html", "words.js", "app.js", "plant.js", "chart.js", "app.css") if not (web / n).is_file()]
     chk(not assets, "browser pages packaged" + (f" (missing: {', '.join(assets)})" if assets else ""),
         "reinstall the AquaCrop wheel; do not run from a partial copy")
     cfg = None
@@ -91,7 +96,9 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
         chk(cfg.profile.value == "SIMULATED", f"configuration {cfg.config_id} ({cfg.profile.value})",
             "the launcher only runs simulations; serve a hardware profile with `aquacrop serve` on the controller")
     except Exception as e:
-        chk(False, f"configuration {cfg_name}: {e}", "use a packaged name (installation-48, demo-48) or a valid file")
+        chk(False, f"configuration {cfg_name}: {e}",
+            "use a packaged name (installation-80, the normal demo; legacy installation-48, demo-48, demo-24) "
+            "or a valid file")
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
         probe = state_dir / ".write-test"
@@ -100,7 +107,7 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
         ok = True
     except OSError as e:
         ok, why = False, str(e)
-    chk(ok, f"state folder writable: {state_dir}", "" if ok else f"{why}; choose another folder with --state-dir")
+    chk(ok, f"data folder writable: {state_dir}", "" if ok else f"{why}; choose another folder with --state-dir")
     if ok:
         free = shutil.disk_usage(state_dir).free
         chk(free >= MIN_FREE_BYTES, f"free disk space {free / 2**30:.1f} GiB",
@@ -122,38 +129,97 @@ def localize(cfg, port: int):
     return cfg.model_copy(update={"security": sec.model_copy(update={"allowed_origins": keep + loop})})
 
 
-def first_admin(cfg, state_dir: Path, *, username: str, password_stdin: bool) -> bool:
-    """Guided creation of the first administrator when none exists. Returns False when cancelled."""
+def suggest_username(name: str) -> str:
+    """A login name the account rules accept, made from what someone typed: accents dropped, spaces and other
+    characters removed, lower case ("José María" -> "josemaria"). Empty when nothing usable is left."""
+    import unicodedata
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    out = "".join(c for c in plain.lower() if c.isalnum() or c in "._-")[:32]
+    return out if len(out) >= 2 else ""
+
+
+USERNAME_HELP = ("Login name: the name you type each time you sign in. Use 2 to 32 characters: letters, digits, "
+                 "and . _ -\n  No spaces or accents. Example: jose")
+PASSWORD_HELP = ("Password: at least 12 characters, and it must not contain the login name. Three or more "
+                 "unrelated words\n  joined by dashes make a good password. Nothing appears on the screen while you "
+                 "type it; that is normal.")
+
+
+def _ask_username(default: str, ask=input) -> str:
+    """Asks until the name passes the account rules; Enter takes the suggestion shown in brackets."""
+    from .security.auth import validate_username
+    print("  " + USERNAME_HELP)
+    while True:
+        entered = ask(f"Login name [{default}]: ").strip()
+        name = entered or default
+        try:
+            validate_username(name)
+            return name
+        except ValueError:
+            better = suggest_username(name)
+            why = ("it contains a space, an accent or another character that is not allowed" if len(name) >= 2
+                   else "it is too short")
+            print(f'  "{name}" cannot be used: {why}.' + (f' Try "{better}" (press Enter to use it).' if better else ""))
+            default = better or default
+
+
+def _ask_password(username: str, ask=getpass.getpass) -> str:
+    """Asks until the password passes the policy and is typed the same twice; the login name is kept."""
+    from .security.auth import validate_password
+    print("  " + PASSWORD_HELP)
+    while True:
+        pw = ask("Password: ")
+        try:
+            validate_password(pw, username)
+        except ValueError as e:
+            print(f"  That password cannot be used: {e}. Please type another one.")
+            continue
+        if pw == ask("Repeat the password: "):
+            return pw
+        print("  The two passwords were different. Please type the password again.")
+
+
+def first_admin(cfg, state_dir: Path, *, username: str, password_stdin: bool, ask=input,
+                ask_secret=getpass.getpass) -> bool:
+    """Guided creation of the first administrator when none exists. Returns False when cancelled. Interactive
+    answers that break the account rules are explained and asked again, keeping what was already accepted; the
+    rules themselves (security.auth) are the same as for every other account."""
     from .cli import _db_path
     from .domain.model import new_id
     from .historian.writer import Historian
-    from .security.auth import Accounts, Role, load_or_create_secret
+    from .security.auth import Accounts, Role, load_or_create_secret, validate_password, validate_username
     h = Historian(_db_path(cfg, state_dir), cfg, new_id("launch_setup"))
     try:
         acc = Accounts(h, load_or_create_secret(state_dir / "secret.key"), idle_minutes=30, absolute_hours=12)
         if acc.count_users():
             return True
-        print("\nFirst start: create the administrator account (there is no default password).")
+        print("\nFirst start: create the administrator account. There is no default password.")
         if password_stdin:
             pw = sys.stdin.readline().rstrip("\n")
+            try:
+                validate_username(username)
+                validate_password(pw, username)
+            except ValueError as e:
+                print(f"cannot create the account: {e}. {USERNAME_HELP.splitlines()[0]}", file=sys.stderr)
+                return False
         else:
-            if not sys.stdin.isatty():
+            if not sys.stdin.isatty() and ask is input:
                 print("no terminal to ask for a password: run in a console or pass --password-stdin", file=sys.stderr)
                 return False
-            entered = input(f"Administrator user name [{username}]: ").strip()
-            username = entered or username
-            while True:
-                pw = getpass.getpass("Password (at least 12 characters): ")
-                if pw == getpass.getpass("Repeat the password: "):
-                    break
-                print("The passwords differ; try again.")
+            try:
+                username = _ask_username(suggest_username(username) or "admin", ask)
+                pw = _ask_password(username, ask_secret)
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled; no account was created.", file=sys.stderr)
+                return False
         try:
             acc.create_user(username, pw, Role.ADMIN, commissioning=False, must_change=False)
         except ValueError as e:
             print(f"cannot create the account: {e}", file=sys.stderr)
             return False
         h.event("USER_BOOTSTRAPPED", {"username": username, "role": "admin", "via": "launcher"}, actor="launcher")
-        print(f"Administrator '{username}' created. Add operators and viewers under Settings, Users.")
+        print(f"Administrator '{username}' created. Sign in with this name in the browser. Add operators and viewers "
+              "under Settings, Users.")
         return True
     finally:
         h.close()
@@ -183,11 +249,23 @@ def _open_browser_when_ready(url: str, stop: threading.Event, log: logging.Logge
 
 
 def cmd_launch(args) -> int:
+    """Starts the demo; on any failure the last lines name the data folder and log file actually in use (a
+    --state-dir trial folder, not the default)."""
+    state_dir = Path(args.state_dir).expanduser().resolve() if args.state_dir else default_state_dir()
+    rc = _launch(args, state_dir)
+    if rc:
+        log = state_dir / "logs" / "aquacrop-launch.log"
+        print(f"\nAquaCrop did not start.\n  Data folder: {state_dir}\n  Log file:    "
+              + (str(log) if log.is_file() else "none written (the checks above stopped the start before it)"),
+              file=sys.stderr)
+    return rc
+
+
+def _launch(args, state_dir: Path) -> int:
     import uvicorn
 
     from .api.app import create_app
     from .ownership import OwnershipError, acquire_installation
-    state_dir = Path(args.state_dir).expanduser().resolve() if args.state_dir else default_state_dir()
     cfg, failed = prerequisites(args.config, state_dir, args.port)
     if failed:
         print(f"\n{len(failed)} prerequisite(s) failed; nothing was started.", file=sys.stderr)
@@ -202,8 +280,9 @@ def cmd_launch(args) -> int:
         logging.getLogger(name).addHandler(handler)
     log = logging.getLogger("aquacrop.launch")
     log.setLevel(logging.INFO)
-    print(f"  state folder: {state_dir}\n  log file:     {log_path}")
+    print(f"  data folder: {state_dir}\n  log file:    {log_path}")
     if not first_admin(cfg, state_dir, username=args.username, password_stdin=args.password_stdin):
+        log.warning("first administrator not created; nothing started")
         return 3
     try:
         locks = acquire_installation(state_dir, cfg)
@@ -219,7 +298,9 @@ def cmd_launch(args) -> int:
             log.exception("cannot start")
             print(f"cannot start: {e} (details in {log_path})", file=sys.stderr)
             return 3
-        log.info("starting %s %s on %s, state %s", cfg.config_id, __version__, url, state_dir)
+        from .release import describe, release_info
+        log.info("starting %s %s on %s, state %s; %s", cfg.config_id, __version__, url, state_dir,
+                 describe(release_info()))
         threading.Thread(target=_open_browser_when_ready, args=(url, stop, log, not args.no_browser),
                          daemon=True).start()
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, workers=1,
@@ -236,7 +317,7 @@ def cmd_launch(args) -> int:
         for lk in locks:
             lk.release()
     log.info("stopped cleanly")
-    print("AquaCrop stopped cleanly; the history and accounts are kept in the state folder.")
+    print("AquaCrop stopped cleanly; the history and accounts are kept in the data folder.")
     return 0
 
 

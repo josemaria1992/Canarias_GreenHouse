@@ -32,6 +32,8 @@ GATES = {
     "PC-12": ["vfd_trip_recovery", "drive_modbus_comm_loss", "safety_chain_open", "main_pump_no_flow", "sector_valve_stuck_open",
               "main_level_open_loop", "stale_acquisition", "module_timeout", "main_source_empty", "main_low_low"],
     "PC-13": ["manual_bounds_rejected", "raw_command_refused"],
+    # owner tour start states (simulation only, DEMO values; see tests/acceptance/test_owner_tour.py)
+    "TOUR": ["tour_low_main", "tour_ph_high", "tour_sump_high", "tour_main_full_sump_high", "tour_ec_lost_at_valve_opening"],
 }
 
 
@@ -193,6 +195,36 @@ def test_pc12_ack_reset_restart_are_distinct(icfg):
     rt.run_for(30)
     assert irr.state == CS.STOPPED and not irr.on
     assert rt.process_request("op", "IRRIGATION", CS.AUTO)[0]       # restart is a deliberate request
+
+
+def test_pc12_the_page_says_why_a_reset_is_not_available_yet_and_it_matches_reset(icfg):
+    """F-05: the reason shown beside "Clear stop after fixing the problem" comes from the same checks as the
+    reset itself; reading it changes nothing (the process stays locked out until the reset is requested)."""
+    rt = make_runtime(icfg)
+    irr = rt.sup.by_id["IRRIGATION"]
+    assert irr.view()["reset_blocker"] is None                      # nothing locked out
+    rt.process_request("op", "IRRIGATION", CS.AUTO)
+    rt.run_for(30)
+    rt.set_actuator_fault("op", "drive", "MAIN", "TRIP")
+    rt.run_for(1)
+    v = irr.view()                                                  # the fault is reported while the stop runs
+    assert v["state"] == "FAULT_LOCKOUT" and "drive fault input still active" in (v["fault_present"] or "")
+    rt.run_for(14)
+    assert irr.state == CS.FAULT_LOCKOUT
+    why = irr.view()["reset_blocker"]
+    assert why and "drive fault input still active" in why            # the cause is still there
+    ok, msg = rt.process_reset("op", "IRRIGATION")
+    assert not ok and why in msg
+    rt.set_actuator_fault("op", "drive", "MAIN", None)
+    rt.run_for(10)
+    assert irr.view()["fault_present"] is None
+    assert irr.view()["reset_blocker"] == "acknowledge the fault alarm before reset"
+    ok, msg = rt.process_reset("op", "IRRIGATION")
+    assert not ok and msg == "acknowledge the fault alarm before reset"
+    occ = rt.alarms.get(irr.fault_occurrence_id)
+    rt.acknowledge("op", occ.rule_id, occ.target)
+    assert irr.view()["reset_blocker"] is None and irr.state == CS.FAULT_LOCKOUT
+    assert rt.process_reset("op", "IRRIGATION")[0] and irr.state == CS.STOPPED
 
 
 def test_pc12_storage_fault_inhibits_new_starts(icfg):

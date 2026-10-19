@@ -116,14 +116,14 @@ def test_prerequisite_failures_are_reported_and_start_nothing(tmp_path, monkeypa
     blocked = tmp_path / "a file"
     blocked.write_text("x")
     _, failed = launcher.prerequisites("installation-48", blocked / "state", _free_port())
-    assert any("state folder" in f for f in failed)
+    assert any("data folder" in f for f in failed)
     # the command itself exits 2 and writes nothing when a check fails
     from aquacrop.cli import main
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", port))
         busy.listen(1)
         assert main(["launch", "--state-dir", str(tmp_path / "t"), "--port", str(port), "--no-browser"]) == 2
-    assert not (tmp_path / "t" / "installation-48.sqlite3").exists()
+    assert not list((tmp_path / "t").glob("*.sqlite3"))
 
 
 def test_loopback_origins_follow_a_non_default_port_and_other_origins_are_kept():

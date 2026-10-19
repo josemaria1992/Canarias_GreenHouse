@@ -1,4 +1,24 @@
-# Handover: AquaCrop platform 0.3.0, the pre-hardware release (2026-10-13)
+# Handover: AquaCrop platform 0.3.3, the owner demo release (2026-10-19)
+
+**0.3.3, corrections for a first-time operator (2026-10-19):** the owner reviewed 0.3.2 as a first-time
+operator (F-01 to F-09, CHANGES REQUESTED). The Windows ZIP now carries its own Python (`runtime/`,
+CPython 3.14.8), the first administrator is guided, the pages use the owner's plain names (process card
+and Stop first, problems with their next step and a link to the process, History, fertiliser tank
+preparation, narrow screens, Getting started), and the tour has a result form that saves only by
+download. What changed per finding: `operator/owner-tour/issues.md`. Display, guidance and Windows start
+only; internal ids, roles, algorithms and limits unchanged. Owner results NOT RUN.
+
+**0.3.2, owner demo and acceptance tour (2026-10-13):** the release ZIP is what the owner runs on a
+Windows PC (`README-FIRST.md` inside it). The normal demo is `installation-80` (six modules, 80
+points, SIMULATED); `installation-48`, `demo-48` and `demo-24` are legacy test fixtures. The
+owner's acceptance tour is `operator/walkthrough.md` (UAT-01 to UAT-16) with an illustrated offline
+guide (`owner-tour/index.html` in the ZIP), an editable checklist (`owner-checklist.csv`) and a
+feedback template. Every owner result is NOT RUN until the owner tests it; Claude's rehearsal of the
+tour and CI's checks are separate records, never owner results. The launcher names each environment
+after the exact program file, so an earlier 0.3.1 environment can no longer run a newer build, and
+Settings, *Versions* shows the release, source commit and whether the installed program is exactly
+the one in the folder. No control algorithm, production mapping, retention, cadence or budget
+changed. Delivery issues found and fixed while rehearsing the tour: `operator/owner-tour/issues.md`.
 
 **Owner inventory update (2026-10-13):** two IO 8CH (SKU 26244) added, for 80 points across six
 modules; the launcher default is `installation-80` and the 32 added channels are testable but stay
@@ -14,7 +34,7 @@ by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPT
 
 ## What works (software, verified on a desktop)
 
-- **Simulation**: 48-point (and 24-point) desktop demo with a causal water model, two-sector
+- **Simulation**: the 80-point `installation-80` demo (the 48- and 24-point fixtures are legacy) with a causal water model, two-sector
   AUTO, faults and lockout, 17 scenario presets, pause/step/speed/replay, persistent alarms,
   full history with provenance, seven-view browser UI behind individual accounts.
 - **Real modules, read-only**: `serve` runs a `HARDWARE_READ_ONLY` installation, polling each
@@ -86,6 +106,10 @@ greenhouse` still starts the simulation and refuses the old hardware/bench envir
 
 ## Test results
 
+The figures in this section are those of 0.3.0; the results of 0.3.3 (tests, `demo verify`, the
+browser check, the installed wheel, the release check, the Windows cold start, restart and upgrade
+over 0.3.1, and the CM4 staging) are in the verification report delivered with the ZIP.
+
 410 tests pass on Python 3.11, 3.12 and 3.13. Two of them run the real rclone binary against a
 local encrypted remote: the round trip and the replacement-controller recovery; they are skipped where
 rclone is not installed and required on CI's Linux jobs. `demo verify` gives 21/21 on both demo
@@ -100,15 +124,17 @@ item: `ACCEPTANCE.md`.
 
 ## Launch (desktop)
 
-From the release ZIP on Windows: double-click `AquaCrop-Demo.cmd` (`installation/desktop.md`). From a
+From the release ZIP on Windows: double-click `AquaCrop-Demo.cmd`; the ZIP carries its own Python
+(`runtime/`, CPython 3.14.8 for 64-bit Windows), so nothing is installed first (`README-FIRST.md`,
+`installation/desktop.md`). It serves `installation-80`. From a
 source checkout:
 
 ```text
 python3 -m venv .venv
 .venv/bin/python -m pip install --require-hashes -r requirements.lock
 .venv/bin/python -m pip install --no-deps .
-.venv/bin/python -m aquacrop users bootstrap --config demo-48 --username admin --generate
-.venv/bin/python -m aquacrop serve --config demo-48 --host 127.0.0.1 --port 8000
+.venv/bin/python -m aquacrop users bootstrap --config installation-80 --username admin --generate
+.venv/bin/python -m aquacrop serve --config installation-80 --host 127.0.0.1 --port 8000
 ```
 
 On Windows, use `py -m venv .venv` and `.venv\Scripts\python.exe` instead. More detail is in

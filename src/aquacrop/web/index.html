@@ -14,7 +14,7 @@
 <section id="login-view" class="login hidden">
   <form id="login-form" class="card narrow">
     <h1>AquaCrop greenhouse</h1>
-    <label>Username <input name="username" autocomplete="username" required maxlength="32"></label>
+    <label>Login name <input name="username" autocomplete="username" required maxlength="32"></label>
     <label>Password <input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
     <button type="submit">Log in</button>
     <p id="login-error" class="error"></p>
@@ -26,7 +26,8 @@
     <h2>Change password</h2>
     <p class="muted">Your account requires a new password before you can operate.</p>
     <label>Current password <input name="old" type="password" required autocomplete="current-password"></label>
-    <label>New password (12+ characters) <input name="new" type="password" required minlength="12" autocomplete="new-password"></label>
+    <label>New password <input name="new" type="password" required minlength="12" autocomplete="new-password" aria-describedby="pw-rules"></label>
+    <p id="pw-rules" class="muted">At least 12 characters, and it must not contain your login name. A short sentence of four or more words is easy to remember.</p>
     <button type="submit">Change password</button>
     <p id="pw-error" class="error"></p>
   </form>
@@ -34,31 +35,42 @@
 
 <div id="app" class="hidden">
   <header class="topbar">
-    <nav id="nav">
+    <div class="menu-row">
+      <button id="menu-btn" class="ghost menu-btn" aria-expanded="false" aria-controls="nav">Menu</button>
+      <span id="nav-current" class="nav-current"></span>
+    </div>
+    <nav id="nav" aria-label="Pages">
+      <a href="#start">Getting started</a>
       <a href="#overview">Overview</a>
       <span id="nav-inst" class="hidden"></span>
-      <a href="#twin">Digital twin</a>
+      <a href="#twin">Digital Twin</a>
       <a href="#io">I/O test bench</a>
       <a href="#control">Control</a>
-      <a href="#trends">Trends</a>
+      <a href="#history">History</a>
       <a href="#alarms">Alarms &amp; events</a>
       <a href="#settings">Settings</a>
     </nav>
     <div class="who"><span id="who"></span> <button id="logout" class="ghost">Log out</button></div>
   </header>
-  <div id="statusline" class="statusline"></div>
+  <div id="statusline" class="statusline">
+    <span id="status-plain"></span>
+    <button id="status-more" type="button" class="linkbtn" aria-expanded="false" aria-controls="status-tech">Details</button>
+    <div id="status-tech" class="status-tech hidden"></div>
+  </div>
   <main>
     <section id="v-overview" class="view"></section>
     <section id="v-twin" class="view"></section>
     <section id="v-io" class="view"></section>
     <section id="v-control" class="view"></section>
-    <section id="v-trends" class="view"></section>
+    <section id="v-history" class="view"></section>
+    <section id="v-start" class="view"></section>
     <section id="v-alarms" class="view"></section>
     <section id="v-settings" class="view"></section>
     <section id="v-plant" class="view"></section>
   </main>
   <div id="toast" class="toast hidden"></div>
 </div>
+<script src="/static/words.js"></script>
 <script src="/static/chart.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/plant.js"></script>

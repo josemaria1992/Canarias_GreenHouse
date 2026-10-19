@@ -1,5 +1,102 @@
 # Changelog
 
+## 0.3.3 (2026-10-19): corrections for a first-time operator
+
+The owner's first-time-operator review of 0.3.2 (2026-10-19, findings F-01 to F-09, CHANGES REQUESTED).
+Display, guidance and Windows start only. No control algorithm, production mapping, recipe limit, retention
+(365 d), cadence (60 s), storage budget (17 GiB), role or permission gate, bench lease policy, restart
+behaviour or hardware profile changed; physical AUTO still does not exist, the drive interface stays
+NOT_CONFIGURED, off-device backups stay disabled and the 32 added channels stay unassigned. Internal
+identifiers (process, alarm, point and recipe field ids) are unchanged and stay visible under Details.
+
+### Windows start (F-01, F-06)
+- The Windows release carries its own Python in `runtime/`: CPython 3.14.8 for 64-bit Windows, python.org's
+  build as published by the Python Software Foundation (NuGet package `python`, SHA-256 pinned in
+  `scripts/build_release.py`), with AquaCrop and the locked packages installed at build time.
+  `AquaCrop-Demo.cmd` uses it first and installs and downloads nothing; no Python is needed on the PC.
+  Python 3.14 joins the tested range (CI test matrix 3.11 to 3.14).
+- First administrator: the login name and password rules are shown with an example before typing; a name
+  or password that breaks them is explained and asked again (an accented name gets a suggestion, `José` ->
+  `jose`); a failed start names the data folder and log file actually in use. The account and password
+  rules are unchanged.
+
+### Pages for a first-time operator (F-02 to F-05, F-07 to F-09)
+- Display names confirmed by the owner on 14 Oct: Watering, Fertiliser tank A/B, Drainage tank, History,
+  Start automatic watering, Stop watering / Stop refill / Stop return pump, Stopped because of a problem,
+  Checks before starting, Mark as seen, Clear stop after fixing the problem, Reading valid / Reading is old /
+  No reading / Reading outside the allowed range / Unused channel, Acidity (pH), Nutrient strength (EC),
+  Check settings / Use these settings / Restore previous settings, Download readings. The words live in one
+  place (`web/words.js`); the internal ids beside them are unchanged.
+- A plain status line at the top of every page ("Digital Twin · Watering stopped · Main tank 60% · Last
+  reading 1 second ago"), with a short explanation of the Digital Twin; version, configuration, ids and
+  phases under Details.
+- Process pages open with one card: what is running, what happens next, the checks before starting and the
+  process's Stop. The diagram is folded away by default; motor registers, contactors and selectors are under
+  Technical details. The software Stop is not called an emergency stop.
+- Recipes: choose how to refill, set amounts or targets (only the chosen way's fields; timing and tolerances
+  under Advanced settings), check the changes, use these settings. Every field has a label, unit, allowed
+  range and example; a problem shows beside its field and the typed value stays; the page says when a change
+  takes effect. Only administrators can use new settings, and the validation rules and limits are unchanged.
+- Problems (Alarms): a plain headline, the equipment, one next step and a link to its process, with separate
+  Mark as seen, Clear stop after fixing the problem and Start buttons; an unavailable step says why (the
+  process reports the reason its reset is blocked, read-only). Marking, clearing or resetting never starts
+  equipment. Code, target and audit under Details.
+- History (was Trends): readings grouped under human names with checkboxes, Today / Yesterday / Last 7 days,
+  Download readings. Units, timestamps, gaps, point addresses (as secondary labels) and the complete-export
+  check are kept.
+- Fertiliser tanks: "Confirm tank A is prepared" and "Mark tank A not ready" with what each means; after a
+  water fill the page says the tank needs preparing again before dosing. Adding simulated fertiliser moved to
+  the Digital Twin page.
+- Narrow screens: a Menu button, stacked cards, the current process and its Stop near the top, and the whole
+  diagram as its own view ("Scroll sideways to see the whole greenhouse") without page-wide sideways scroll.
+- Getting started (first menu item): four pictured tasks, one action per step with the exact button names:
+  read the tank level, water one sector, stop watering, recover from a simulated problem.
+
+### Owner tour and results
+- The tour (UAT-01 to UAT-16) and its illustrated guide use the new screens and names; it starts with the
+  steps to start AquaCrop and the text a first start prints (recorded through the release launcher).
+- `owner-tour/results.html`: a results form that saves only when you press Download results (a CSV file),
+  every owner case preset NOT RUN, and a separate part for a first-time operator's four tasks. The guide no
+  longer prints result boxes that suggest it saves anything.
+- The release CI check records whether the checkout was clean before the build writes its output.
+
+## 0.3.2 (2026-10-13): owner demo release and acceptance tour
+
+The owner's brief of 2026-10-13 18:56 UTC: a tested Windows/CM4 release ZIP and a guided acceptance tour.
+Software and simulation only. No control algorithm, production mapping, recipe value, retention (365 d),
+cadence (60 s), storage budget (17 GiB) or hardware profile changed; physical AUTO still does not exist,
+the drive interface stays NOT_CONFIGURED, off-device backups stay disabled and the 32 added channels stay
+unassigned.
+
+### Added
+- Owner acceptance tour UAT-01 to UAT-16 in `docs/operator/walkthrough.md`: goal, page, role, start
+  state, load (DEMO presets), numbered steps, expected result, failure criteria, duration, speed,
+  reset and a result line, NOT RUN. Five simulation-only tour presets labelled "Owner tour (UAT-nn)".
+- Illustrated offline guide `owner-tour/index.html` in the ZIP (`scripts/ui_check/make_tour_guide.py`)
+  from Claude's browser rehearsal through the release launcher (`scripts/ui_check/run_tour_rehearsal.py`,
+  `tour_rehearsal.cjs`); `owner-checklist.csv`, `owner-feedback-template.md`, review notes and the
+  delivery issue list (`docs/operator/owner-tour/`).
+- `scripts/verify_release.py` (the extracted ZIP against its manifest and the packaged configuration)
+  and `scripts/release_smoke.py` (a session through the release launcher: cold start, restart, upgrade).
+- CI: the release is built in two passes with the same wheel (rehearsal, then guide and wheelhouses)
+  and verified; the Windows job runs a cold start, a restart and an upgrade over the 0.3.1 demo ZIP
+  through `AquaCrop-Demo.cmd`; the CM4 staging verifies `installation-80`.
+- Settings, *Versions*: release, source commit, build time, "wheel verified", config and inventory.
+
+### Changed
+- Launchers name each environment after the SHA-256 of the wheel, so an older environment never runs a
+  newer build; the release check stops on MISMATCH. Only a 64-bit Python is accepted on Windows.
+- `README-FIRST.md` rewritten: official Python 3.12 (64-bit) installation, data and log locations,
+  stop and restart, upgrading from 0.3.1, a separate trial folder, troubleshooting.
+- `installation-80` is the normal demo in every document; `installation-48`, `demo-48` and `demo-24`
+  are labelled legacy test fixtures.
+
+### Fixed (delivery and usability, `docs/operator/owner-tour/issues.md`)
+- DEL-01 to DEL-18: among them form choices reset by the refresh, collapsing recipe sections, lost
+  clicks during a redraw, the tank interior not clickable, unassigned channels looking like faults, a
+  stale acid "Next" line beside its waiting reason, developer-style result text, and the main pump
+  label showing the contactor as "run", and list items split apart in the illustrated guide.
+
 ## 0.3.1 (2026-10-13): two IO 8CH modules, 80 points (ADR-0016)
 
 The owner's inventory update of 2026-10-13: two Waveshare Modbus RTU IO 8CH (SKU 26244) beside the

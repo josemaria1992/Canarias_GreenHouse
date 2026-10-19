@@ -1037,10 +1037,12 @@ class Acid(_PathProcess):
             self.inhibit = None
             if self.batch is not None:
                 self._end_batch(ctx, "PH_IN_BAND", ph)
-            self.next_step = f"pH {ph:.2f} within target {a.ph_target:g} + {a.ph_tolerance:g}: no dose"
+            self.next_step = f"pH {ph:.2f} at or below {a.ph_target + a.ph_tolerance:g} (target {a.ph_target:g} + " \
+                             f"{a.ph_tolerance:g}): no dose"
             return
         if why:
             self.inhibit = "; ".join(why)
+            self.next_step = ""                 # no stale "next" plan beside the reason it waits
             return
         ok, mwhy = self.sup.mixing_ready("PH", a.settle_s, ctx)
         if not ok:

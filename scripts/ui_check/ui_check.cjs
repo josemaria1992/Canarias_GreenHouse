@@ -15,7 +15,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const BASE = process.env.AQ_BASE, USER = process.env.AQ_USER, PASS = process.env.AQ_PASS, OUT = process.env.AQ_OUT;
 const PHASE = process.argv[2] || "main";   // main, after (restart) or hardware (read-only profile, fake bus)
 const PLANT_PAGES = ["overview", "nutrients", "main-tank", "main-pumps", "sector-S1", "sector-S2", "drainage", "recipes"];
-const SHARED_PAGES = ["twin", "io", "trends", "alarms", "settings"];
+const SHARED_PAGES = ["twin", "io", "history", "alarms", "settings"];
 const checks = [];
 
 function check(id, ok, detail) {
@@ -77,6 +77,17 @@ async function show(p, view) {
 const visibleText = p => p.evaluate(() => (document.querySelector("section.view:not(.hidden)") || document.body).innerText);
 const procs = async p => (await get(p, "/api/processes")).processes;
 
+// Tab through the page until the focused element is a button or link named `name`; true when found.
+async function tabTo(p, name, max = 300) {
+  for (let i = 0; i < max; i++) {
+    await p.keyboard.press("Tab");
+    const t = await p.evaluate(() => { const e = document.activeElement; return e ? (e.getAttribute("aria-label") || e.textContent || "").trim() : ""; });
+    if (t === name) return true;
+  }
+  return false;
+}
+const RAW_LABELS = /^(AUTO|MANUAL|STOP|Ack|Reset|Reset lockout|Acknowledge prepared|Validate|Activate|Roll back.*|Export CSV|Twin: prepare.*)$/;
+
 async function main() {
   const b = await launch();
   const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, acceptDownloads: true });
@@ -85,15 +96,18 @@ async function main() {
   await login(p, USER, PASS);
 
   // UI-01: every installation page and the shared pages render with content and no page error
-  const nav = (await p.locator("#nav").innerText()).replace(/\s+/g, " ");
-  check("UI-01 nav", ["Nutrients & acid", "Main tank", "Main pumps", "Sector 1", "Sector 2", "Drainage", "Recipes"]
-    .every(t => nav.includes(t)) && !/\bControl\b/.test(nav), nav);
+  // the menu is completed once the installation's pages are known
+  const nav = await until(p, async () => { const t = (await p.locator("#nav").innerText()).replace(/\s+/g, " "); return /Watering/.test(t) && !/\bControl\b/.test(t) && t; }, 5000)
+    || (await p.locator("#nav").innerText()).replace(/\s+/g, " ");
+  check("UI-01 nav", ["Getting started", "Watering", "Sector 1", "Sector 2", "Main tank", "Nutrients & acid", "Drainage return", "Recipes",
+    "Digital Twin", "History", "Alarms & events"].every(t => nav.includes(t)) && !/\bControl\b|Trends/.test(nav), nav);
   for (const v of PLANT_PAGES.concat(SHARED_PAGES)) {
     await show(p, v);
     const txt = await visibleText(p);
     const stale = await p.locator("#stale").evaluate(e => !e.classList.contains("hidden"));
     await shot(p, "page-" + v);
-    check("UI-01 page " + v, txt.length > 80 && !txt.includes("This page does not exist in this profile") && !stale, `${txt.length} chars, stale banner ${stale}`);
+    check("UI-01 page " + v, txt.length > 80 && !txt.includes("This page does not exist in this profile") && !txt.includes("could not be shown") && !stale,
+      `${txt.length} chars, stale banner ${stale}`);
     if (v === "io") {
       const heads = await p.$$eval("#v-io .card h3", hs => hs.map(x => x.parentElement.textContent));
       const sink = heads.filter(t => /TRANSISTOR SINK — not relay contacts, max 500 mA/.test(t)).map(t => t.split(" ")[0]);
@@ -104,86 +118,158 @@ async function main() {
         `transistor sinks ${sink.join(", ")}; relay contacts ${relay.join(", ")}`);
     }
   }
+  // F-03: no raw engineering label on a button anywhere; the status line in plain words, details on request
+  const raw = [];
+  for (const v of PLANT_PAGES.concat(SHARED_PAGES, ["start"])) {
+    await show(p, v);
+    raw.push(...(await p.$$eval("section.view:not(.hidden) button", (bs, re) => bs.map(x => x.textContent.trim()).filter(t => new RegExp(re).test(t)), RAW_LABELS.source)).map(t => `${v}: ${t}`));
+  }
+  check("F-03 every action named in plain words", raw.length === 0, raw.join(", ") || "no AUTO, MANUAL, STOP, Ack, Reset lockout, Validate, Activate or Export CSV button");
+  const plain = await p.locator("#status-plain").innerText();
+  const techHidden = await p.locator("#status-tech").evaluate(e => e.classList.contains("hidden"));
+  await p.locator("#status-more").click();
+  const tech = await p.locator("#status-tech").innerText();
+  await p.locator("#status-more").click();
+  check("F-03 plain status line", /^Digital Twin · Watering stopped · Main tank \d+% · Last reading \d+ seconds? ago/.test(plain) && techHidden &&
+    /computer model of the greenhouse/.test(tech) && /Profile SIMULATED · config installation-80@/.test(tech),
+    `"${plain}"; Details shows the Digital Twin explanation and "${tech.split("\n").pop().slice(0, 90)}…"`);
+  await show(p, "start");
+  const startTxt = await visibleText(p);
+  const imgs = await p.$$eval("#v-start img", xs => xs.map(x => [x.naturalWidth, x.alt]));
+  check("F-03 Getting started", ["1. Read the tank level", "2. Water one sector", "3. Stop watering", "4. Recover from a simulated problem"].every(t => startTxt.includes(t)) &&
+    imgs.length === 4 && imgs.every(([w, alt]) => w > 200 && alt.length > 20) && /owner-tour/.test(startTxt),
+    `four tasks with ${imgs.length} pictures (${imgs.map(x => x[0] + " px").join(", ")}) and alt text; the owner tour is named as separate`);
 
-  // UI-01: each process page carries its part of the diagram, its controls, its alarms and its trend
+  // UI-01 / F-02: each process page: state, next step and its Stop first; diagram collapsed; trend; technical detail hidden
   for (const v of PLANT_PAGES.filter(x => !["overview", "recipes"].includes(x))) {
     await show(p, v);
     const parts = await p.evaluate(() => {
       const sec = document.querySelector("section.view:not(.hidden)");
+      const card = sec.querySelector(".card.proc"), stop = card && card.querySelector("button.stop");
+      const diag = [...sec.querySelectorAll("details")].find(d => /Greenhouse diagram/.test(d.querySelector("summary").textContent));
       return { focus: sec.querySelectorAll("svg.diagram g.hot.focus").length, dim: sec.querySelectorAll("svg.diagram g.hot.dim").length,
         chart: !!sec.querySelector("svg.chart-small") && sec.querySelector("svg.chart-small").childNodes.length > 0,
-        alarms: /Alarms for this page/.test(sec.innerText), auto: [...sec.querySelectorAll("button")].some(b => b.textContent === "AUTO"),
-        link: !!sec.querySelector('a[href="#main-pumps"]') };
+        first: card === sec.querySelector(".card:not(.stopbar)"), stop: stop ? stop.textContent : null, stopTop: stop ? Math.round(stop.getBoundingClientRect().top) : null,
+        lead: card ? card.querySelector(".lead").textContent : "", diagClosed: diag ? !diag.open : null };
     });
-    check("UI-01 process page " + v, parts.focus > 0 && parts.dim > 0 && parts.chart && parts.alarms && (parts.auto || (v.startsWith("sector") && parts.link)),
-      `${parts.focus} highlighted parts, trend drawn ${parts.chart}, page alarms ${parts.alarms}, ${parts.auto ? "AUTO/MANUAL/STOP" : "link to the irrigation controls"}`);
+    check("F-02 process page " + v, parts.first && parts.stop && /^Stop /.test(parts.stop) && parts.stopTop < 520 && parts.lead.length > 10 &&
+      parts.diagClosed === true && parts.focus > 0 && parts.dim > 0 && parts.chart,
+      `first card: "${parts.lead}" with "${parts.stop}" ${parts.stopTop} px from the top; diagram collapsed (${parts.focus} parts of this page highlighted); last hour drawn ${parts.chart}`);
   }
   await show(p, "main-pumps");
+  const mpVisible = await visibleText(p);
+  await p.locator("section.view:not(.hidden) details.tech > summary", { hasText: "Technical details" }).click();
   const mpTxt = await until(p, async () => { const t = await visibleText(p); return /Status word\s+0x[0-9A-F]{4}/.test(t) && t; });
-  check("UI-01 drive interface (simulated)", !!mpTxt && /Drive interface\s+MODBUS_RTU\s+DEMO/.test(mpTxt) && /Control register/.test(mpTxt),
-    "Main pumps shows the simulated drive's Modbus interface: MODBUS_RTU with the DEMO map, its status word and control register");
+  check("F-02 motor registers and selectors under Technical details", !/Status word|Selector K1/.test(mpVisible) && !!mpTxt &&
+    /Drive interface\s+MODBUS_RTU\s+DEMO/.test(mpTxt) && /Control register/.test(mpTxt) && /Selector K1/.test(mpTxt),
+    "hidden until Technical details is opened; then the simulated drive's Modbus interface (DEMO map, status word, control register) and the K1/K2 selectors");
   await show(p, "nutrients");
-  await p.locator(".tabs button", { hasText: "Acid" }).click();
-  await until(p, async () => /pH target \(adjustable\)/.test(await visibleText(p)));
+  await p.locator(".tabs button", { hasText: "Acid tank" }).click();
+  await until(p, async () => /Acidity \(pH\) target/.test(await visibleText(p)));
   const acidTab = await visibleText(p);
-  await p.locator(".tabs button", { hasText: "Stock B" }).click();
-  await until(p, async () => /EC target/.test(await visibleText(p)));
+  await p.locator(".tabs button", { hasText: "Fertiliser tank B" }).click();
+  await until(p, async () => /Nutrient strength \(EC\) target/.test(await visibleText(p)));
   const bTab = await visibleText(p);
   await shot(p, "page-nutrients-tab-B");
-  check("UI-01 nutrients tabs", acidTab.includes("Acid pH dosing") && /pH target \(adjustable\)\s*6/.test(acidTab) && bTab.includes("A:B ratio") && bTab.includes("Stock B water fill"),
-    "Acid tab: pH target and the acid process; Stock B tab: EC target, A:B ratio and the stock B fill");
-  await p.locator(".tabs button", { hasText: "Stock A" }).click();
+  check("UI-01 nutrients tabs", acidTab.includes("Acid dosing") && /Acidity \(pH\) target\s*6/.test(acidTab) && bTab.includes("Fertiliser A for each litre of B") &&
+    bTab.includes("Water fill of fertiliser tank B"), "Acid tank tab: pH target and acid dosing; Fertiliser tank B tab: EC target, A:B ratio and the tank B water fill");
+  await p.locator(".tabs button", { hasText: "Fertiliser tank A" }).click();
 
-  // UI-02: the diagram is clickable (mouse and keyboard), labelled, with units, quality and age
+  // UI-02: the diagram is clickable (mouse and keyboard), labelled, with units and age
   await show(p, "overview");
   const hot = await p.$$eval("#v-overview svg.diagram g.hot", gs => gs.map(g => [g.getAttribute("role"), g.getAttribute("aria-label"), g.getAttribute("tabindex")]));
   check("UI-02 diagram parts", hot.length >= 25 && hot.every(([r, l, t]) => r === "link" && l && t === "0"), `${hot.length} clickable parts, all role=link with labels`);
   const svgText = await p.$eval("#v-overview svg.diagram", s => s.textContent);
-  check("UI-02 units", ["L", "pH", "mS/cm", "L/min", "bar", "GOOD"].every(u => svgText.includes(u)) && / \d+\.\d s/.test(svgText),
-    "litres, pH, mS/cm, L/min, bar, quality and age on the diagram");
+  check("UI-02 units", ["L", "pH", "mS/cm", "L/min", "bar"].every(u => svgText.includes(u)) && /\d+ seconds? ago/.test(svgText),
+    "litres, pH, mS/cm, L/min, bar and the age of the readings on the diagram");
   const labels = hot.map(x => x[1]).join(" | ");
-  check("UI-02 requested vs observed", /requested .*observed/.test(labels) && /no position feedback/.test(labels),
-    "pump labels give requested and observed; valves without a limit switch say so");
-  check("UI-02 no installed-probe or mixer claim", svgText.includes("probe point proposed; not installed or verified") &&
-    svgText.includes("No agitator or air pump") && !/(agitator|mixer)\s+(on|running|installed)/i.test(svgText), "probe and mixing notes present");
-  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Sector S2"]').click();
-  check("UI-02 click-through", await until(p, () => p.evaluate(() => location.hash === "#sector-S2")), "sector 2 box opens #sector-S2");
+  check("UI-02 requested vs observed", /asked .*reports/.test(labels) && /no position signal/.test(labels),
+    "pump labels give what was asked and what it reports; valves without a position signal say so");
+  check("UI-02 no installed-probe or mixer claim", svgText.includes("probe position proposed, not installed") &&
+    svgText.includes("No stirrer or air pump") && !/(agitator|mixer|stirrer)\s+(on|running|installed)/i.test(svgText), "probe and mixing notes present");
+  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Sector 2"]').click();
+  check("UI-02 click-through", await until(p, () => p.evaluate(() => location.hash === "#sector-S2")), "the Sector 2 box opens #sector-S2");
   await show(p, "overview");
-  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Main tank"]').focus();
+  await p.locator('#v-overview svg.diagram g.hot[aria-label^="Main tank:"]').focus();
   await p.keyboard.press("Enter");
   check("UI-02 keyboard", await until(p, () => p.evaluate(() => location.hash === "#main-tank")), "Enter on the main tank opens #main-tank");
 
-  // UI-03 step 1: edit a recipe (sector 1 duration 300 -> 240 s), save, validate, activate
+  // F-04: the recipe editor names every field, shows only the chosen ways' fields, and keeps typed input on errors
   await show(p, "recipes");
-  await p.locator("button", { hasText: "Edit as next version" }).first().click();
-  const irr = p.locator("details", { hasText: "Irrigation" }).first();
-  await irr.waitFor();
-  await irr.locator("summary").click();
-  const dur = irr.locator("table").nth(1).locator("input[type=number]").first();
-  await dur.fill("240");
-  await dur.blur();
-  await p.locator("button", { hasText: "Save draft" }).click();
-  await until(p, async () => (await p.locator("tr", { hasText: "demo-sim@v2" }).count()) > 0);
-  await p.locator("tr", { hasText: "demo-sim@v2" }).locator("button", { hasText: "Validate" }).click();
-  await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.ref === "demo-sim@v2" && r.status === "VALIDATED"));
-  await p.locator("tr", { hasText: "demo-sim@v2" }).locator("button", { hasText: "Activate" }).click();
-  const R = await until(p, async () => { const r = await get(p, "/api/recipes"); return r.active === "demo-sim@v2" && r; });
+  await p.locator("section.view:not(.hidden) tr", { hasText: "demo-sim@v1" }).getByRole("button", { name: "Change settings" }).click();
+  await p.waitForSelector(".editor");
+  const named = await p.$$eval(".editor input, .editor select", xs => xs.map(x => {
+    const l = x.id && document.querySelector(`label[for="${x.id}"]`);
+    return l ? l.textContent.trim() : x.getAttribute("aria-label") || ("UNNAMED " + (x.id || x.name));
+  }));
+  check("F-04 every recipe field has a name", named.length > 20 && named.every(n => !n.startsWith("UNNAMED")) &&
+    named.includes("Refill starts below") && named.includes("Add nutrients until the EC target is reached") && named.includes("Fill to a water level"),
+    `${named.length} fields, all named, for example "${named.slice(0, 3).join('", "')}"`);
+  const present = async path => p.locator(`.editor [data-path="${path}"]`).count();
+  const ecBefore = await present("refill.ec.ec_target_mS_cm"), fxBefore = await present("refill.fixed.a_L");
+  await p.getByLabel("Add set amounts of nutrients").check();
+  await until(p, async () => (await present("refill.fixed.a_L")) > 0, 5000);
+  const ecFixed = await present("refill.ec.ec_target_mS_cm"), fxFixed = await present("refill.fixed.a_L");
+  await p.getByLabel("Add nutrients until the EC target is reached").check();
+  await until(p, async () => (await present("refill.ec.ec_target_mS_cm")) > 0, 5000);
+  const ecBack = await p.inputValue("#rf-refill-ec-ec_target_mS_cm");
+  check("F-04 only the chosen way's fields are shown", ecBefore === 1 && fxBefore === 0 && ecFixed === 0 && fxFixed === 1 && ecBack === "1.8",
+    `EC target mode: EC target shown, fixed amounts hidden; set amounts: the reverse; back to EC target: the EC target ${ecBack} is back`);
+  const advClosed = await p.$$eval(".editor details.advanced", ds => ds.length > 0 && ds.every(d => !d.open));
+  await p.fill("#rf-main-refill_trigger_L", "99999");
+  await p.locator(".editor").getByRole("button", { name: "Check settings" }).click();
+  const err = await until(p, async () => (await p.locator('.editor [data-path="main.refill_trigger_L"] .error').count()) && p.locator('.editor [data-path="main.refill_trigger_L"] .error').textContent(), 10000);
+  const kept = await p.inputValue("#rf-main-refill_trigger_L");
+  await shot(p, "recipe-error-beside-field");
+  check("F-04 a problem shows beside its field and the typed value stays", /Refill starts below: at most 20000 L/.test(err || "") && kept === "99999" && advClosed,
+    `"${err}" beside the field, the field still reads ${kept}; timing and tolerances under Advanced settings (closed)`);
+  await p.fill("#rf-main-refill_trigger_L", "8000");
+
+  // UI-03 step 1: edit a recipe (sector 1 duration 300 -> 240 s), check it, use it
+  const irr = p.locator(".editor details.section", { has: p.locator("summary", { hasText: /^Watering$/ }) });
+  if (!(await irr.evaluate(d => d.open))) await irr.locator("summary").first().click();
+  await p.fill("#seq-0-time", "240");
+  await p.locator(".editor").getByRole("button", { name: "Check settings" }).click();
+  await until(p, async () => (await get(p, "/api/recipes")).recipes.some(r => r.ref.startsWith("demo-sim@") && r.ref !== "demo-sim@v1" && r.status === "VALIDATED"), 15000);
+  const v2 = (await get(p, "/api/recipes")).recipes.find(r => r.ref.startsWith("demo-sim@") && r.status === "VALIDATED").ref;
+  const row2 = p.locator("section.view:not(.hidden) tr", { hasText: v2 });
+  await row2.locator("summary", { hasText: "Use these settings" }).click();
+  await row2.locator("input[type=text]").fill("walkthrough: shorter sector 1");
+  await row2.getByRole("button", { name: "Use these settings" }).click();
+  const R = await until(p, async () => { const r = await get(p, "/api/recipes"); return r.active === v2 && r; });
   await shot(p, "walk-1-recipe");
   const act = R && R.recipes.find(r => r.ref === R.active);
   check("UI-03 recipe edited and activated", act && act.body.irrigation.sequence[0].duration_s === 240,
-    `active ${R && R.active}, sector 1 ${act && act.body.irrigation.sequence[0].duration_s} s`);
+    `in use ${R && R.active}, sector 1 ${act && act.body.irrigation.sequence[0].duration_s} s`);
 
-  // step 2: concurrent processes (stock acknowledgements, then four processes in AUTO at 10x)
+  // F-08 / step 2: tanks confirmed prepared by a person; the simulated fertiliser is a Digital Twin action
+  await show(p, "twin");
+  await p.getByRole("button", { name: "Add simulated fertiliser to tank A" }).click();
+  await p.waitForTimeout(800);
   await show(p, "nutrients");
-  for (const t of ["Stock A", "Stock B", "Acid"]) {
-    await p.locator("tr", { hasText: t }).locator("button", { hasText: "Acknowledge prepared" }).click();
+  const waiting = await visibleText(p);
+  for (const t of ["tank A", "tank B", "the acid tank"]) {
+    const row = p.locator("section.view:not(.hidden) tr", { has: p.locator("summary", { hasText: `Confirm ${t} is prepared` }) });
+    await row.locator("summary", { hasText: `Confirm ${t} is prepared` }).click();
+    await row.locator("input[type=text]").fill("ui check: prepared by hand (simulation)");
+    await row.getByRole("button", { name: "Confirm prepared" }).click();
+    await p.waitForTimeout(700);
+  }
+  const prepared = await until(p, async () => Object.values((await get(p, "/api/processes")).stocks).every(s => s.status === "PREPARED") && visibleText(p), 8000);
+  check("F-08 tank preparation in plain words", /Waiting for confirmation/.test(waiting) && /Simulated fertiliser was added in the Digital Twin\. Confirm tank A is prepared/.test(waiting) &&
+    !!prepared && /Mark tank A not ready/.test(prepared),
+    "the twin's simulated fertiliser leaves tank A waiting for a person's confirmation; Confirm tank A is prepared, then Mark tank A not ready is offered");
+
+  // step 3: four processes in automatic, each from its own page
+  for (const [page, name] of [["main-pumps", "Start automatic watering"], ["drainage", "Switch on automatic return"], ["main-tank", "Switch on automatic refill"]]) {
+    await show(p, page);
+    await p.locator("section.view:not(.hidden) .card.proc").first().getByRole("button", { name }).click();
     await p.waitForTimeout(500);
   }
-  await show(p, "overview");
-  for (const t of ["Irrigation", "Drainage return", "Main-tank refill", "Acid pH dosing"]) {
-    await p.locator("#v-overview tr", { hasText: t }).locator("button", { hasText: "AUTO" }).click();
-    await p.waitForTimeout(500);
-  }
+  await show(p, "nutrients");
+  await p.locator(".tabs button", { hasText: "Acid tank" }).click();
+  await until(p, async () => /Switch on automatic acid dosing/.test(await visibleText(p)));
+  await p.getByRole("button", { name: "Switch on automatic acid dosing" }).click();
   await api(p, "/api/twin/control", "POST", { action: "speed", speed: 10 });
   const P2 = await until(p, async () => { const x = await procs(p); return x.IRRIGATION.phase === "IRRIGATE" && x; });
   await show(p, "overview");
@@ -191,81 +277,114 @@ async function main() {
   const st = await get(p, "/api/processes");
   const auto = ["IRRIGATION", "RETURN", "REFILL", "ACID"].filter(k => st.processes[k].state === "AUTO");
   check("UI-03 concurrent processes", P2 && auto.length === 4 && Object.values(st.stocks).every(s => s.status === "PREPARED") &&
-    st.processes.IRRIGATION.recipe === "demo-sim@v2",
-    `AUTO: ${auto.join(", ")}; irrigation ${st.processes.IRRIGATION.phase} on ${st.processes.IRRIGATION.recipe}; stocks prepared`);
+    st.processes.IRRIGATION.recipe === v2,
+    `automatic: ${auto.join(", ")}; watering ${st.processes.IRRIGATION.phase} on ${st.processes.IRRIGATION.recipe}; tanks prepared`);
 
-  // step 3: inject a fault (drive trip while irrigating) from the twin page
+  // step 4: a simulated drive trip while watering, from the Digital Twin page
   await show(p, "twin");
-  const row = p.locator(".row").filter({ has: p.locator("span", { hasText: /^drive$/ }) }).first();
-  const fault = row.locator("select").nth(1);
-  await fault.focus();                       // as a user's click would; the page is not rebuilt under a focused field
-  await fault.selectOption("TRIP");
-  await row.locator("button", { hasText: "Apply" }).click();
+  const drow = p.locator(".row", { has: p.locator("#fault-drive-what") });
+  await p.locator("#fault-drive-fault").focus();
+  await p.selectOption("#fault-drive-fault", "TRIP");
+  await drow.getByRole("button", { name: "Apply" }).click();
   const applied = await until(p, async () => { const d = (await get(p, "/api/twin")).snapshot.plant.drive; return d.fault === "TRIP" || d.tripped; }, 5000);
   if (!applied) check("UI-03 drive trip applied from the twin page", false, `drive ${JSON.stringify((await get(p, "/api/twin")).snapshot.plant.drive)}`);
   const P3 = await until(p, async () => { const x = await procs(p); return x.IRRIGATION.state === "FAULT_LOCKOUT" && x; });
   await show(p, "main-pumps");
   await shot(p, "walk-3-fault");
   const pageTxt = await visibleText(p);
-  const pageAck = await p.locator("section.view:not(.hidden) .card", { hasText: "Alarms for this page" }).locator("tr", { hasText: "process.IRRIGATION" })
-    .locator("button", { hasText: "Ack" }).count();
-  check("UI-01 actionable alarm on the process page", pageAck > 0 && /Reset lockout on the process/.test(pageTxt),
-    `the Main pumps page lists the irrigation lockout with Ack and what to do next (${pageAck} Ack button)`);
-  check("UI-03 fault injected", P3 && P3.IRRIGATION.fault_reason && ["RETURN", "REFILL", "ACID"].every(k => P3[k].state === "AUTO") &&
-    pageTxt.includes("FAULT_LOCKOUT"),
-    `irrigation ${P3 && P3.IRRIGATION.state} (${P3 && P3.IRRIGATION.fault_reason}); return, refill and acid stay AUTO`);
+  check("F-05 the problem in plain words with its next steps", /Watering stopped because of a problem: the pump drive reports a fault/.test(pageTxt) &&
+    /What to do/.test(pageTxt) && /Mark as seen/.test(pageTxt) && /Clear stop after fixing the problem/.test(pageTxt) && /Not available yet: (the problem is still there|the pump drive still reports a fault)/.test(pageTxt) && /The program still sees the problem/.test(pageTxt) && !/The program no longer sees the problem/.test(pageTxt),
+    "Watering: \"Watering stopped because of a problem: the pump drive reports a fault\", then Mark as seen, Fix the problem (still seen by the program), Clear stop (not available yet: the problem is still there)");
+  check("UI-03 fault injected", P3 && P3.IRRIGATION.fault_reason && ["RETURN", "REFILL", "ACID"].every(k => P3[k].state === "AUTO") && pageTxt.includes("Stopped because of a problem"),
+    `watering ${P3 && P3.IRRIGATION.state} (${P3 && P3.IRRIGATION.fault_reason}); return, refill and acid stay automatic`);
 
-  // step 4: recover deliberately: clear the fault, reset refused before acknowledgement, ack, reset, AUTO
+  // step 5 / F-05: recover from the Alarms page: mark as seen, fix, go to the process, clear the stop, start again
   await show(p, "twin");
-  await row.locator("select").nth(1).selectOption("");
-  await row.locator("button", { hasText: "Apply" }).click();
+  await p.selectOption("#fault-drive-fault", "");
+  await drow.getByRole("button", { name: "Apply" }).click();
   await p.waitForTimeout(1500);
   const early = await api(p, "/api/processes/IRRIGATION/reset", "POST");
-  check("UI-03 reset needs acknowledgement", early.status === 409, `reset before acknowledgement: HTTP ${early.status}`);
+  check("UI-03 reset needs acknowledgement", early.status === 409, `clearing the stop before marking the problem as seen: HTTP ${early.status}`);
   await show(p, "alarms");
-  const ackRows = p.locator("#v-alarms tr", { hasText: "process.IRRIGATION" }).locator("button", { hasText: "Ack" });
-  for (let i = await ackRows.count(); i > 0; i--) { await ackRows.first().click(); await p.waitForTimeout(600); }
+  const card = p.locator("#v-alarms .problem", { hasText: "Watering stopped" }).first();
+  const head = await card.locator("h3").textContent();
+  await card.getByRole("button", { name: "Mark as seen" }).click();
+  await p.waitForTimeout(1200);
+  await shot(p, "alarms-problem-card");
+  await p.locator("#v-alarms .problem", { hasText: "Watering stopped" }).first().getByRole("link", { name: "Go to Watering" }).first().click();
+  const onPage = await until(p, () => p.evaluate(() => location.hash === "#main-pumps"));
   await show(p, "main-pumps");
-  await p.locator("#v-plant button", { hasText: "Reset lockout" }).click();
+  const P4w = await until(p, async () => !(await p.getByRole("button", { name: "Clear stop after fixing the problem" }).first().isDisabled()), 15000);
+  await p.getByRole("button", { name: "Clear stop after fixing the problem" }).first().click();
   const P4 = await until(p, async () => { const x = await procs(p); return x.IRRIGATION.state === "STOPPED" && x; });
   await p.waitForTimeout(1500);
   const stillStopped = (await procs(p)).IRRIGATION.state === "STOPPED";
-  await p.locator("#v-plant .card", { hasText: "Irrigation" }).locator("button", { hasText: "AUTO" }).last().click();
+  await p.locator("section.view:not(.hidden) .card.proc").first().getByRole("button", { name: "Start automatic watering" }).click();
   const P5 = await until(p, async () => { const x = await procs(p); return x.IRRIGATION.state === "AUTO" && x; });
   await shot(p, "walk-4-recovered");
-  check("UI-03 deliberate recovery", P4 && stillStopped && P5, "acknowledge, reset (stays STOPPED), then AUTO on request");
+  check("F-05 from the problem to its process and back to work", head === "Watering stopped: the pump drive reports a fault" && onPage && P4w && P4 && stillStopped && P5,
+    `"${head}"; Mark as seen on the Alarms page, Go to Watering, Clear stop after fixing the problem (stays stopped), Start automatic watering`);
 
-  // step 5: export data from the trends page
-  await show(p, "trends");
-  const href = await p.locator("a", { hasText: "Export CSV" }).getAttribute("href");
+  // F-07 / step 6: History: named, grouped readings; Today/Yesterday/Last 7 days; Download readings
+  await show(p, "history");
+  const groups = await p.$$eval("#v-history .picker fieldset legend", ls => ls.map(l => l.textContent));
+  const mainBox = await p.locator('#v-history .picker label', { hasText: "Main tank water level" }).first().textContent();
+  const rangeNames = await p.$$eval("#v-history [aria-label='Time range'] button", bs => bs.map(x => x.textContent));
+  const unusedClosed = await p.$$eval("#v-history .picker details", ds => ds.length === 1 && !ds[0].open && /Unused channels \(\d+\)/.test(ds[0].querySelector("summary").textContent));
+  check("F-07 History: grouped readings with plain names", groups[0] === "Tank levels" && groups.includes("Water flow and pressure") && /Main tank water level analog_A\.AI1/.test(mainBox) &&
+    ["Today", "Yesterday", "Last 7 days"].every(x => rangeNames.includes(x)) && unusedClosed,
+    `groups ${groups.join(", ")}; "${mainBox}" (the channel as a secondary label); ranges ${rangeNames.join(", ")}; unused channels folded away`);
+  const href = await p.locator("#v-history a", { hasText: "Download readings" }).getAttribute("href");
   const rows = t => t.split("\n").filter(l => l && !l.startsWith("#")).length - 1;
   // the historian writes a snapshot on every 60 s wall-clock boundary; wait for the first one
   await until(p, async () => rows((await api(p, href)).body) > 0, 75000);
-  const [dl] = await Promise.all([p.waitForEvent("download"), p.locator("a", { hasText: "Export CSV" }).click()]);
+  const [dl] = await Promise.all([p.waitForEvent("download"), p.locator("#v-history a", { hasText: "Download readings" }).click()]);
   const csv = fs.readFileSync(await dl.path(), "utf8").split("\n");
   fs.copyFileSync(await dl.path(), path.join(OUT, "walk-5-export.csv"));
   const n = rows(csv.join("\n"));
-  check("UI-03 export", n > 0 && /# (COMPLETE|TRUNCATED)/.test(csv.slice(-3).join(" ")), `${n} data rows downloaded, completeness footer present`);
-
-  // OP-03: ranges up to a year; a year range renders with dated axis labels (aggregation itself, which needs a
-  // long history, is covered by tests/integration/test_api.py::test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete)
-  const range = p.locator("#v-trends label", { hasText: "Range" }).locator("select");
-  await range.selectOption("525600");
-  const dated = await until(p, async () => (await p.locator("#v-trends svg.chart text").allTextContents()).some(t => /\d{4}-\d{2}-\d{2}/.test(t)), 10000);
-  await shot(p, "trends-365-days");
-  check("OP-03 year range on the trends page", !!dated, "365 days selectable; the time axis shows dates");
-  await p.locator("#v-trends label", { hasText: "Range" }).locator("select").selectOption("30");
+  check("UI-03 export", n > 0 && /# (COMPLETE|TRUNCATED)/.test(csv.slice(-3).join(" ")), `${n} data rows downloaded with Download readings, completeness footer present`);
+  await p.getByRole("button", { name: "Today" }).click();
+  const today = await until(p, async () => /From \d{4}-\d{2}-\d{2} 00:00:00 to/.test(await visibleText(p)), 8000);
+  await p.getByRole("button", { name: "Last 365 days" }).click();
+  const dated = await until(p, async () => (await p.locator("#v-history svg.chart text").allTextContents()).some(t => /\d{4}-\d{2}-\d{2}/.test(t)), 10000);
+  await shot(p, "history-365-days");
+  check("OP-03 Today and a year range on the History page", !!today && !!dated, "Today starts at the site's midnight; 365 days draws with dated axis labels");
+  await p.getByRole("button", { name: "Last hour" }).click();
 
   // UI-05: no colour-only semantics: every pill/badge carries text
   await show(p, "alarms");
   const pills = await p.$$eval(".pill, .badge, .q", xs => xs.map(x => x.textContent.trim()));
   check("UI-05 text on every status mark", pills.length > 0 && pills.every(t => t.length > 0), `${pills.length} marks, all with text`);
 
+  // keyboard only: water one sector once, then stop it, without the mouse
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "STOPPED" });
+  await until(p, async () => (await procs(p)).IRRIGATION.state === "STOPPED" && !(await procs(p)).IRRIGATION.stopping, 30000);
+  await show(p, "main-pumps");
+  await p.evaluate(() => document.activeElement && document.activeElement.blur());
+  const k1 = await tabTo(p, "Manual mode") && (await p.keyboard.press("Enter"), true);
+  await until(p, async () => (await procs(p)).IRRIGATION.state === "MANUAL", 8000);
+  await show(p, "main-pumps");
+  let k2 = false;
+  for (let i = 0; i < 300 && !k2; i++) {           // to the watering time field of Run once, then type
+    await p.keyboard.press("Tab");
+    k2 = await p.evaluate(() => { const e = document.activeElement; const l = e && e.closest("label"); return !!(l && /Watering time/.test(l.textContent)); });
+  }
+  if (k2) await p.keyboard.type("30");
+  const k3 = k2 && await tabTo(p, "Run once", 5) && (await p.keyboard.press("Enter"), true);
+  const ran = await until(p, async () => (await procs(p)).IRRIGATION.manual_op, 10000);
+  await p.evaluate(() => document.activeElement && document.activeElement.blur());
+  const k4 = await tabTo(p, "Stop watering", 60) && (await p.keyboard.press("Enter"), true);
+  const stopped = await until(p, async () => { const x = (await procs(p)).IRRIGATION; return x.state === "STOPPED" && !x.stopping; }, 30000);
+  check("F-09 keyboard only: water one sector once and stop it", k1 && k2 && k3 && !!ran && k4 && !!stopped,
+    `Tab and Enter: Manual mode ${k1}, watering time typed ${k2}, Run once ${k3} (ran ${!!ran}), Stop watering ${k4}, stopped ${!!stopped}`);
+
   // UI-05: a broken network shows stale data and a command clicked while offline is never replayed
+  await api(p, "/api/processes/IRRIGATION/state", "POST", { target: "AUTO" });
+  await until(p, async () => (await procs(p)).IRRIGATION.state === "AUTO", 8000);
   await show(p, "main-pumps");
   await ctx.setOffline(true);
   const staleShown = await until(p, () => p.locator("#stale").evaluate(e => !e.classList.contains("hidden")), 10000);
-  await p.locator("#v-plant .card", { hasText: "Irrigation" }).locator("button", { hasText: "STOP" }).last().click({ force: true }).catch(() => {});
+  await p.locator("section.view:not(.hidden) .card.proc").first().getByRole("button", { name: "Stop watering" }).click({ force: true }).catch(() => {});
   await p.waitForTimeout(1000);
   await shot(p, "net-1-offline", false);
   await ctx.setOffline(false);
@@ -273,7 +392,7 @@ async function main() {
   await p.waitForTimeout(3000);
   const after = await procs(p);
   check("UI-05 offline", staleShown && fresh && after.IRRIGATION.state === "AUTO",
-    `stale banner while offline ${!!staleShown}, cleared on reconnect ${!!fresh}; irrigation still ${after.IRRIGATION.state} (the offline STOP was not replayed)`);
+    `stale banner while offline ${!!staleShown}, cleared on reconnect ${!!fresh}; watering still ${after.IRRIGATION.state} (the offline Stop was not replayed)`);
   await shot(p, "net-2-reconnected", false);
 
   // UI-04 in the browser: a viewer sees the pages, the controls are disabled, and a forged request is refused
@@ -296,28 +415,46 @@ async function main() {
   await login(vp, "viewer1", vpw2);
   await show(vp, "main-pumps");
   const enabled = await vp.$$eval("section.view:not(.hidden) button.cmd", bs => bs.filter(b => !b.disabled).map(b => b.textContent));
+  const why = await vp.locator("section.view:not(.hidden)").innerText();
   const forged = await api(vp, "/api/processes/IRRIGATION/state", "POST", { target: "STOPPED" });
   const noCsrf = await vp.evaluate(async () => (await fetch("/api/processes/stop-all", { method: "POST", credentials: "same-origin",
     headers: { "Content-Type": "application/json" }, body: "{}" })).status);
   await shot(vp, "role-viewer-main-pumps");
-  check("UI-04 viewer", mk.status === 200 && enabled.length === 0 && forged.status === 403 && noCsrf === 403 && (await procs(p)).IRRIGATION.state === "AUTO",
-    `viewer created ${mk.status}, changed its password and signed in again; enabled command buttons ${JSON.stringify(enabled)}; forged state change ${forged.status}; no CSRF token ${noCsrf}`);
+  check("UI-04 viewer", mk.status === 200 && enabled.length === 0 && /needs an operator or administrator account/.test(why) && forged.status === 403 && noCsrf === 403 &&
+    (await procs(p)).IRRIGATION.state === "AUTO",
+    `viewer created ${mk.status}, changed its password and signed in again; enabled command buttons ${JSON.stringify(enabled)} (the page says the account needed); forged state change ${forged.status}; no CSRF token ${noCsrf}`);
   await vctx.close();
 
-  // UI-05: phone, tablet and PC viewports without horizontal overflow
+  // UI-05 / F-09: phone, tablet and PC: no page-wide sideways scroll; on a phone a menu button, and each process page's Stop in the first screen
   for (const [name, w, hh] of [["phone", 390, 844], ["tablet", 820, 1180], ["pc", 1366, 900]]) {
     const vc = await b.newContext({ viewport: { width: w, height: hh }, isMobile: name === "phone", hasTouch: name !== "pc" });
     const q = await vc.newPage();
     const qerrs = watchErrors(q);
     await login(q, USER, PASS);
-    const res = [];
-    for (const v of PLANT_PAGES) {
+    const res = [], stops = [];
+    for (const v of PLANT_PAGES.concat(SHARED_PAGES, ["start"])) {
       await show(q, v);
       const [sw, iw] = await q.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
       res.push(sw <= iw ? v : `${v} overflows ${sw}px`);
-      if (v === "overview" || v === "nutrients") await shot(q, `viewport-${name}-${v}`, false);
+      if (PLANT_PAGES.includes(v) && !["overview", "recipes"].includes(v)) {
+        const top = await q.evaluate(() => { const b = [...document.querySelectorAll("section.view:not(.hidden) button.stop")].find(x => x.offsetParent); return b ? Math.round(b.getBoundingClientRect().top) : 9999; });
+        stops.push(`${v} ${top}px`);
+        if (top > hh * 0.6) res.push(`${v}: Stop ${top}px from the top`);
+      }
+      if (["overview", "main-pumps", "history", "alarms"].includes(v)) await shot(q, `viewport-${name}-${v}`, false);
     }
-    check(`UI-05 viewport ${name} ${w}px`, res.every(r => !r.includes("overflows")) && qerrs.length === 0, res.join(", "));
+    let menuOk = true;
+    if (name === "phone") {
+      const before = await q.locator("#nav").isVisible();
+      await q.getByRole("button", { name: "Menu" }).click();
+      const open = await q.locator("#nav").isVisible();
+      await q.locator("#nav a", { hasText: "Main tank" }).click();
+      menuOk = !before && open && await until(q, () => q.evaluate(() => location.hash === "#main-tank")) && !(await q.locator("#nav").isVisible());
+      await shot(q, "viewport-phone-menu-closed", false);
+      res.push(menuOk ? "menu: one button, closes after choosing a page" : "MENU NOT AS EXPECTED");
+    }
+    check(`UI-05 viewport ${name} ${w}px`, res.every(r => !/overflows|Stop \d+px|NOT AS EXPECTED/.test(r)) && menuOk && qerrs.length === 0,
+      res.filter(r => /overflows|Stop|menu|MENU/.test(r)).join(", ") + ` · no sideways page scroll on ${PLANT_PAGES.length + SHARED_PAGES.length + 1} pages · Stop at ${stops.join(", ")}`);
     await vc.close();
   }
   check("UI page errors", errs.length === 0 && verrs.length === 0, errs.concat(verrs).join("; ") || "none");
@@ -332,8 +469,10 @@ async function hardware() {
   await login(p, USER, PASS);
   await until(p, () => p.evaluate(() => !document.getElementById("nav-inst").classList.contains("hidden")), 10000);
   const nav = (await p.locator("#nav").innerText()).replace(/\s+/g, " ");
-  check("HW nav", ["Nutrients & acid", "Main tank", "Main pumps", "Sector 1", "Sector 2", "Drainage"].every(t => nav.includes(t)) &&
-    !nav.includes("Recipes") && !nav.includes("Digital twin"), nav);
+  check("HW nav", ["Nutrients & acid", "Main tank", "Watering", "Sector 1", "Sector 2", "Drainage return"].every(t => nav.includes(t)) &&
+    !nav.includes("Recipes") && !/Digital Twin/i.test(nav), nav);
+  const hwPlain = await p.locator("#status-plain").innerText();
+  check("HW status line", /^Real equipment, read only/.test(hwPlain), hwPlain);
   await show(p, "overview");
   await shot(p, "hw-overview");
   const ov = await p.evaluate(() => ({ hot: document.querySelectorAll("#v-overview svg.diagram g.hot").length, label: document.querySelector("#v-overview svg.diagram").getAttribute("aria-label") }));
@@ -343,9 +482,9 @@ async function hardware() {
   for (const v of ["nutrients", "main-tank", "main-pumps", "sector-S1", "sector-S2", "drainage"]) {
     await show(p, v);
     const t = await visibleText(p);
-    const ctl = await p.$$eval("section.view:not(.hidden) button", bs => bs.map(x => x.textContent).filter(x => /^(AUTO|MANUAL|STOP|Acknowledge prepared|Invalidate|Twin: prepare|Run one step|Reset lockout)$/.test(x)));
+    const ctl = await p.$$eval("section.view:not(.hidden) button", bs => bs.map(x => x.textContent).filter(x => /^(Start automatic watering|Switch on automatic.*|Manual mode|Stop .*|Run once|Confirm prepared|Mark not ready|Clear stop after fixing the problem|Add simulated .*)$/.test(x)));
     await shot(p, "hw-page-" + v);
-    check("HW page " + v, t.includes("NOT AVAILABLE") && t.includes("not measured") && ctl.length === 0 && t.includes("REAL"),
+    check("HW page " + v, t.includes("Real equipment, read only: this release does not control real equipment") && t.includes("not measured") && ctl.length === 0,
       `read-only: reason shown, unmapped values "not measured", no control buttons ${JSON.stringify(ctl)}`);
   }
   await show(p, "overview");
@@ -371,7 +510,7 @@ async function afterRestart() {
   await show(p, "overview");
   const st = await get(p, "/api/processes");
   await shot(p, "walk-6-restarted");
-  check("UI-03 restart", Object.values(st.processes).every(x => x.state === "STOPPED") && st.recipe.active === "demo-sim@v2" &&
+  check("UI-03 restart", Object.values(st.processes).every(x => x.state === "STOPPED") && /^demo-sim@v[2-9]/.test(st.recipe.active || "") &&
     Object.values(st.stocks).every(s => s.status === "PREPARED"),
     `after restart: every process STOPPED, recipe ${st.recipe.active}, stocks ${Object.values(st.stocks).map(s => s.status).join("/")}`);
   check("UI page errors after restart", errs.length === 0, errs.join("; ") || "none");

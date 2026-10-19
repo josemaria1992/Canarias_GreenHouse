@@ -1,8 +1,14 @@
 """Build the release ZIP (DL-05): wheel, launchers, CM4 installer, configs, guides, locked requirements,
-optional offline wheelhouses, RELEASE.json and a SHA-256 manifest of every file.
+optional bundled Windows Python (runtime/), optional offline wheelhouses, RELEASE.json and a SHA-256 manifest of every file.
 
     python scripts/build_release.py --out dist-release                                   # no wheelhouses
-    python scripts/build_release.py --out dist-release --wheelhouse win_amd64:3.12 --wheelhouse aarch64:3.11
+    python scripts/build_release.py --out dist-release --windows-runtime download --wheelhouse aarch64:3.11
+
+The owner tour ships as docs/operator/walkthrough.md, owner-checklist.csv (every result NOT RUN) and
+owner-feedback-template.md. With --owner-tour (the output folder of scripts/ui_check/run_tour_rehearsal.py run
+against this release) the illustrated offline guide owner-tour/ is added too. The CI release job builds twice:
+once to rehearse the tour on the extracted release, then again with the same wheel, --built-utc and
+--owner-tour, so the screenshots in the guide are of the program the ZIP carries.
 
 Wheelhouses are downloaded with pip for the named platform and Python (needs the package index), with
 the hashes in requirements.lock enforced. Run it from the repository root of a clean checkout: the
@@ -61,6 +67,15 @@ def copy_tree(src: Path, dest: Path) -> None:
             raise SystemExit(f"refusing to ship {f}: private files never go into a release")
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, dest / rel)
+
+
+# The Python bundled for Windows (F-01): python.org's own CPython build for 64-bit Windows, as the Python Software
+# Foundation publishes it with every release in the NuGet package "python" (the same build as the python.org
+# installer, without an installer). Updating it is a change of these three values, then a rebuild.
+WINDOWS_RUNTIME = {"python": "3.14.8",
+                   "url": "https://api.nuget.org/v3-flatcontainer/python/3.14.8/python.3.14.8.nupkg",
+                   "sha256": "ce85f674d9a63029f709cbff7a3da1c6bc5bfcfaefdd9999f98fa0290470c454"}
+RUNTIME_SKIP = ("include/", "libs/")          # C headers and import libraries: only for building extensions
 
 
 GATES = tuple(f"{p}-{i:02d}" for p, n in (("PH", 8), ("PC", 13), ("UI", 6), ("OP", 6), ("BK", 7), ("DL", 5))
@@ -146,14 +161,81 @@ def wheelhouse(stage: Path, spec: str) -> Path:
     return out
 
 
+def windows_runtime(stage: Path, source: str, cache: Path, wheel: Path) -> dict:
+    """runtime/: the pinned CPython for Windows with AquaCrop and its locked packages already installed, so
+    AquaCrop-Demo.cmd needs no Python on the PC, installs nothing and downloads nothing. The NuGet file is
+    checked against its pinned SHA-256 before anything is taken from it."""
+    if source == "download":
+        cache.mkdir(parents=True, exist_ok=True)
+        nupkg = cache / WINDOWS_RUNTIME["url"].rsplit("/", 1)[1]
+        if not nupkg.is_file() or sha256(nupkg) != WINDOWS_RUNTIME["sha256"]:
+            import urllib.request
+            with urllib.request.urlopen(WINDOWS_RUNTIME["url"], timeout=120) as r, nupkg.open("wb") as f:
+                shutil.copyfileobj(r, f)
+    else:
+        nupkg = Path(source)
+    got = sha256(nupkg)
+    if got != WINDOWS_RUNTIME["sha256"]:
+        raise SystemExit(f"{nupkg}: SHA-256 {got} is not the pinned {WINDOWS_RUNTIME['sha256']}; not used")
+    rt = stage / "runtime"
+    with zipfile.ZipFile(nupkg) as z:
+        for n in z.namelist():
+            if not n.startswith("tools/") or n.endswith("/"):
+                continue
+            rel = n[len("tools/"):]
+            if rel.startswith(RUNTIME_SKIP) or "__pycache__/" in rel or rel.endswith(".pyc"):
+                continue
+            dest = rt / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(z.read(n))
+    if not (rt / "python.exe").is_file():
+        raise SystemExit(f"{nupkg} has no tools/python.exe")
+    pyv = ".".join(WINDOWS_RUNTIME["python"].split(".")[:2])
+    cache.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(cache / f"wheelhouse-win_amd64-py{pyv.replace('.', '')}", ignore_errors=True)
+    house = wheelhouse(cache, f"win_amd64:{pyv}")
+    lock = cache / "requirements-runtime.lock"
+    lock.write_text(lock_for((ROOT / "requirements.lock").read_text(encoding="utf-8"), "win_amd64", pyv), encoding="utf-8")
+    site = rt / "Lib" / "site-packages"
+    base = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-compile", "--no-index",
+            "--find-links", str(house), "--target", str(site), "--platform", "win_amd64", "--python-version", pyv,
+            "--implementation", "cp", "--only-binary=:all:", "--no-deps"]
+    subprocess.run(base + ["--require-hashes", "-r", str(lock)], check=True)
+    shutil.rmtree(site / "bin", ignore_errors=True)        # console scripts made for the build machine
+    subprocess.run(base + [str(wheel)], check=True)
+    shutil.rmtree(site / "bin", ignore_errors=True)        # console scripts made for the build machine
+    # nothing is installed on the PC later: pip leaves the runtime, and with it its certificate bundle
+    for p in [site / "pip", *site.glob("pip-*.dist-info")]:
+        shutil.rmtree(p)
+    for p in list(site.rglob("__pycache__")):
+        shutil.rmtree(p, ignore_errors=True)
+    # read by AquaCrop-Demo.cmd and checked against RELEASE.json at every start (no line end: `set /p`)
+    (rt / "aquacrop-wheel.sha256").write_text(sha256(wheel), encoding="ascii")
+    return {"python": WINDOWS_RUNTIME["python"], "folder": "runtime", "nupkg_sha256": got,
+            "source": f"{WINDOWS_RUNTIME['url']} (CPython for 64-bit Windows, published by the Python Software "
+                      "Foundation)", "packages": "AquaCrop and requirements.lock installed in runtime/Lib/site-packages"}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path, default=ROOT / "dist-release")
     ap.add_argument("--wheelhouse", action="append", default=[], metavar="PLATFORM:PYTHON",
-                    help="win_amd64:3.12, aarch64:3.11 (CM4, Bookworm), x86_64:3.12, macosx_11_0_arm64:3.12")
+                    help="aarch64:3.11 (CM4, Bookworm), win_amd64:3.14, x86_64:3.12, macosx_11_0_arm64:3.12")
     ap.add_argument("--wheel", type=Path, help="use this built wheel instead of building one")
+    ap.add_argument("--owner-tour", type=Path, help="evidence folder of run_tour_rehearsal.py: adds owner-tour/")
+    ap.add_argument("--windows-runtime", metavar="NUPKG|download",
+                    help=f"bundle CPython {WINDOWS_RUNTIME['python']} for Windows in runtime/ (the pinned NuGet file, "
+                         "or 'download' to fetch it); AquaCrop-Demo.cmd then needs no Python on the PC")
+    ap.add_argument("--built-utc", help="build time to record (the first pass's, when rebuilding with the guide)")
     args = ap.parse_args()
     out = args.out.resolve()
+    # the checkout as it is before this build writes anything; the build's own output folder never counts
+    inside = out.is_relative_to(ROOT) and out != ROOT
+    skip = [f":(exclude){out.relative_to(ROOT).as_posix()}"] if inside else []
+    changes = git("status", "--porcelain", "--", ".", *skip)
+    commit, dirty = git("rev-parse", "HEAD"), bool(changes)
+    if dirty:
+        print("building from a checkout with changes:\n" + changes, file=sys.stderr)
     out.mkdir(parents=True, exist_ok=True)
     work = out / "build"
     shutil.rmtree(work, ignore_errors=True)
@@ -182,19 +264,36 @@ def main() -> int:
     (stage / "AquaCrop-Demo.cmd").write_bytes(cmd.replace("\n", "\r\n").encode("ascii"))
     shutil.copy2(ROOT / "launchers" / "aquacrop-demo.sh", stage / "aquacrop-demo.sh")
     shutil.copy2(ROOT / "launchers" / "README-FIRST.md", stage / "README-FIRST.md")
+    tour = ROOT / "docs" / "operator" / "owner-tour"
+    shutil.copy2(tour / "owner-checklist.csv", stage / "owner-checklist.csv")
+    shutil.copy2(tour / "feedback-template.md", stage / "owner-feedback-template.md")
+    if args.owner_tour:
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "ui_check" / "make_tour_guide.py"), "--evidence",
+                        str(args.owner_tour), "--out", str(stage / "owner-tour"), "--release-version", version], check=True)
     houses = [wheelhouse(stage, spec) for spec in args.wheelhouse]
-    commit, dirty = git("rev-parse", "HEAD"), bool(git("status", "--porcelain"))
+    runtime = (windows_runtime(stage, args.windows_runtime, out / "runtime-cache", stage / "wheels" / built[0].name)
+               if args.windows_runtime else None)
     report = acceptance_manifest((ROOT / "docs" / "ACCEPTANCE.md").read_text(encoding="utf-8"))
     report |= {"version": version, "commit": commit, "tree_clean": not dirty}
     (stage / "acceptance-manifest.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n",
                                                     encoding="utf-8")
     info = {"name": "aquacrop-greenhouse", "version": version, "commit": commit, "tree_clean": not dirty,
-            "built_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "built_utc": args.built_utc or datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "builder": f"python {sys.version.split()[0]} on {sys.platform}",
-            "python_supported": ["3.11", "3.12", "3.13"],
+            "python_supported": ["3.11", "3.12", "3.13", "3.14"],
             "wheel": {"file": f"wheels/{built[0].name}", "sha256": sha256(stage / "wheels" / built[0].name)},
             "requirements_lock_sha256": sha256(stage / "requirements.lock"),
             "wheelhouses": [h.name for h in houses],
+            "windows_runtime": runtime,
+            "targets": {"windows": (f"win_amd64: CPython {runtime['python']} bundled in runtime/ with AquaCrop "
+                                    "installed; nothing to install on the PC") if runtime else
+                                   "win_amd64: a 64-bit CPython 3.11 to 3.14 installed on the PC",
+                        "cm4": "aarch64, CPython 3.11 (Raspberry Pi OS Bookworm 64-bit; confirm OS and Python at "
+                               "commissioning)"},
+            "normal_demo": "installation-80",
+            "owner_tour": {"guide": "owner-tour/index.html" if args.owner_tour else None,
+                           "result_form": "owner-tour/results.html" if args.owner_tour else None,
+                           "checklist": "owner-checklist.csv", "owner_results": "NOT RUN"},
             "evidence": "software and simulation only; no hardware, CM4 or cloud account was tested "
                         "(docs/RELEASE_READINESS.md)",
             "physical_verification": False}
@@ -214,7 +313,8 @@ def main() -> int:
     digest = sha256(zpath)
     (out / f"{name}.zip.sha256").write_text(f"{digest}  {zpath.name}\n", encoding="utf-8")
     print(json.dumps({"zip": str(zpath), "sha256": digest, "files": len(files) + 1, "version": version,
-                      "commit": commit, "tree_clean": not dirty, "wheelhouses": [h.name for h in houses]}, indent=1))
+                      "commit": commit, "tree_clean": not dirty, "wheelhouses": [h.name for h in houses],
+                      "windows_runtime": runtime and runtime["python"]}, indent=1))
     return 0
 
 

@@ -99,6 +99,15 @@ def load_or_create_secret(path: Path) -> bytes:
     return key
 
 
+USERNAME_RULE = "2 to 32 characters: letters a-z or A-Z, digits 0-9, and . _ - (no spaces or accents)"
+
+
+def validate_username(username: str) -> None:
+    if not username.isascii() or not username.replace("_", "").replace("-", "").replace(".", "").isalnum() \
+            or not 2 <= len(username) <= 32:
+        raise ValueError("username: 2-32 chars, letters/digits/._-")
+
+
 def validate_password(pw: str, username: str) -> None:
     if len(pw) < MIN_PASSWORD_LEN:
         raise ValueError(f"password must be at least {MIN_PASSWORD_LEN} characters")
@@ -120,9 +129,7 @@ class Accounts:
 
     def create_user(self, username: str, password: str, role: Role, *, commissioning: bool = False,
                     must_change: bool = False) -> None:
-        if not username.isascii() or not username.replace("_", "").replace("-", "").replace(".", "").isalnum() \
-                or not 2 <= len(username) <= 32:
-            raise ValueError("username: 2-32 chars, letters/digits/._-")
+        validate_username(username)
         validate_password(password, username)
         ph = _ph.hash(password)
         now = utc_iso()

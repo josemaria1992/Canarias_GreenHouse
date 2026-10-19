@@ -1,4 +1,15 @@
-# Release readiness: AquaCrop 0.3.0 (pre-hardware release)
+# Release readiness: AquaCrop 0.3.3 (owner demo release of the pre-hardware software)
+
+**0.3.3, 2026-10-19:** corrections from the owner's first-time-operator review of 0.3.2 (F-01 to F-09,
+`operator/owner-tour/issues.md`): the Windows ZIP carries its own Python, a guided first administrator,
+plain-language pages (process card and Stop first, problems with next steps, History, Getting started),
+narrow screens, and a results form that saves only by download. Display, guidance and Windows start only;
+no control algorithm, production mapping, recipe limit, role gate, retention, cadence, budget or hardware
+profile changed. The owner's re-review is open and every owner result is NOT RUN.
+
+**0.3.2, 2026-10-13:** the owner demo and acceptance tour. The normal demo is `installation-80`; the
+48- and 24-point configurations are legacy test fixtures. No control algorithm, production mapping,
+retention, cadence, budget or hardware profile changed from 0.3.1; every item below is as it was.
 
 **Inventory supplement, 2026-10-13:** two IO 8CH modules (SKU 26244) were added: 80 points over six
 modules, 16 AI + 32 DI + 32 DO, of which 16 DO are open-drain transistor sinks, not relay contacts
@@ -19,8 +30,9 @@ NOT RUN (could run, has not) · NOT CONFIGURED (needs the owner's account or set
 
 | What | Where | Evidence |
 |---|---|---|
-| Windows demo of the full installation (simulated), offline first run, guided first administrator, no default password | `AquaCrop-Demo.cmd` in the release ZIP; `README-FIRST.md` | DL-01 PASS: `tests/integration/test_launcher.py`; CI job `release-windows` runs the built ZIP offline |
-| Process twin: 20,000 L main, three stocks, sump, shared drive, two sectors, all processes, recipes, faults and recovery | browser, `installation-48` | PH-01..08, PC-01..13 PASS (simulation) |
+| Windows demo of the full installation (simulated), offline first run, guided first administrator, no default password | `AquaCrop-Demo.cmd` in the release ZIP; `README-FIRST.md` | DL-01 PASS: `tests/integration/test_launcher.py`; CI job `release-windows` runs the built ZIP offline through `AquaCrop-Demo.cmd`: with no Python on PATH, from a folder with a space, brackets and an accent: cold start, sign-in, clean stop, restart keeping the data, upgrade over 0.3.1 and 0.3.2 (`scripts/release_smoke.py`) |
+| Owner acceptance tour UAT-01 to UAT-16 with illustrated guide, result form (saved by download), checklist and feedback template; Getting started in the app | `operator/walkthrough.md`; `owner-tour/index.html`, `owner-tour/results.html`, `owner-checklist.csv` in the ZIP | Claude's rehearsal in headless Chromium through the release launcher (CI job `release`); **owner results NOT RUN** |
+| Process twin: 20,000 L main, three stocks, sump, shared drive, two sectors, all processes, recipes, faults and recovery | browser, `installation-80` (scenarios also on the legacy `installation-48`) | PH-01..08, PC-01..13 PASS (simulation) |
 | Process pages and installation diagram, three roles, phone to PC | browser | UI-01..05 PASS (headless Chromium, simulation and a fake bus) |
 | 60 s history for 365 days, clock holds, timestamp quarantine with review before pruning | Settings | OP-01..05 PASS; OP-06 PASS (desktop) |
 | SD card and encrypted OneDrive backups, drills, replacement-controller recovery | `operations/offsite-backups.md` | BK-01..07 PASS with fakes and the real rclone binary; activation waits for the on-site setup |
