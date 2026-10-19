@@ -30,7 +30,7 @@ aquacrop = "aquacrop.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aquacrop = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg", "configs/*.yaml", "py.typed"]
+aquacrop = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg", "web/*.png", "configs/*.yaml", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

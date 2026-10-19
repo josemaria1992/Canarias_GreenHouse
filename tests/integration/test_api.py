@@ -193,17 +193,19 @@ def test_static_ui_is_packaged_and_offline(env):
     idx = c.get("/")
     assert idx.status_code == 200 and "AquaCrop" in idx.text
     assert "content-security-policy" in idx.headers
-    for name in ["app.js", "plant.js", "app.css", "chart.js", "icon.svg"]:
+    for name in ["words.js", "app.js", "plant.js", "app.css", "chart.js", "icon.svg"]:
         r = c.get(f"/static/{name}")
         assert r.status_code == 200, name
         assert not re.search(r"https?://(?!www\.w3\.org/2000/svg)", r.text), f"external URL in {name}"
     assert not re.search(r"https?://", idx.text)
     assert c.get("/static/../cli.py").status_code == 404
-    for js in ("app.js", "plant.js"):
+    for js in ("words.js", "app.js", "plant.js"):
         src = c.get(f"/static/{js}").text
         assert "innerHTML" not in src and "eval(" not in src
         assert not re.search(r"setAttribute\(\s*[\"']style", src), js   # the CSP blocks style attributes
     assert '<script src="/static/plant.js">' in idx.text and 'id="v-plant"' in idx.text
+    # the wording is loaded before the pages that use it
+    assert idx.text.index('/static/words.js') < idx.text.index('/static/app.js') < idx.text.index('/static/plant.js')
 
 
 def test_csv_export_escapes_and_discloses_completeness(env_dense):

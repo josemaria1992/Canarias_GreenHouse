@@ -131,7 +131,7 @@ def main() -> int:
             except urllib.error.HTTPError as e:
                 check("no default credentials", e.code == 401, f"admin/admin -> HTTP {e.code}")
             page = c.call("GET", "/", raw=True).decode()
-            assets = {n: len(c.call("GET", f"/static/{n}", raw=True)) for n in ("app.js", "plant.js", "chart.js", "app.css")}
+            assets = {n: len(c.call("GET", f"/static/{n}", raw=True)) for n in ("words.js", "app.js", "plant.js", "chart.js", "app.css")}
             check("browser page and assets served", "AquaCrop" in page and all(assets.values()), assets)
             st = c.call("GET", "/api/status")
             check("version", st.get("software_version") == a.expect_version, st.get("software_version"))

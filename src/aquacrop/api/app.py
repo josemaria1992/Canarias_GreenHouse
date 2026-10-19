@@ -394,7 +394,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/static/{name}", include_in_schema=False)
     def static(name: str):
-        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png"}
         ext = Path(name).suffix
         if "/" in name or ".." in name or ext not in allowed:
             raise HTTPException(404)

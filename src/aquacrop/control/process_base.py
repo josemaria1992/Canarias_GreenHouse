@@ -344,6 +344,30 @@ class Process:
     def fault_cleared(self, ctx: Ctx) -> tuple[bool, str]:
         return True, ""
 
+    def reset_blocker(self) -> str | None:
+        """Why a lockout reset would be refused right now, from the same checks as reset() on the last tick's
+        observations, changing nothing; None when nothing is locked out or the reset would pass. Shown next to
+        the reset action so the operator sees why it is not available yet."""
+        if self.state != ControllerState.FAULT_LOCKOUT:
+            return None
+        ctx = self._ctx
+        if ctx is None:
+            return "no observation yet"
+        if self.stopping:
+            return "stop sequence still running"
+        ok, why = self.fault_cleared(ctx)
+        if not ok:
+            return f"fault condition still present: {why}"
+        if self.on:
+            return f"outputs still commanded ON: {sorted(self.on)}"
+        bad = self.outputs_feedback_active(ctx)
+        if bad:
+            return f"equipment still reports activity: {bad}"
+        occ = self.sup.alarms.get(self.fault_occurrence_id) if self.fault_occurrence_id else None
+        if occ is not None and not occ.acknowledged:
+            return "acknowledge the fault alarm before reset"
+        return None
+
     def view(self) -> dict:
         return {"process": self.pid, "title": self.title, "state": self.state.value, "phase": self.phase,
                 "phase_since_s": self.phase_since, "fault_reason": self.fault_reason, "fault_detail": self.fault_detail,
@@ -352,6 +376,7 @@ class Process:
                 "next": self.next_step, "outputs_on": sorted(self.on), "stopping": self.stopping,
                 "resources": self.sup.arbiter.held_by(self.pid), "last_result": self.last_result,
                 "auto_capable": self.auto_capable, "counters": self.counters,
+                "reset_blocker": self.reset_blocker(),
                 "history": [t.__dict__ for t in self.history[-25:]]}
 
 

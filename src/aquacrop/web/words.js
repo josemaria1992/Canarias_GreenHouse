@@ -1,0 +1,226 @@
+/* AquaCrop display wording (F-03, F-05, F-08): the plain names an operator reads for states, readings,
+ * equipment, processes and problems, with the owner-confirmed vocabulary of 14 Oct 2026. Display text only:
+ * the identifiers (process, alarm, signal, point, recipe field) stay what they are, and the pages show them
+ * under Details. Loaded before app.js; everything here is plain data and string functions. */
+"use strict";
+(function () {
+  const TANK = { MAIN: "Main tank", A: "Fertiliser tank A", B: "Fertiliser tank B", ACID: "Acid tank", SUMP: "Drainage tank" };
+  const lower = s => s.charAt(0).toLowerCase() + s.slice(1);
+  const sectorName = id => /^S\d+$/.test(id) ? "Sector " + id.slice(1) : id;
+
+  // ------------------------------------------------------------------ processes
+  // start: the AUTO button. `starts` says whether AUTO begins work at once (watering) or only switches the
+  // process to wait for its own condition (then the button names the mode, and `auto` says what it waits for).
+  const PROC = {
+    IRRIGATION: { name: "Watering", page: "#main-pumps", start: "Start automatic watering", starts: true, stop: "Stop watering",
+      auto: "Waters the sectors in turn, for the times set in the recipe, until you stop it." },
+    REFILL: { name: "Main tank refill", page: "#main-tank", start: "Switch on automatic refill", stop: "Stop refill",
+      auto: "Refills the main tank by itself when its level falls to the start level of the recipe." },
+    ACID: { name: "Acid dosing", page: "#nutrients", tab: "ACID", start: "Switch on automatic acid dosing", stop: "Stop acid dosing",
+      auto: "Adds acid in small doses when the water is less acidic than the target (pH above it). Acid can only lower pH." },
+    RETURN: { name: "Drainage return", page: "#drainage", start: "Switch on automatic return", stop: "Stop return pump",
+      auto: "Pumps water from the drainage tank back to the main tank when the drainage tank reaches its start level." },
+    STOCK_FILL_A: { name: "Water fill of fertiliser tank A", page: "#nutrients", tab: "A", start: "Switch on automatic filling", stop: "Stop filling tank A",
+      auto: "Adds water to fertiliser tank A when it falls to its fill level. Adding water does not prepare the fertiliser." },
+    STOCK_FILL_B: { name: "Water fill of fertiliser tank B", page: "#nutrients", tab: "B", start: "Switch on automatic filling", stop: "Stop filling tank B",
+      auto: "Adds water to fertiliser tank B when it falls to its fill level. Adding water does not prepare the fertiliser." },
+    STOCK_FILL_ACID: { name: "Water fill of the acid tank", page: "#nutrients", tab: "ACID", start: "Switch on automatic filling", stop: "Stop filling the acid tank",
+      auto: "Adds water to the acid tank when it falls to its fill level." },
+  };
+  function proc(pid) { return PROC[pid] || { name: pid, page: "#overview", start: "Automatic mode", stop: "Stop", auto: "" }; }
+  const STATE = { AUTO: "Automatic", MANUAL: "Manual mode", STOPPED: "Stopped", FAULT_LOCKOUT: "Stopped because of a problem" };
+  function state(s) { return STATE[s] || s; }
+  const PHASE = {
+    IDLE: "", PRECHECK: "checking before starting", SELECT: "selecting the pump", OPEN: "opening the valve",
+    LEAD: "valve open, the pump starts next", START: "starting the pump", STARTING: "starting", VERIFY_FLOW: "checking the water flow",
+    IRRIGATE: "watering", RUNNING: "running", STOPPING: "stopping safely", STOPPING_RUN: "stopping the pump", STOP_DRIVE: "stopping the pump drive",
+    CLOSE: "closing the valve", DESELECT: "releasing the pump", STOP_SETTLE: "pausing after the stop", BATCH: "refilling",
+    MONITOR: "watching the level", HOLD: "on hold", SETTLING: "waiting for the water to mix", DOSING: "adding acid", FILLING: "filling",
+  };
+  function phase(p) { return p in PHASE ? PHASE[p] : lower(String(p || "").replace(/_/g, " ")); }
+
+  // ------------------------------------------------------------------ equipment and signals
+  const EQUIP = {
+    MP1: "main pump 1", MP2: "main pump 2", RP1: "return pump 1", RP2: "return pump 2",
+    TP_A: "transfer pump of fertiliser tank A", TP_B: "transfer pump of fertiliser tank B", TP_ACID: "transfer pump of the acid tank",
+    FILL_MAIN: "water inlet valve of the main tank", FILL_A: "water inlet valve of fertiliser tank A", FILL_B: "water inlet valve of fertiliser tank B",
+    FILL_ACID: "water inlet valve of the acid tank", OUT_A: "outlet valve of fertiliser tank A", OUT_B: "outlet valve of fertiliser tank B",
+    OUT_ACID: "outlet valve of the acid tank", MAIN: "pump drive", K1: "pump 1 selector (K1)", K2: "pump 2 selector (K2)",
+  };
+  function equip(id) {
+    if (EQUIP[id]) return EQUIP[id];
+    if (/^S\d+$/.test(id)) return `valve of ${sectorName(id)}`;
+    return id;
+  }
+  /** A signal id (tank.MAIN.level, flow.S1, …) as an operator says it. */
+  function signal(id) {
+    const p = String(id).split("."), [a, b, c] = p;
+    const tank = TANK[b] || b;
+    if (a === "tank") return { level: `${tank} water level`, high_high: `${tank} very high level switch`, low_low: `${tank} very low level switch`,
+      high: `${tank} high level switch`, low: `${tank} low level switch` }[c] || id;
+    if (a === "flow") return b === "FILL_MAIN" ? "Mains water flow into the main tank" : b === "RETURN" ? "Drainage return flow"
+      : /^S\d+$/.test(b) ? `${sectorName(b)} water flow` : b.startsWith("TP_") ? `${b === "TP_ACID" ? "Acid" : "Fertiliser " + b.slice(3)} transfer flow` : id;
+    if (a === "pressure") return `${sectorName(b)} water pressure`;
+    if (a === "main") return { ph: "Acidity (pH) in the main tank", ec: "Nutrient strength (EC) in the main tank", temperature: "Main tank water temperature" }[b] || id;
+    if (a === "pump") { const n = equip(b); return c === "running" ? `${cap(n)} running signal` : `${cap(n)} switched on (requested)`; }
+    if (a === "contactor") return c === "closed" ? `${cap(equip(b))} selected (signal)` : `${cap(equip(b))} selected (requested)`;
+    if (a === "drive") return { run: "Pump drive run command", running: "Pump drive running signal", fault: "Pump drive fault signal" }[c] || id;
+    if (a === "valve") {
+      const n = /^S\d+$/.test(b) ? `${sectorName(b)} valve` : cap(equip(b));
+      return { cmd: `${n} opened (requested)`, open_limit: `${n} open signal`, closed_limit: `${n} closed signal` }[c] || id;
+    }
+    if (a === "safety") return "Safety circuit healthy";
+    return id;
+  }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  /** Groups for the History page, in reading order. */
+  function signalGroup(id) {
+    const a = String(id).split(".")[0], c = String(id).split(".")[2];
+    if (a === "tank" && c === "level") return "Tank levels";
+    if (a === "flow" || a === "pressure") return "Water flow and pressure";
+    if (a === "main") return "Acidity and nutrient strength";
+    if (a === "tank" || a === "safety") return "Level switches and safety";
+    return "Pumps and valves";
+  }
+  const GROUP_ORDER = ["Tank levels", "Water flow and pressure", "Acidity and nutrient strength", "Pumps and valves", "Level switches and safety"];
+
+  // ------------------------------------------------------------------ reading quality
+  const QUALITY = { GOOD: "Reading valid", STALE: "Reading is old", UNAVAILABLE: "No reading", INVALID: "Reading outside the allowed range",
+    UNASSIGNED: "Unused channel", OVERRIDDEN: "Set by hand (test)", UNSCALED: "Not calibrated", PARTIAL: "Some readings missing" };
+  const QUALITY_HELP = {
+    GOOD: "The reading arrived correctly and in time. This is not a promise that the plant value is normal.",
+    STALE: "No new reading arrived recently; the value shown is the last one received.",
+    UNAVAILABLE: "There is no reading for this value at the moment.",
+    INVALID: "The sensor sent a value outside its allowed range, so it is not used.",
+    UNASSIGNED: "Nothing is connected to this channel. This is not a fault.",
+    OVERRIDDEN: "Someone set this value by hand on the I/O test bench; it is not the sensor's reading.",
+    UNSCALED: "The channel has no approved calibration, so the value has no unit yet.",
+  };
+  function quality(q) { return QUALITY[q] || q; }
+
+  const HELP = {
+    twin: "The Digital Twin is a computer model of the greenhouse. Everything shown and done in this program happens in the model; no real pump or valve moves.",
+    bench: "The I/O test bench shows every input and output channel of the I/O modules. In the Digital Twin the channels are simulated; it is used to test wiring and signals.",
+    ph: "Acidity (pH) says how acidic the water is. Lower is more acidic. Plants usually want about 6; acid lowers it.",
+    ec: "Nutrient strength (EC) says how much fertiliser is dissolved in the water, in mS/cm. Higher means stronger.",
+    stop: "This stops the process in the program and switches its equipment off in a safe order. It is not an emergency stop: use the emergency stop on the equipment for that.",
+  };
+
+  // ------------------------------------------------------------------ problems
+  // reason (the PROC_<reason> alarm) -> [what happened, what to check]. `who` is the equipment named in the
+  // detail text when there is one (a sector, a pump).
+  function whoIn(detail) {
+    const d = String(detail || "");
+    const m = d.match(/\b(S\d+)\b/) || d.match(/\b(MP\d|RP\d|TP_[A-Z]+)\b/);
+    return m ? m[1] : null;
+  }
+  const FAULT = {
+    VALVE_OPEN_TIMEOUT: w => [`the valve for ${sectorName(w || "the sector")} did not open`, `Check the valve of ${sectorName(w || "the sector")} and its open signal.`],
+    VALVE_LOST_OPEN: w => [`the valve for ${sectorName(w || "the sector")} closed before the pump started`, `Check the valve of ${sectorName(w || "the sector")} and its open signal.`],
+    VALVE_CLOSE_TIMEOUT: w => [`the valve for ${sectorName(w || "the sector")} did not confirm that it closed`, `Check the valve of ${sectorName(w || "the sector")}.`],
+    NO_FLOW: w => [w && /^S\d+$/.test(w) ? `no water flow was measured in ${sectorName(w)}` : "no water flow was measured", "Check the pump, the valves and the flow meter."],
+    DRIVE_FAULT: () => ["the pump drive reports a fault", "Find and fix the cause at the pump drive, then reset the drive there."],
+    DRIVE_START_TIMEOUT: () => ["the main pump did not start", "Check the pump drive and the pump."],
+    DRIVE_STOPPED: () => ["the main pump stopped unexpectedly", "Check the pump drive and the pump."],
+    STOP_NOT_VERIFIED: () => ["the equipment did not confirm that it stopped", "Check that the pumps have stopped and the valves are closed."],
+    SAFETY_CHAIN_OPEN: () => ["the safety circuit is open", "Find out why the safety circuit opened (for example an emergency stop) and close it."],
+    SELECTION_TIMEOUT: w => [`${equip(w || "the main pump")} could not be selected`, "Check the pump selector."],
+    DESELECT_TIMEOUT: w => [`${equip(w || "the main pump")} stayed selected after it was released`, "Check the pump selector."],
+    BOTH_PUMPS_SELECTED: () => ["both main pumps are selected at once", "Check the pump selectors."],
+    UNEXPECTED_PUMP_SELECTED: () => ["the wrong main pump is selected", "Check the pump selectors."],
+    UNCOMMANDED_DRIVE_RUN: () => ["the pump drive runs although it was not asked to", "Check the pump drive."],
+    MAIN_LOW_LOW: () => ["the main tank is too low for watering", "Fill the main tank above the lowest level for watering."],
+    OBSERVATION_UNAVAILABLE: () => ["a reading this process needs is missing", "Check the sensor and its connection; see the readings on this page."],
+    COMMAND_REJECTED: () => ["a command to the equipment was refused", "Look at the latest commands under Alarms & events."],
+    START_INHIBITED: () => ["the pump could not be started", "See the checks before starting on this page."],
+    PRECHECK_FAILED: () => ["a check before starting failed", "See the checks before starting on this page."],
+    NO_RECIPE: () => ["there are no settings (recipe) in use", "Use a recipe on the Recipes page."],
+    PATH_FAILED: () => ["a step of the refill failed", "Look at the refill batch on the Main tank page."],
+    PH_UNDERSHOOT: () => ["the acidity (pH) fell too low", "Wait until the pH is back above the stop margin; there is no base dosing."],
+    PH_WRONG_RESPONSE: () => ["the pH rose after adding acid", "Check the acid tank and the pH probe."],
+    PH_NO_RESPONSE: () => ["the pH did not drop after adding acid", "Check the acid tank, its transfer pump and the pH probe."],
+    ACID_BATCH_LIMIT: () => ["the most acid allowed in one batch was reached", "Check the acid settings and the pH probe."],
+    DOSE_FAILED: () => ["an acid dose failed", "Check the acid tank and its transfer pump."],
+    SUMP_DRY_RUN: () => ["the drainage tank ran dry while the return pump was running", "Check the drainage tank level and its low switch."],
+    RUN_FEEDBACK_TIMEOUT: w => [`${equip(w || "the return pump")} did not start`, "Check the return pump."],
+    PUMP_STOPPED: w => [`${equip(w || "the return pump")} stopped unexpectedly`, "Check the return pump."],
+    MAX_RUNTIME: w => [`${equip(w || "the return pump")} ran too long without emptying the drainage tank`, "Check the return pump and the drainage tank level."],
+    FILL_FAILED: () => ["filling the tank with water failed", "Check the water inlet valve and the level reading."],
+  };
+  // other alarms: rule id -> [what is happening, what to check]
+  const RULE = {
+    MAIN_LEVEL_LOW: ["The main tank level is low", "Refill the main tank."], MAIN_LEVEL_HIGH: ["The main tank level is high", "Stop adding water to the main tank."],
+    SUMP_LEVEL_HIGH: ["The drainage tank level is high", "Start the drainage return, or check the return pump."],
+    STOCK_A_LEVEL_LOW: ["Fertiliser tank A is low", "Fill and prepare fertiliser tank A."], STOCK_B_LEVEL_LOW: ["Fertiliser tank B is low", "Fill and prepare fertiliser tank B."],
+    ACID_LEVEL_LOW: ["The acid tank is low", "Fill the acid tank."],
+    MAIN_HIGH_HIGH_SWITCH: ["The main tank very high level switch is active", "Stop all water going into the main tank and check the level."],
+    MAIN_LOW_LOW_SWITCH: ["The main tank very low level switch is active", "Fill the main tank; watering cannot run."],
+    SUMP_HIGH_SWITCH: ["The drainage tank high level switch is active", "Start the drainage return."],
+    SUMP_LOW_SWITCH: ["The drainage tank low level switch is active", "Nothing to do: the return pump cannot run dry."],
+    DRIVE_FAULT_INPUT: ["The pump drive reports a fault", "Find and fix the cause at the pump drive, then reset the drive there."],
+    SAFETY_CHAIN_OPEN: ["The safety circuit is open", "Find out why the safety circuit opened (for example an emergency stop) and close it."],
+    ACQUISITION_STALE: ["New readings stopped arriving", "Check the connection to the I/O modules."],
+    AI_SIGNAL_INVALID: ["A sensor sends a value outside its allowed range", "Check the sensor and its wiring."],
+    DEVICE_COMM: ["An I/O module does not answer", "Check the module's power and its cable."],
+    DRIVE_COMM: ["The pump drive does not answer", "Check the pump drive's power and its cable."],
+    FLOW_PLAUSIBILITY: ["A flow reading does not match what the equipment is doing", "Check the flow meter and the valves."],
+    REFILL_EC_ABOVE_TARGET: ["The nutrient strength (EC) is above the target", "Check the fertiliser amounts in the recipe."],
+    REFILL_EC_LIMIT_EXCEEDED: ["The refill added more fertiliser than allowed", "Check the fertiliser settings and the EC probe."],
+    REFILL_EC_LIMIT_REACHED: ["The most fertiliser allowed in one refill was reached", "Check the fertiliser settings and the EC probe."],
+    REFILL_EC_UNAVAILABLE: ["There is no usable nutrient strength (EC) reading", "Check the EC probe."],
+    REFILL_EC_VALIDATION_FAILED: ["The nutrient strength (EC) after the refill is outside its range", "Check the fertiliser amounts and the EC probe."],
+    REFILL_PATH_NOT_STARTED: ["A refill step could not start", "Look at the refill batch on the Main tank page."],
+    RETENTION_HELD: ["Old history is not being removed (held)", "An administrator checks the date and time under Settings."],
+    STORAGE_WRITE_FAILED: ["History could not be written", "Check the free disk space; new starts are refused until it works."],
+    HISTORY_CLOCK_BEHIND: ["The clock is behind the stored history", "An administrator checks the date and time under Settings."],
+    HISTORY_QUARANTINE_REVIEW_DUE: ["Quarantined history needs a review", "An administrator reviews it under Settings."],
+  };
+  /** An open alarm as a problem: { title, cause, fix, equipment, proc, page }. */
+  function problem(o) {
+    const target = String(o.target || ""), rule = String(o.rule_id || "");
+    if (rule.startsWith("PROC_") && target.startsWith("process.")) {
+      const pid = target.slice(8).split(".")[0], p = proc(pid), reason = rule.slice(5);
+      const detail = String(o.message || "").split(": ").slice(2).join(": ");
+      const w = whoIn(detail), f = FAULT[reason];
+      const [what, fix] = f ? f(w) : [lower(reason.replace(/_/g, " ")), "See the details below."];
+      return { title: `${p.name} stopped: ${what}`, cause: what, fix, equipment: w ? cap(equip(w)) : null, proc: pid, page: p.page, latchedProcess: true };
+    }
+    const r = RULE[rule], name = target.startsWith("process.") ? proc(target.slice(8)).name : null;
+    const pageOf = { MAIN: "#main-tank", SUMP: "#drainage", STOCK: "#nutrients", ACID: "#nutrients", DRIVE: "#main-pumps", SAFETY: "#main-pumps", REFILL: "#main-tank" };
+    const key = Object.keys(pageOf).find(k => rule.startsWith(k));
+    if (r) return { title: r[0] + (name ? ` (${name})` : ""), cause: lower(r[0]), fix: r[1], equipment: null, proc: null, page: key ? pageOf[key] : null };
+    return { title: plain(o.message || rule), cause: plain(o.message || rule), fix: "See the details below.", equipment: null, proc: null, page: null };
+  }
+  const SEVERITY = { CRITICAL: "Serious", WARNING: "Warning", INFO: "Information" };
+
+  // ------------------------------------------------------------------ messages from the controllers
+  const n0 = x => Number(x).toLocaleString("en-GB", { maximumFractionDigits: 1 });
+  const PHRASES = [
+    [/^batch latches when the main level falls to ([\d.]+) L \(now ([\d.]+) L\)$/, (m, a, b) => `Refill starts when the main tank falls to ${n0(a)} L (now ${n0(b)} L).`],
+    [/^batch latches if the level stays at or below ([\d.]+) L for (.*)$/, (m, a, b) => `Refill starts if the main tank stays at or below ${n0(a)} L for ${b}`],
+    [/^re-arms when the main level is above ([\d.]+) L(.*)$/, (m, a, b) => `Another refill becomes possible once the main tank is above ${n0(a)} L${b}`],
+    [/^starts when the sump reaches ([\d.]+) L \(now ([\d.]+) L\)$/, (m, a, b) => `The return pump starts when the drainage tank reaches ${n0(a)} L (now ${n0(b)} L).`],
+    [/^stops at sump ([\d.]+) L \(now ([\d.]+) L\)$/, (m, a, b) => `Stops when the drainage tank is down to ${n0(a)} L (now ${n0(b)} L).`],
+    [/^auto-fills at ([\d.]+) L \(now ([\d.]+) L\)$/, (m, a, b) => `Adds water when the tank falls to ${n0(a)} L (now ${n0(b)} L).`],
+    [/^filling to ([\d.]+) L \(\+([\d.]+) L\)$/, (m, a, b) => `Filling to ${n0(a)} L (${n0(b)} L added so far).`],
+    [/^stop (S\d+) in ([\d.]+) s$/, (m, a, b) => `${sectorName(a)} stops in ${b} s.`],
+    [/^pH ([\d.]+) at or below ([\d.]+) \(target ([\d.]+) \+ ([\d.]+)\): no dose$/, (m, a, b, c) => `Acidity (pH) ${a} is at or below ${b} (target ${c}): no acid needed.`],
+    [/^dosing: ([\d.]+) of ([\d.]+) L$/, (m, a, b) => `Adding acid: ${a} of ${b} L.`],
+    [/^no active recipe$/, () => "No settings (recipe) in use: use one on the Recipes page."],
+    [/^mixing\/settling: (.*)$/, (m, a) => `Waiting for the water to mix: ${a}`],
+    [/^24 h acid limit reached \(([\d.]+) of ([\d.]+) L\)$/, (m, a, b) => `The most acid allowed in 24 hours is reached (${a} of ${b} L).`],
+    [/^pH unavailable/, () => "No usable acidity (pH) reading."],
+  ];
+  /** A controller's message in plain words: known sentences rephrased, signal ids and sectors named. */
+  function plain(text) {
+    let t = String(text == null ? "" : text).trim();
+    if (!t) return "";
+    for (const [re, fn] of PHRASES) if (re.test(t)) { t = t.replace(re, fn); break; }
+    t = t.replace(/\b(tank|flow|pressure|pump|valve|contactor|drive|main|safety)\.[A-Za-z0-9_]+(\.[a-z_]+)?\b/g, m => lower(signal(m)));
+    t = t.replace(/\b(S\d+)\b/g, (m, s) => sectorName(s));
+    return cap(t);
+  }
+
+  window.AqWords = { TANK, PROC, proc, state, phase, equip, signal, signalGroup, GROUP_ORDER, quality, QUALITY_HELP, HELP,
+                     problem, SEVERITY, plain, sectorName, n0, cap };
+})();

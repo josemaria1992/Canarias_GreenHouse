@@ -87,7 +87,7 @@ def prerequisites(cfg_name: str, state_dir: Path, port: int):
         "or the offline wheelhouse in the release ZIP")
     from importlib import resources
     web = resources.files("aquacrop") / "web"
-    assets = [n for n in ("index.html", "app.js", "plant.js", "chart.js", "app.css") if not (web / n).is_file()]
+    assets = [n for n in ("index.html", "words.js", "app.js", "plant.js", "chart.js", "app.css") if not (web / n).is_file()]
     chk(not assets, "browser pages packaged" + (f" (missing: {', '.join(assets)})" if assets else ""),
         "reinstall the AquaCrop wheel; do not run from a partial copy")
     cfg = None
