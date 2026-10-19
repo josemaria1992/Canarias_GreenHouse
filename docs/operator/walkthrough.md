@@ -280,7 +280,8 @@ Steps:
 
 Expected:
 - Step 1: the card says `Automatic watering: Sector 1 with main pump 1, … of 300 s watered.`
-- Step 2: Sector 1 valve `asked: open · reports: open`; Selector K1 `asked: on · reports: closed`.
+- Step 2: Sector 1 valve `Open asked: open · reports: open`; Selector K1 `Running asked: on · reports:
+  closed`.
 - Step 3: the sentence names each stage in brackets (`stopping the pump drive`, `pausing after the
   stop`, `closing the valve`, `releasing the pump`), then sector 2 with main pump 2.
 - Step 5: the stop sequence runs to all equipment off and the card says `Watering is stopped.`; under
@@ -548,8 +549,8 @@ Expected:
 - Step 5: the card says `Drainage return: automatic, on hold.` with `Waiting: Main tank full (18800 L):
   return held until it is below 18000 L; …`. Under **Other problems on this page** a **Serious**
   problem reads `Sump high (4700 L) while the main tank is full (18800 L): return is held. …` (its
-  **Details** show the code `SUMP_HIGH_MAIN_FULL`). No return pump runs: both read `asked: off ·
-  reports: stopped`.
+  **Details** show the code `SUMP_HIGH_MAIN_FULL`). No return pump runs: both read `Stopped asked:
+  off · reports: stopped`.
 
 Fail if: both return pumps run together, the same pump starts twice in a row, or water is returned
 while the main tank is above the hold level.

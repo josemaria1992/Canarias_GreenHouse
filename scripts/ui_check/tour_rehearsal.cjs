@@ -251,7 +251,10 @@ CASES["UAT-01"] = async (p) => {
   check("Settings, Versions: inventory", inv === "6 modules: 16 AI + 32 DI + 32 DO = 80 points", inv);
   check("Settings, Versions: config", /installation-80@2026-10-13\.80\.1 \(SIMULATED\)/.test(t), (t.match(/Config\n(.*)/) || [])[1]);
   check("Settings, Versions: release line", process.env.AQ_EXPECT_RELEASE ? rel.includes("wheel verified") && rel.includes(process.env.AQ_EXPECT_RELEASE) : rel.length > 0, rel);
-  await p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Versions" }) }).first().screenshot({ path: path.join(OUT, "UAT-01-versions.png") });
+  for (let i = 0; ; i++) {         // the page may rebuild the card between finding it and capturing it
+    try { await p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Versions" }) }).first().screenshot({ path: path.join(OUT, "UAT-01-versions.png") }); break; }
+    catch (e) { if (i >= 4 || !/not attached/.test(String(e))) throw e; await p.waitForTimeout(300); }
+  }
 };
 
 CASES["UAT-02"] = async (p) => {
@@ -300,7 +303,7 @@ CASES["UAT-03"] = async (p) => {
   const valve = await p.locator("section.view:not(.hidden) tr", { has: p.locator("td > strong", { hasText: exact("Sector 1") }) }).first().locator("td").nth(1).innerText();
   const k1 = await ddText(p, "Selector K1 (main pump 1)");
   check("sector 1 with main pump 1, asked and reported apart", s1 && s1 !== "SIM_LIMIT" && /^Automatic watering: Sector 1 with main pump 1/.test(lead) &&
-    /^asked: open · reports: open/.test(valve) && /^asked: on · reports: closed/.test(k1), `${lead} · Sector 1 valve: ${valve} · Selector K1: ${k1}`);
+    /^Open asked: open · reports: open/.test(valve) && /^Running asked: on · reports: closed/.test(k1), `${lead} · Sector 1 valve: ${valve} · Selector K1: ${k1}`);
   const changeover = await untilSim(p, async () => { const x = await proc(p, "IRRIGATION"); return x.phase !== "IRRIGATE" && x.phase !== "IDLE" && x.phase; }, 400);
   await show(p, "main-pumps");
   await shot(p, "UAT-03-changeover");
