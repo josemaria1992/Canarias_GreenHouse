@@ -205,7 +205,7 @@ def main() -> int:
     with log.open("rb") as f:
         f.seek(offset)
         text = f.read().decode("utf-8", errors="replace")
-    if (a.launcher.parent / "runtime" / "python.exe").is_file():
+    if a.launcher.suffix.lower() == ".cmd" and (a.launcher.parent / "runtime" / "python.exe").is_file():
         check("started with the Python bundled in the release, no Python of the PC used",
               "Using the Python bundled with this release" in text and shim not in text,
               next((ln for ln in text.splitlines() if "Using the Python" in ln or shim in ln), "no line naming the Python"))
