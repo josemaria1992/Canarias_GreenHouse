@@ -33,6 +33,12 @@ parts → CP-06. Stop at the first unexpected result and record it. CP-01 to CP-
 bench (`configs/bench-malmo.example.yaml`, Europe/Stockholm) before the hardware goes to the
 installation (Atlantic/Canary).
 
+Tools since 0.4.0 (ADR-0017, `docs/installation/bench-bringup.md`): `aquacrop hw setup` writes the CP-01
+setup record of each module (address, modes, ranges, read back); the I/O board's guided check steps through
+CP-02 to CP-04 channel by channel with a manual Next and records each result; the board's export (YAML or
+JSON) lists every channel with its latest check and assignment and is attached to CP-02 to CP-04. The
+template values (stimulus points, observations, photographs) are still recorded by hand.
+
 ## CP-00 Platform record
 Flash and configure per `docs/installation/cm4.md`. Fill the UART table by reading one known module
 per port with `diagnostics read`. Record OS image checksum, `uname -a`, Python version,

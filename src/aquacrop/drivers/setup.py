@@ -1,5 +1,5 @@
 """`aquacrop hw scan` and `aquacrop hw setup`: give one Waveshare module its address, modes and analog
-ranges before it joins the shared bus (ADR-0016, CP-01). This is the only code that writes a module's
+ranges before it joins the shared bus (ADR-0017, CP-01). This is the only code that writes a module's
 address register (0x4000) or its channel mode registers (0x1000..0x1007).
 
 Rules, whatever the arguments:

@@ -15,7 +15,7 @@
   word every cycle, with the same backoff. A bench write to it is preceded by a fresh status read
   (refused while it reports a fault), sent as FC06 frames exactly once each, and answered by its echo
   and a status read: ECHO_CONFIRMED, never actuator proof. Nothing is written to it otherwise.
-* Safe state (ADR-0016): a command with origin SAFE_STATE may only switch a digital output OFF. It needs
+* Safe state (ADR-0017): a command with origin SAFE_STATE may only switch a digital output OFF. It needs
   no lease, but takes the same fresh mode preflight, FC05 sent once and FC01 readback. It is the only
   write that is not authorized by the bench gate, and it can never switch anything ON or touch a drive.
 * `close()` releases ports and sends nothing.

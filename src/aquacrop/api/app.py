@@ -636,7 +636,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"freshness": _freshness(), "source": rt().backend.source.value if is_sim else "REAL",
                 "devices": groups}
 
-    # ------------------------------------------------------------------ I/O board and assignment (ADR-0016)
+    # ------------------------------------------------------------------ I/O board and assignment (ADR-0017)
     def _asked(targets: list[str]) -> dict:
         def run(con):
             out = {}
@@ -1567,7 +1567,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.post("/api/bench/all-off")
     async def bench_all_off(p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
-        # OFF only, to every digital output that reads ON; needs no lease (ADR-0016).
+        # OFF only, to every digital output that reads ON; needs no lease (ADR-0017).
         if is_sim:
             raise HTTPException(409, "SIMULATED profile: use the virtual outputs")
         return {"results": await run_in_threadpool(lambda: svc.all_off(p.username))}

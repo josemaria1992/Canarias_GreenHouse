@@ -68,7 +68,7 @@ CREATE TABLE recipe_activations (seq INTEGER PRIMARY KEY, utc TEXT NOT NULL, act
 CREATE TABLE stock_readiness (seq INTEGER PRIMARY KEY, stock TEXT NOT NULL, status TEXT NOT NULL, actor TEXT,
     utc TEXT, json TEXT NOT NULL);
 """),
-    4: ("I/O board records: channel checks, assignments and a per-output command index (bench bring-up, ADR-0016)", """
+    4: ("I/O board records: channel checks, assignments and a per-output command index (bench bring-up, ADR-0017)", """
 CREATE TABLE io_assignments (seq INTEGER PRIMARY KEY, point TEXT NOT NULL, signal TEXT, status TEXT NOT NULL,
     actor TEXT NOT NULL, utc TEXT NOT NULL, note TEXT, evidence_json TEXT NOT NULL, config_id TEXT NOT NULL,
     config_version TEXT NOT NULL);

@@ -1,4 +1,4 @@
-"""`aquacrop hw make-config`: a bench configuration from the `hw setup` records (ADR-0016).
+"""`aquacrop hw make-config`: a bench configuration from the `hw setup` records (ADR-0017).
 
 The configuration is HARDWARE_READ_ONLY: it reads every module, and writes only under a bench lease or
 as a safe-state OFF. Device ids, addresses, models, analog ranges and labels come from the records,
@@ -16,7 +16,7 @@ HEADER = """\
 # Bench configuration made by `aquacrop hw make-config` from the module setup records:
 #   {records}
 # HARDWARE_READ_ONLY: AquaCrop reads every module. Outputs switch only under a bench lease armed in the
-# browser by a commissioning user, or OFF at the safe-state moments below (ADR-0016).
+# browser by a commissioning user, or OFF at the safe-state moments below (ADR-0017).
 # Nothing here assigns a channel to a plant signal: assignments are made and verified on the I/O board.
 """
 

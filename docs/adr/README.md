@@ -18,3 +18,4 @@
 | 0014 | One controller per process, an arbiter, recipes with versions | proposed |
 | 0015 | The shared drive's run command over its Modbus interface | proposed |
 | [0016](0016-added-digital-io-modules.md) | Two additional SKU 26244 modules, 80-point inventory | owner-confirmed inventory; physical allocation pending |
+| [0017](0017-bench-bring-up-safe-state-and-io-board.md) | Bench bring-up: module setup, safe-state OFF, I/O board, assignment and check records | owner-accepted; not yet run on the hardware |

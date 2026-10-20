@@ -101,7 +101,7 @@ address bar to open the folder. Never delete the `demo` folder: it is your data.
    `%LOCALAPPDATA%\AquaCrop\venv-…` hold no data; you can delete them later.
 4. The same data folder is used: your accounts, history and recipes are kept. If a release changes
    the database format, AquaCrop first writes a full safety copy to `demo\backups\pre-migrate-…`
-   (0.3.1 and 0.3.2 to 0.3.4 do not change it).
+   (0.3.1 to 0.3.4 do not change it; 0.4.0 adds the I/O board records, schema 4).
 5. Check Settings, Versions: the new version and **wheel verified**.
 
 ## 8. A separate trial data folder

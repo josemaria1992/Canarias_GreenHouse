@@ -1,4 +1,4 @@
-"""ADR-0016: the I/O board and the I/O assignment records on a HARDWARE_READ_ONLY profile, over the
+"""ADR-0017: the I/O board and the I/O assignment records on a HARDWARE_READ_ONLY profile, over the
 in-memory RS485 bus (not hardware). Assignments are records: they never bind a signal or change control."""
 import time
 

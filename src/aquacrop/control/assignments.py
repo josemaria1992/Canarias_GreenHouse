@@ -1,4 +1,4 @@
-"""I/O assignment on the I/O board (ADR-0016): which module channel carries which installation signal,
+"""I/O assignment on the I/O board (ADR-0017): which module channel carries which installation signal,
 and the check that proved it.
 
 An assignment is a record, not a binding. Nothing here changes what a controller reads or commands:
@@ -235,7 +235,7 @@ CHECK_RESULTS = ("PASS", "FAIL", "SKIPPED")
 
 
 class ChannelChecks:
-    """The guided channel check of the I/O board (ADR-0016): one result per channel and step, append-only
+    """The guided channel check of the I/O board (ADR-0017): one result per channel and step, append-only
     (`io_checks`). The board steps through every channel with a manual Next; this records what was seen.
 
     A PASS carries what the server saw during the step, from the step's start: for an output a command ON

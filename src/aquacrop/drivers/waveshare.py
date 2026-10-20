@@ -2,7 +2,7 @@
 
 This module holds the register addresses the service uses. It offers no way to write IDs, baud rates,
 modes, all-on/all-off, toggle or flash registers; those operations do not exist here. Only the
-one-module-at-a-time setup command (`setup.py`, ADR-0016) writes a module's address and mode registers.
+one-module-at-a-time setup command (`setup.py`, ADR-0017) writes a module's address and mode registers.
 """
 from __future__ import annotations
 

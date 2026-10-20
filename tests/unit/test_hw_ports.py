@@ -1,4 +1,4 @@
-"""ADR-0016: `aquacrop hw ports` reads the boot configuration and the device nodes and changes nothing."""
+"""ADR-0017: `aquacrop hw ports` reads the boot configuration and the device nodes and changes nothing."""
 import json
 
 from aquacrop.cli import main

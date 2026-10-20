@@ -951,7 +951,7 @@
       groups);
   };
 
-  // ------------------------------------------------ I/O board (ADR-0016): a developer page for the bench bring-up
+  // ------------------------------------------------ I/O board (ADR-0017): a developer page for the bench bring-up
   // One card per module: outputs as switches with two lights (asked = the last command, reported = the coil
   // readback), inputs as lights, analog inputs in mA or V with a bar. On the simulation the modules are
   // virtual; on the bench a switch works only inside a test session (bench lease). Assignments are records

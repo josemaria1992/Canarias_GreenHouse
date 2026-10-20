@@ -1,4 +1,4 @@
-"""ADR-0016, CP-01: `aquacrop hw scan / setup / make-config` over the in-memory RS485 bus (not hardware)."""
+"""ADR-0017, CP-01: `aquacrop hw scan / setup / make-config` over the in-memory RS485 bus (not hardware)."""
 import itertools
 import json
 

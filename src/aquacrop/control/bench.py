@@ -16,7 +16,7 @@ memory only: a restart can never restore it (stale rows are closed at startup), 
 config file or the environment can arm it. The holder may renew it from the same session, up to 30
 minutes from the moment of renewal. On expiry or revocation writes stop being accepted; the gate itself
 sends nothing, and `on_end` tells the hardware service, which switches the leased outputs OFF only when
-the configuration lists LEASE_END in `safe_state.outputs_off_on` (ADR-0016).
+the configuration lists LEASE_END in `safe_state.outputs_off_on` (ADR-0017).
 """
 from __future__ import annotations
 

@@ -35,6 +35,9 @@ Reference: <https://www.raspberrypi.com/documentation/computers/compute-module.h
 
 ## 3. Serial ports
 
+For the six-module bench, `bench-bringup.md` is the step-by-step guide (port plan, wiring, module setup,
+the I/O board); `aquacrop hw ports` checks the overlays and device nodes below without changing anything.
+
 The vendor lists different names per OS release. **Do not paste these blindly; confirm each one.**
 
 For Bookworm the vendor says to add to `/boot/firmware/config.txt` (**VERIFY** the boot partition
@@ -106,7 +109,8 @@ sudo python3 deploy/aquacrop-cm4.py status
 ```
 
 `install` verifies every file against `MANIFEST.sha256`, creates the `aquacrop` system user (group
-`dialout` only), installs the wheel offline from `wheelhouse-aarch64-py311` with the hashes in
+`dialout` only), installs the wheel offline from `wheelhouse-aarch64-py311` (Bookworm) or
+`wheelhouse-aarch64-py313` (Trixie), whichever matches the OS Python, with the hashes in
 `requirements.lock`, lays out `/opt/aquacrop/releases/<version>` with the `current` link, writes
 `/etc/aquacrop/aquacrop.env` (0640) and `/var/lib/aquacrop` (0700), and installs and enables the
 systemd units. It does not start the application, create an account, format anything or touch

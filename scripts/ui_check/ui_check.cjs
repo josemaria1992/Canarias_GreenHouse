@@ -808,7 +808,7 @@ async function o34run(b, ctx0) {
   await ctx.close();
 }
 
-// 0.4.0 (ADR-0016): the developer I/O board on the simulation's six virtual modules
+// 0.4.0 (ADR-0017): the developer I/O board on the simulation's six virtual modules
 const boardPoint = async (q, id) => (await get(q, "/api/board")).modules.flatMap(m => m.points).find(x => x.id === id);
 async function board040(b) {
   const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, acceptDownloads: true });

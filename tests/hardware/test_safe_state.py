@@ -1,4 +1,4 @@
-"""ADR-0016: the hardware service switches digital outputs OFF at the configured moments (in-memory bus, not
+"""ADR-0017: the hardware service switches digital outputs OFF at the configured moments (in-memory bus, not
 hardware). OFF only, each coil that reads ON, FC05 once with an FC01 readback, audited with origin SAFE_STATE."""
 import time
 

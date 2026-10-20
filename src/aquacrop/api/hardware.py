@@ -5,7 +5,7 @@ bench commands, STOP priority first; each command is re-checked against the leas
 the configuration version at the moment it runs (CommandService re-validates before dispatch).
 
 Starting, polling, reconnecting and stopping send read frames only, unless the configuration lists
-safe-state triggers (`safe_state.outputs_off_on`, ADR-0016): then, at each listed moment, every digital
+safe-state triggers (`safe_state.outputs_off_on`, ADR-0017): then, at each listed moment, every digital
 output that reads ON is switched OFF (origin SAFE_STATE, FC05 once, FC01 readback, audited like any
 command). START also covers a module that did not answer at start, at its first answer. "All outputs
 OFF" does the same on request. Nothing here ever switches an output ON by itself or writes to a drive.
@@ -337,7 +337,7 @@ class HardwareService:
                                                             "around this point are uncertain"}, actor="system")
         self._clock_ref = (mono, wall)
 
-    # ------------------------------------------------------------------ safe state (ADR-0016)
+    # ------------------------------------------------------------------ safe state (ADR-0017)
     def _digital_uids(self) -> list[str]:
         return [d.device_uid for d in self.cfg.devices if d.model in DIGITAL_IO_MODELS]
 

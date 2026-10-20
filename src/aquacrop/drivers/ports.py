@@ -1,4 +1,4 @@
-"""`aquacrop hw ports`: are the CM4-ETH-RS485-BOX-B ports ready? Read-only (ADR-0016).
+"""`aquacrop hw ports`: are the CM4-ETH-RS485-BOX-B ports ready? Read-only (ADR-0017).
 
 The box's COM1 to COM3 are the CM4's PL011 UARTs 3, 4 and 5, which Raspberry Pi OS (Bookworm and later)
 names /dev/ttyAMA1 to /dev/ttyAMA3 once `dtoverlay=uart3`, `uart4` and `uart5` are in the boot
@@ -34,6 +34,20 @@ def active_lines(text: str) -> set[str]:
     return {ln.split("#", 1)[0].strip().replace(" ", "") for ln in text.splitlines() if ln.split("#", 1)[0].strip()}
 
 
+def _held(lock: Path) -> bool:
+    """True when another AquaCrop process owns the port (its lock file exists and is locked)."""
+    from ..ownership import OwnerLock, OwnershipError
+    if not lock.exists():
+        return False
+    try:
+        OwnerLock(lock).acquire().release()
+        return False
+    except OwnershipError:
+        return True
+    except OSError:
+        return False
+
+
 def report(boot_config: Path | None, dev: Path, state_dir: str) -> dict:
     from ..ownership import lock_name, port_key
     boot = boot_config if boot_config else next((Path(p) for p in BOOT_CANDIDATES if Path(p).is_file()), None)
@@ -42,10 +56,10 @@ def report(boot_config: Path | None, dev: Path, state_dir: str) -> dict:
     for com, (node, overlay) in BOX.items():
         path = dev / Path(node).name
         exists = path.exists()
-        lock = Path(state_dir) / "locks" / lock_name("port", port_key(str(path)))
+        lock = Path(os.environ.get("AQUACROP_LOCK_DIR", state_dir)) / lock_name("port", port_key(str(path)))
         ports[com] = {"device": str(path), "overlay": overlay, "overlay_in_boot_config": overlay in lines,
                       "exists": exists, "can_open": exists and os.access(path, os.R_OK | os.W_OK),
-                      "aquacrop_lock": lock.exists(), "plan": PLAN[com]}
+                      "in_use_by_aquacrop": _held(lock), "plan": PLAN[com]}
         ports[com]["ready"] = ports[com]["overlay_in_boot_config"] and ports[com]["can_open"]
     cmdline = Path("/proc/cmdline").read_text() if Path("/proc/cmdline").is_file() else ""
     usb = sorted(str(p) for p in (dev / "serial" / "by-id").glob("*")) if (dev / "serial" / "by-id").is_dir() else []

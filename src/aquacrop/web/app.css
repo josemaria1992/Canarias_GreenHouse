@@ -238,7 +238,7 @@ details.tech > summary, details.card > summary { padding: 2px 0; }
   .w-kind { min-width: 0; width: 100%; }
   .subcard .row input[type=text], details.inline input[type=text] { width: 100%; }
 }
-/* I/O board (ADR-0016): lights, switches and bars for the bench bring-up */
+/* I/O board (ADR-0017): lights, switches and bars for the bench bring-up */
 .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; }
 .module h2 { margin: 0; font-size: 16px; }
 .module h3 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; }

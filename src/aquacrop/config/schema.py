@@ -383,7 +383,7 @@ SAFE_STATE_TRIGGERS = ("START", "STOP", "LEASE_END", "MODULE_RETURN")
 
 
 class SafeStateSettings(_Strict):
-    """When the hardware service switches digital outputs OFF by itself (ADR-0016). OFF only, each coil that
+    """When the hardware service switches digital outputs OFF by itself (ADR-0017). OFF only, each coil that
     reads ON, with an FC01 readback; never ON, never a drive. Empty (the default) keeps the read-only rule
     that nothing is written without a bench lease: start, stop, lease end and comm loss send no frame."""
     outputs_off_on: list[Literal["START", "STOP", "LEASE_END", "MODULE_RETURN"]] = Field(default_factory=list)

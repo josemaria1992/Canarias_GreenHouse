@@ -1,4 +1,4 @@
-"""ADR-0016: the I/O board and I/O assignment on the simulation (installation-80, six virtual modules),
+"""ADR-0017: the I/O board and I/O assignment on the simulation (installation-80, six virtual modules),
 so the bring-up can be practised before the hardware arrives."""
 import time
 
