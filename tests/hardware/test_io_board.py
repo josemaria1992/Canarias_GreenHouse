@@ -20,6 +20,21 @@ def point(board, pid):
     return next(p for m in board["modules"] for p in m["points"] if p["id"] == pid)
 
 
+def reads(c, h, pid, value):
+    """Wait until the board shows a good reading of value: a change is a difference between two readings, so
+    the one before the change must have been seen (a slow runner may not have polled yet)."""
+    def ok():
+        s = point(c.get("/api/board", headers=h).json(), pid)["sample"]
+        return s["quality"] == "GOOD" and s["value"] is value
+    return wait(ok)
+
+
+def milliamps(c, h, pid, value):
+    """Wait for value in mA: the value and the channel's mode are separate registers, so a fresh value can
+    still be shown in V until the mode written by the test has been read back."""
+    return wait(lambda: point(c.get("/api/board", headers=h).json(), pid)["electrical"] == {"value": value, "unit": "mA"})
+
+
 def bench(c, h, lease, target, desired):
     from aquacrop.domain.model import new_id
     st = c.get("/api/status", headers=h).json()
@@ -35,8 +50,7 @@ def test_the_board_shows_modules_asked_and_reported_and_milliamps(hw):
     h = login(c, "bench1")
     ai.modes[0], ai.ai[0] = 3, 12000                        # channel 1 in 4-20 mA mode, 12000 µA
     relay.di[2] = True
-    assert wait(lambda: point(c.get("/api/board", headers=h).json(), "analog_A.AI1")["electrical"] is not None
-                and point(c.get("/api/board", headers=h).json(), "analog_A.AI1")["electrical"]["value"] == 12.0)
+    assert milliamps(c, h, "analog_A.AI1", 12.0) and reads(c, h, "relay_A.DI3", True)
     b = c.get("/api/board", headers=h).json()
     assert b["mode"] == "BENCH" and [m["device_uid"] for m in b["modules"]] == ["relay_A", "analog_A"]
     assert b["can"] == {"command": True, "assign": True, "all_off": True}
@@ -102,6 +116,7 @@ def test_an_input_is_verified_after_it_changes_both_ways(hw):
     c.post("/api/assignments", json={"point": "relay_A.DI4", "signal": "tank.SUMP.low"}, headers=h)
     r = c.post("/api/assignments/verify", json={"point": "relay_A.DI4", "observation": "float lifted by hand"}, headers=h)
     assert r.status_code == 409 and "both ways" in r.json()["detail"]
+    assert reads(c, h, "relay_A.DI4", False)
     relay.di[3] = True
     assert wait(lambda: point(c.get("/api/board", headers=h).json(), "relay_A.DI4")["changes"])
     relay.di[3] = False
@@ -115,7 +130,7 @@ def test_an_analog_input_is_verified_against_the_applied_reference(hw):
     h = login(c, "bench1")
     c.post("/api/assignments", json={"point": "analog_A.AI1", "signal": "tank.MAIN.level"}, headers=h)
     ai.modes[0], ai.ai[0] = 3, 12030
-    assert wait(lambda: (point(c.get("/api/board", headers=h).json(), "analog_A.AI1")["electrical"] or {}).get("value") == 12.03)
+    assert milliamps(c, h, "analog_A.AI1", 12.03)
     body = {"point": "analog_A.AI1", "observation": "calibrator 12.00 mA on AI1"}
     r = c.post("/api/assignments/verify", json=body, headers=h)
     assert r.status_code == 409 and "reference" in r.json()["detail"]
@@ -165,11 +180,12 @@ def test_guided_check_results_carry_what_the_server_saw(hw):
     assert c.post("/api/iochecks", json=step | {"point": "relay_A.DO3", "result": "FAIL", "note": "no LED"}, headers=h).status_code == 200
     r = c.post("/api/iochecks", json=step | {"point": "relay_A.DI1", "result": "PASS"}, headers=h)
     assert r.status_code == 409 and "no change" in r.json()["detail"]
+    assert reads(c, h, "relay_A.DI1", False)
     relay.di[0] = True
     assert wait(lambda: point(c.get("/api/board", headers=h).json(), "relay_A.DI1")["changes"])
     assert c.post("/api/iochecks", json=step | {"point": "relay_A.DI1", "result": "PASS"}, headers=h).status_code == 200
     ai.modes[1], ai.ai[1] = 3, 4010
-    assert wait(lambda: (point(c.get("/api/board", headers=h).json(), "analog_A.AI2")["electrical"] or {}).get("value") == 4.01)
+    assert milliamps(c, h, "analog_A.AI2", 4.01)
     r = c.post("/api/iochecks", json=step | {"point": "analog_A.AI2", "result": "PASS", "reference": 20, "tolerance": 0.1}, headers=h)
     assert r.status_code == 409 and "outside 20" in r.json()["detail"]
     r = c.post("/api/iochecks", json=step | {"point": "analog_A.AI2", "result": "PASS", "reference": 4, "tolerance": 0.05}, headers=h)
