@@ -1,4 +1,6 @@
 import itertools
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,17 @@ from aquacrop.config import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 _bus_ids = itertools.count(1)
+
+
+def pytest_runtest_logreport(report):
+    """On GitHub Actions, each failure also becomes an annotation on the check run, so it can be read from
+    the PR (and through the checks API) without downloading the job log."""
+    if report.failed and os.environ.get("GITHUB_ACTIONS") == "true":
+        path, line, _ = report.location
+        text = str(report.longreprtext)[-1500:]
+        msg = f"{report.nodeid} ({report.when})\n{text}".replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+        sys.__stdout__.write(f"\n::error file={path},line={(line or 0) + 1},title=pytest failure::{msg}\n")
+        sys.__stdout__.flush()
 
 
 @pytest.fixture
