@@ -170,6 +170,11 @@ class BenchArmIn(Body):
     duration_s: int
 
 
+class BenchRenewIn(Body):
+    lease_id: str = Field(max_length=64)
+    duration_s: int
+
+
 class BenchCommandIn(Body):
     backend: Literal["REAL_BENCH"]
     config_version: str
@@ -1387,7 +1392,28 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "confirmation_phrase": CONFIRMATION_PHRASE, "duration_range_s": [MIN_LEASE_S, MAX_LEASE_S],
                 "relay_outputs": [str(x) for x in cfg.all_points() if x.kind == PointKind.DO],
                 "drive_targets": [a.target for a in cfg.drive_adapters if a.kind == "MODBUS_RTU"],
-                "drives": svc.drive_view(), "can_arm": p.can(Perm.BENCH_ARM)}
+                "drives": svc.drive_view(), "can_arm": p.can(Perm.BENCH_ARM),
+                "safe_state": {"outputs_off_on": sorted(svc.safe_triggers), "last": svc.last_safe_off},
+                "poll_s": {k: round(v, 3) for k, v in svc.poll_times.items()},
+                "poll_interval_s": {b.bus_id: b.poll_interval_s for b in cfg.buses}}
+
+    @app.post("/api/bench/lease/renew")
+    async def bench_renew(body: BenchRenewIn, p: Principal = Depends(require(Perm.BENCH_ARM))):
+        from ..control.bench import BenchRefused
+        if is_sim:
+            raise HTTPException(409, "SIMULATED profile: bench writes do not exist here")
+        try:
+            lease = await run_in_threadpool(lambda: svc.renew(p, body.lease_id, body.duration_s))
+        except BenchRefused as e:
+            raise HTTPException(409, str(e))
+        return lease.public(svc._mono())
+
+    @app.post("/api/bench/all-off")
+    async def bench_all_off(p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
+        # OFF only, to every digital output that reads ON; needs no lease (ADR-0016).
+        if is_sim:
+            raise HTTPException(409, "SIMULATED profile: use the virtual outputs")
+        return {"results": await run_in_threadpool(lambda: svc.all_off(p.username))}
 
     @app.post("/api/bench/lease")
     async def bench_arm(body: BenchArmIn, p: Principal = Depends(require(Perm.BENCH_ARM))):

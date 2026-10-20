@@ -13,8 +13,10 @@ A lease is armed only when ALL of these hold:
 
 The lease is bound to the browser session, this process and the configuration version. It lives in
 memory only: a restart can never restore it (stale rows are closed at startup), and nothing in a
-config file or the environment can arm or renew it. On expiry or revocation writes stop being
-accepted; no automatic OFF sequence is sent.
+config file or the environment can arm it. The holder may renew it from the same session, up to 30
+minutes from the moment of renewal. On expiry or revocation writes stop being accepted; the gate itself
+sends nothing, and `on_end` tells the hardware service, which switches the leased outputs OFF only when
+the configuration lists LEASE_END in `safe_state.outputs_off_on` (ADR-0016).
 """
 from __future__ import annotations
 
@@ -70,6 +72,8 @@ class BenchGate:
     preflight: Callable[[set[str]], str | None]          # device_uids -> refusal reason or None
     event: Callable[[str, dict, str | None], None]
     monotonic: Callable[[], float] = time.monotonic
+    on_end: Callable[[BenchLease], None] | None = None
+    persist_renew: Callable[[BenchLease], None] | None = None
     _lease: BenchLease | None = field(default=None, init=False)
 
     # ------------------------------------------------------------------ arming
@@ -139,6 +143,21 @@ class BenchGate:
             return None
         return lease
 
+    def renew(self, p: Principal, lease_id: str | None, duration_s: int) -> BenchLease:
+        """Extend the active lease from now, for its holder in the same browser session only."""
+        if (why := self.check_session(p, lease_id)) is not None:
+            raise BenchRefused(why)
+        if not isinstance(duration_s, int) or isinstance(duration_s, bool) or not MIN_LEASE_S <= duration_s <= MAX_LEASE_S:
+            raise BenchRefused(f"duration must be {MIN_LEASE_S}..{MAX_LEASE_S} s")
+        lease = self._lease
+        assert lease is not None
+        lease.expires_utc = utcnow() + timedelta(seconds=duration_s)
+        lease.expires_monotonic = self.monotonic() + duration_s
+        if self.persist_renew is not None:
+            self.persist_renew(lease)
+        self.event("BENCH_LEASE_RENEWED", lease.public(self.monotonic()), p.username)
+        return lease
+
     def revoke(self, reason: str, actor: str | None) -> bool:
         lease = self._lease
         if lease is None:
@@ -158,7 +177,11 @@ class BenchGate:
             self.persist_end(lease)
         finally:
             self.event("BENCH_LEASE_ENDED", {"lease_id": lease.lease_id, "reason": reason,
-                                             "note": "no automatic output change is sent on lease end"}, actor)
+                                             "note": "no automatic output change is sent on lease end by the "
+                                                     "gate (safe_state LEASE_END is a separate, audited OFF)"},
+                       actor)
+            if self.on_end is not None:
+                self.on_end(lease)
 
     # ------------------------------------------------------------------ per-request checks
     def check_session(self, p: Principal, lease_id: str | None) -> str | None:
@@ -216,6 +239,12 @@ def historian_persistence(hist):
                        lease.setup_description, utc_iso(lease.created_utc), utc_iso(lease.expires_utc)))
         hist.submit(op, wait=True)
 
+    def renew(lease: BenchLease) -> None:
+        def op(c):
+            c.execute("UPDATE bench_leases SET expires_utc=? WHERE lease_id=? AND revoked_utc IS NULL",
+                      (utc_iso(lease.expires_utc), lease.lease_id))
+        hist.submit(op, wait=True)
+
     def end(lease: BenchLease) -> None:
         def op(c):
             c.execute("UPDATE bench_leases SET revoked_utc=?, revoke_reason=? WHERE lease_id=? AND revoked_utc IS NULL",
@@ -224,4 +253,4 @@ def historian_persistence(hist):
             hist.submit(op, wait=True)
         except Exception:
             pass   # the in-memory lease is already gone; writes are refused regardless
-    return arm, end
+    return arm, end, renew

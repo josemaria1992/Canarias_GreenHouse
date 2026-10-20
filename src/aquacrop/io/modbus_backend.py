@@ -15,6 +15,9 @@
   word every cycle, with the same backoff. A bench write to it is preceded by a fresh status read
   (refused while it reports a fault), sent as FC06 frames exactly once each, and answered by its echo
   and a status read: ECHO_CONFIRMED, never actuator proof. Nothing is written to it otherwise.
+* Safe state (ADR-0016): a command with origin SAFE_STATE may only switch a digital output OFF. It needs
+  no lease, but takes the same fresh mode preflight, FC05 sent once and FC01 readback. It is the only
+  write that is not authorized by the bench gate, and it can never switch anything ON or touch a drive.
 * `close()` releases ports and sends nothing.
 """
 from __future__ import annotations
@@ -24,8 +27,8 @@ from typing import Callable
 
 from ..config.catalog import CATALOG, Capability, DIGITAL_IO_MODELS, ModelId
 from ..config.schema import InstallationConfig
-from ..domain.model import (AccessPolicy, AcquisitionResult, DeviceHealth, Origin, OutputCommand, Outcome, PointId,
-                            PointKind, WriteResult, utcnow)
+from ..domain.model import (AccessPolicy, AcquisitionResult, CommandOrigin, DeviceHealth, Origin, OutputCommand,
+                            Outcome, PointId, PointKind, WriteResult, utcnow)
 from ..drivers.rtu import RtuBus, RtuError, RtuExceptionResponse, RtuRefused
 from ..drivers.vfd import VfdCommandError, VfdDevice, VfdStatus
 from ..drivers.waveshare import RelayModes, WaveshareDevice
@@ -35,6 +38,23 @@ BACKOFF_AFTER_FAILURES = 3
 BACKOFF_MAX_S = 60.0
 
 Authorizer = Callable[[OutputCommand], "str | None"]
+
+
+def safe_state_policy(cmd: OutputCommand) -> str | None:
+    """The whole policy for SAFE_STATE commands: OFF, to a digital output point. Nothing else."""
+    if cmd.origin != CommandOrigin.SAFE_STATE:
+        return "not a safe-state command"
+    if cmd.desired is not False:
+        return "safe state only switches outputs OFF"
+    if cmd.target.startswith("drive:"):
+        return "safe state does not write to drives"
+    try:
+        pid = PointId.parse(cmd.target)
+    except ValueError as e:
+        return str(e)
+    if pid.kind != PointKind.DO:
+        return "safe state only writes digital outputs"
+    return None
 
 
 class ModbusBackend:
@@ -135,10 +155,14 @@ class ModbusBackend:
         self._ok(target, utcnow())
         return st, None
 
+    def _authorizer(self, command: OutputCommand) -> Authorizer | None:
+        return safe_state_policy if command.origin == CommandOrigin.SAFE_STATE else self.authorize
+
     def write_output(self, command: OutputCommand) -> WriteResult:
-        if self.authorize is None:
+        auth = self._authorizer(command)
+        if auth is None:
             return WriteResult(Outcome.REJECTED, None, "read-only profile: no bench lease armed")
-        if (why := self.authorize(command)) is not None:
+        if (why := auth(command)) is not None:
             return WriteResult(Outcome.REJECTED, None, why)
         if command.target in self.drives:
             return self._write_drive(command)
@@ -204,15 +228,20 @@ class ModbusBackend:
     def _write_guard(self, command: OutputCommand) -> str | None:
         """Run inside the bus lock immediately before each FC05/FC06 frame (after preflight reads and any
         wait for the bus): the lease, configuration version and command expiry must still hold."""
-        if self.authorize is None:
+        auth = self._authorizer(command)
+        if auth is None:
             return "read-only profile: no bench lease armed"
-        if (why := self.authorize(command)) is not None:
+        if (why := auth(command)) is not None:
             return why
         if command.expected_config_version != self.cfg.config_version:
             return "configuration version changed before write"
         if command.expires_utc <= utcnow():
             return "command expired before write"
         return None
+
+    def coils_on(self, device_uid: str) -> list[int]:
+        """The channels whose coil reads ON now (one FC01 read); raises RtuError if the module does not answer."""
+        return [i + 1 for i, v in enumerate(self.devices[device_uid].read_coils()) if v]
 
     def close(self) -> None:
         for b in self.buses.values():
