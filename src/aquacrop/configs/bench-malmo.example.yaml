@@ -3,6 +3,9 @@
 # must be replaced with verified commissioning evidence before use. Starts HARDWARE_READ_ONLY: no writes;
 # bench writes need a bench lease (ADR-0003). Its own config_id and database: never the installation's.
 # Copy to configs/bench-malmo.yaml and edit. Do not copy DEMO scaling or twin values here.
+# Since 0.4.0 the bench configuration is generated instead: `aquacrop hw make-config` from the `hw setup`
+# records, two ports (COM1 digital, COM2 analog) and safe-state OFF (docs/installation/bench-bringup.md).
+# This file keeps the earlier single-port layout for reference.
 schema_version: 1
 config_id: bench-malmo-example
 config_version: "UNVERIFIED-1"            # 1: 17 GiB database budget (owner, 2026-10-13)
