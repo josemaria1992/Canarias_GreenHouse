@@ -879,6 +879,40 @@ async function board040(b) {
   const wide = await p.evaluate(() => document.scrollingElement.scrollWidth);
   await shot(p, "board-3-phone");
   check("BOARD-08 phone width", wide <= 391, `page ${wide} px wide at 390 px`);
+  // the guided check: Next moves through every channel; each output is ON during its own step only
+  await p.setViewportSize({ width: 1366, height: 1000 });
+  await show(p, "board");
+  const gp = p.locator("#v-board .card.guide");
+  await gp.locator('select[aria-label="Which modules"]').selectOption("relay_B");
+  await gp.getByRole("button", { name: "Start guided check" }).click();
+  const s1 = await until(p, async () => { const x = await boardPoint(p, "relay_B.DO1"); return x.sample.value === true && x.asked.desired === true; }, 10000);
+  const t1 = await gp.innerText();
+  await shot(p, "board-4-guided-output");
+  await gp.getByRole("button", { name: "Works" }).click();
+  await gp.getByRole("button", { name: "Next", exact: true }).click();
+  const s2 = await until(p, async () => { const a = await boardPoint(p, "relay_B.DO1"), b2 = await boardPoint(p, "relay_B.DO2");
+    return a.sample.value === false && b2.sample.value === true; }, 10000);
+  await until(p, async () => /2 of 16/.test(await gp.innerText()), 5000);
+  await gp.getByRole("button", { name: "Doesn't work" }).click();
+  await gp.getByRole("button", { name: "Next", exact: true }).click();
+  await until(p, async () => /3 of 16/.test(await gp.innerText()), 10000);
+  for (let k = 3; k <= 8; k++) {                                       // skip the other outputs
+    await gp.getByRole("button", { name: "Next (skip this one)" }).click();
+    await until(p, async () => new RegExp(`${k + 1} of 16`).test(await gp.innerText()), 10000);
+  }
+  const t9 = await gp.innerText();
+  await gp.getByRole("button", { name: "1", exact: true }).click();     // the virtual input changes
+  const auto = await until(p, async () => (await gp.getByRole("button", { name: "Works" }).getAttribute("aria-pressed")) === "true", 10000);
+  await shot(p, "board-5-guided-input");
+  await gp.getByRole("button", { name: "Next", exact: true }).click();
+  await until(p, async () => /10 of 16/.test(await gp.innerText()), 10000);
+  await gp.getByRole("button", { name: "Stop guided check" }).click();
+  const res = await get(p, "/api/iochecks");
+  const anyOn = (await get(p, "/api/board")).modules.flatMap(m => m.points).filter(x => x.kind === "DO" && x.sample.value).map(x => x.id);
+  check("BOARD-09 guided check with Next", !!s1 && !!s2 && /Output relay_B.DO1 is switched ON/.test(t1) && /Change input relay_B.DI1 now/.test(t9) && auto &&
+    res["relay_B.DO1"].result === "PASS" && res["relay_B.DO2"].result === "FAIL" && res["relay_B.DO5"].result === "SKIPPED" &&
+    res["relay_B.DI1"].result === "PASS" && anyOn.length === 0,
+    `DO1 ON during its step then OFF at Next (works), DO2 (doesn't work), DO3-8 skipped, DI1 change seen and marked works; after Stop no output reads ON (${anyOn.join(",") || "none"})`);
   await api(p, "/api/io/source", "POST", { source: "TWIN" });
   await api(p, "/api/users/" + USER, "POST", { commissioning: false });
   check("BOARD page errors", errs.length === 0, errs.join("; ") || "none");

@@ -188,6 +188,16 @@ class VerifyIn(Body):
     tolerance: float | None = Field(default=None, gt=0, le=100)
 
 
+class CheckIn(Body):
+    run_id: str = Field(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    point: str = Field(max_length=64)
+    result: Literal["PASS", "FAIL", "SKIPPED"]
+    started_utc: datetime
+    note: str | None = Field(default=None, max_length=300)
+    reference: float | None = Field(default=None, ge=-1000, le=1000)
+    tolerance: float | None = Field(default=None, gt=0, le=100)
+
+
 class BenchCommandIn(Body):
     backend: Literal["REAL_BENCH"]
     config_version: str
@@ -277,9 +287,10 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     from ..historian.offsite import Busy, NotActivated, Offsite, OffsiteMonitor, PolicyMismatch
     offsite = OffsiteMonitor(cfg, state_dir, hist)
     svc.offsite = offsite
-    from ..control.assignments import AssignmentRefused, Assignments, EdgeWatch, electrical
+    from ..control.assignments import AssignmentRefused, Assignments, ChannelChecks, EdgeWatch, electrical
     from ..twin.installation_params import InstallationFacts
     assignments = Assignments(hist, cfg, InstallationFacts().signal_catalogue())
+    channel_checks = ChannelChecks(hist, cfg, assignments)
     edges = EdgeWatch()
 
     async def watch_edges():
@@ -643,7 +654,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         the last output command (asked) beside the coil readback (reported), the input changes seen and
         the channel's assignment record. On the simulation the modules are virtual."""
         samples, now = _samples(), datetime.now(timezone.utc)
-        cur = assignments.current()
+        cur, checked = assignments.current(), channel_checks.latest()
         dos = [str(x) for x in cfg.all_points() if x.kind == PointKind.DO]
         asked = _asked(dos)
         mods = []
@@ -654,7 +665,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             for x in d.point_ids():
                 pid, s = str(x), samples.get(str(x))
                 e = {"id": pid, "kind": x.kind.value, "channel": x.channel, "label": d.label_for(x),
-                     "assignment": cur.get(pid)}
+                     "assignment": cur.get(pid), "check": checked.get(pid)}
                 if is_sim:
                     m = cfg.mapping_for_point(pid)
                     e["model_signal"] = m.signal if m else None
@@ -669,7 +680,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 elif x.kind == PointKind.DO:
                     e["asked"] = asked.get(pid)
                 else:
-                    e["changes"] = edges.since(pid, now - timedelta(minutes=15))[-2:]
+                    e["changes"] = edges.since(pid, now - timedelta(minutes=15))
                 pts.append(e)
             mods.append({"device_uid": d.device_uid, "label": d.label, "model": cat.vendor_name, "sku": d.sku,
                          "model_id": d.model.value, "bus_id": d.bus_id, "address": d.address, "online": hl.online,
@@ -679,6 +690,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         out = {"mode": "SIMULATION" if is_sim else "BENCH", "profile": cfg.profile.value, "config_id": cfg.config_id,
                "config_version": cfg.config_version, "freshness": _freshness(), "modules": mods,
                "assigned": {s: sum(1 for a in cur.values() if a["status"] == s) for s in ("PROPOSED", "VERIFIED")},
+               "checked": {s: sum(1 for c in checked.values() if c["result"] == s) for s in ("PASS", "FAIL", "SKIPPED")},
                "can": {"command": p.can(Perm.SIM_COMMAND) if is_sim else p.can(Perm.BENCH_ARM),
                        "assign": p.can(Perm.IO_ASSIGN), "all_off": p.can(Perm.PROCESS_CONTROL if not is_sim
                                                                          else Perm.SIM_COMMAND)}}
@@ -717,9 +729,22 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         except AssignmentRefused as e:
             raise HTTPException(409, str(e))
 
+    @app.post("/api/iochecks")
+    def iocheck_record(body: CheckIn, p: Principal = Depends(require(Perm.IO_ASSIGN))):
+        try:
+            return channel_checks.record(p.username, run_id=body.run_id, point=body.point, result=body.result,
+                                         started_utc=body.started_utc, note=body.note, samples=_samples(), edges=edges,
+                                         reference=body.reference, tolerance=body.tolerance)
+        except AssignmentRefused as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/api/iochecks")
+    def iocheck_list(p: Principal = Depends(require(Perm.READ))):
+        return channel_checks.latest()
+
     @app.get("/api/assignments/export")
     def assignment_export(fmt: str = Query("yaml", pattern="^(yaml|json)$"), p: Principal = Depends(require(Perm.READ))):
-        doc = assignments.export(__version__)
+        doc = assignments.export(__version__, channel_checks.latest())
         name = f"aquacrop-io-assignments-{cfg.config_id}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         if fmt == "json":
             body, mt = json.dumps(doc, indent=2), "application/json"

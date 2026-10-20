@@ -1037,6 +1037,9 @@
     const inLease = new Set(b.lease ? b.lease.allowlist : []);
     const pick = p => h("button", { class: "linkbtn chan", onclick: () => { S.boardSel = S.boardSel === p.id ? null : p.id; refresh(); },
       "aria-expanded": S.boardSel === p.id ? "true" : "false", title: "Assign or verify this channel" }, p.kind + p.channel);
+    const cur = S.guide && !S.guide.done ? S.guide.order[S.guide.i] : null;
+    const chk = p => p.check ? h("span", { class: "chk chk-" + p.check.result, title: `guided check ${p.check.result} · ${p.check.actor} · ${fmtTime(p.check.utc)}${p.check.note ? " · " + p.check.note : ""}` },
+      { PASS: "✓ works", FAIL: "✗ doesn't work", SKIPPED: "skipped" }[p.check.result]) : null;
     const asg = p => p.assignment ? h("span", { class: "asg asg-" + p.assignment.status, title: p.assignment.status }, p.assignment.signal, " ", p.assignment.status === "VERIFIED" ? "✓" : "?")
       : sim && p.model_signal ? h("span", { class: "muted small", title: "what the simulation wires to this channel" }, "model: " + p.model_signal) : h("span", { class: "muted small" }, "free");
     const dos = m.points.filter(p => p.kind === "DO"), dis = m.points.filter(p => p.kind === "DI"), ais = m.points.filter(p => p.kind === "AI");
@@ -1046,26 +1049,26 @@
       const differs = ask != null && rep != null && ask !== rep;
       const ok = sim ? b.can.command : b.can.command && b.lease && inLease.has(p.id);
       const why = sim ? (b.can.command ? "" : "needs the operator role") : !b.lease ? "start a test session first" : !inLease.has(p.id) ? "not in this test session" : "";
-      return h("div", { class: "tile" + (differs ? " differs" : ""), "data-point": p.id },
+      return h("div", { class: "tile" + (differs ? " differs" : "") + (cur === p.id ? " current" : ""), "data-point": p.id },
         h("div", { class: "tile-head" }, pick(p), h("span", { class: "lights" }, led(ask, "asked", "asked: " + (ask == null ? "no command yet" : ask ? "ON" : "OFF")), led(rep, "", "reported: " + (rep == null ? "not read" : rep ? "ON" : "OFF")))),
         h("button", { class: "switch" + (rep ? " on" : ""), role: "switch", "aria-checked": rep ? "true" : "false", "aria-label": `${p.id} ${p.label || ""}`.trim(),
           disabled: !ok || rep == null, title: why || (rep ? "switch OFF" : "switch ON"), onclick: () => boardSend(b, p.id, !rep) }, rep == null ? "?" : rep ? "ON" : "OFF"),
-        h("div", { class: "small" }, differs ? h("strong", null, "asked " + (ask ? "ON" : "OFF") + ", reads " + (rep ? "ON" : "OFF")) : p.asked ? `asked ${ask ? "ON" : "OFF"} ${ago((Date.now() - Date.parse(p.asked.utc)) / 1000)}` : "no command yet"),
-        asg(p));
+        h("div", { class: "small" }, differs ? h("strong", null, "asked " + (ask ? "ON" : "OFF") + ", reads " + (rep ? "ON" : "OFF")) : p.asked ? `asked ${ask ? "ON" : "OFF"} ${ago((serverNow() - Date.parse(p.asked.utc)) / 1000)}` : "no command yet"),
+        chk(p), asg(p));
     };
     const diTile = p => {
       const v = p.sample && p.sample.quality === "GOOD" ? !!p.sample.value : null;
-      return h("div", { class: "tile", "data-point": p.id }, h("div", { class: "tile-head" }, pick(p), led(v, "input", v == null ? "not read" : v ? "1" : "0")),
+      return h("div", { class: "tile" + (cur === p.id ? " current" : ""), "data-point": p.id }, h("div", { class: "tile-head" }, pick(p), led(v, "input", v == null ? "not read" : v ? "1" : "0")),
         h("div", { class: "big mono" }, v == null ? "—" : v ? "1" : "0"),
         raw && b.can.command ? h("div", { class: "row" }, cbtn("1", () => act("POST", "/api/io/inject", { point: p.id, raw: true })), cbtn("0", () => act("POST", "/api/io/inject", { point: p.id, raw: false }), "ghost")) : null,
-        h("div", { class: "small muted" }, (p.changes || []).length ? `changed ${(p.changes || []).length}× in 15 min` : "no change seen"), asg(p));
+        h("div", { class: "small muted" }, (p.changes || []).length ? `changed ${(p.changes || []).length}× in 15 min` : "no change seen"), chk(p), asg(p));
     };
     const aiRow = p => {
       const s = p.sample || {}, e = p.electrical, r = boardRange(p);
       const pct = e && r ? Math.max(0, Math.min(100, 100 * (e.value - r[0]) / (r[1] - r[0]))) : 0;
       const inj = raw && b.can.command ? h("input", { type: "number", min: 0, max: 65535, step: 1, style: "width:80px", "aria-label": `${p.id} raw value to inject`, placeholder: (s.raw_unit || "raw") }) : null;
       const mode = (p.mode || "").replace(/^CURRENT_|^VOLTAGE_/, "").replace(/_/g, "-") + ({ CURRENT: " mA", VOLTAGE: " V" }[(p.mode || "").split("_")[0]] || "");
-      return h("tr", { "data-point": p.id }, h("td", null, pick(p), h("div", { class: "small muted" }, mode), h("div", null, asg(p))),
+      return h("tr", { "data-point": p.id, class: cur === p.id ? "current" : null }, h("td", null, pick(p), h("div", { class: "small muted" }, mode), h("div", null, chk(p)), h("div", null, asg(p))),
         h("td", null, h("div", { class: "mono big" }, e ? `${e.value.toFixed(e.unit === "mA" ? 2 : 3)} ${e.unit}` : "—"),
           h("div", { class: "mono small muted" }, s.raw == null ? "no raw value" : `raw ${s.raw} ${s.raw_unit || ""}`)),
         h("td", { class: "barcell" }, h("div", { class: "bar", title: r ? `${r[0]}–${r[1]} ${r[2]}` : "" }, h("div", { class: "fill", style: `width:${pct.toFixed(1)}%` })),
@@ -1115,6 +1118,127 @@
       can ? null : h("p", { class: "muted small" }, "Assigning needs the commissioning permission."),
       h("p", { class: "muted small" }, "An assignment is a record for the later wiring approval. It does not connect the channel to the irrigation program."));
   }
+  // Guided check (owner request 2026-10-20): every channel in turn, moved on with a manual Next. An output is
+  // switched ON when its step starts (the one before is switched OFF first), an input waits for its change,
+  // an analog input shows its reading. Works / Doesn't work is the user's judgement, recorded per channel.
+  function serverNow() { return S.status ? Date.parse(S.status.freshness.server_utc) + (Date.now() - S.lastOk) : Date.now(); }
+  function guideOrder(b, only) {
+    return b.modules.filter(m => !only || m.device_uid === only).flatMap(m => ["DO", "DI", "AI"].flatMap(k => m.points.filter(p => p.kind === k).map(p => p.id)));
+  }
+  async function guideSwitch(b, target, desired) {
+    const body = b.mode === "SIMULATION"
+      ? ["/api/commands", { backend: "SIMULATED", config_version: S.cfgVersion, target, desired, request_id: rid(), reason: "I/O board guided check" }]
+      : ["/api/bench/command", { backend: "REAL_BENCH", config_version: S.cfgVersion, lease_id: b.lease && b.lease.lease_id, target, desired, request_id: rid(), reason: "I/O board guided check" }];
+    try { const r = await api("POST", ...body); return r.outcome; }
+    catch (e) { toast(W.refusal(String(e.message || e)), true, String(e.message || e)); return "REFUSED"; }
+  }
+  async function guideEnter(b) {
+    const g = S.guide, id = g.order[g.i];
+    g.start = new Date(serverNow() - 1000).toISOString();   // the server's clock, so its records compare
+    g.result = null; g.note = ""; g.sent = null; g.ref = ""; delete g.done;
+    if (id && id.includes(".DO")) g.sent = await guideSwitch(b, id, true);
+    refresh();
+    setTimeout(() => { const t = document.querySelector(`#v-board [data-point="${id}"]`); if (t) t.scrollIntoView({ block: "center", behavior: "smooth" }); }, 300);
+  }
+  async function guideLeave(b) {        // the current output goes OFF before anything else happens
+    const g = S.guide, id = g.order[g.i];
+    if (id && id.includes(".DO") && g.sent && g.sent !== "REFUSED") await guideSwitch(b, id, false);
+  }
+  async function guideStart(b, only, skipPassed) {
+    if (b.mode === "SIMULATION" && b.source !== "IO_TEST") await api("POST", "/api/io/source", { source: "IO_TEST" }).catch(() => {});
+    let order = guideOrder(b, only);
+    if (skipPassed) {
+      const passed = new Set(b.modules.flatMap(m => m.points).filter(p => p.check && p.check.result === "PASS").map(p => p.id));
+      order = order.filter(id => !passed.has(id));
+    }
+    if (!order.length) return toast("Every channel in this choice has already passed");
+    S.guide = { run: "chk_" + rid().slice(3, 19), order, i: 0, counts: { PASS: 0, FAIL: 0, SKIPPED: 0 } };
+    await guideEnter(b);
+  }
+  async function guideNext(b, dir) {
+    const g = S.guide;
+    if (!g || g.busy) return;
+    g.busy = true;
+    try {
+      const id = g.order[g.i];
+      if (dir > 0) {
+        const result = g.result || "SKIPPED";
+        const ref = id.includes(".AI") && g.ref !== "" && g.ref != null ? Number(g.ref) : null;
+        try {
+          await api("POST", "/api/iochecks", { run_id: g.run, point: id, result, started_utc: g.start, note: g.note || null,
+            reference: ref, tolerance: ref == null ? null : Number(g.tol || 0.1) });
+          g.counts[result] += 1;
+        } catch (e) { toast(W.refusal(String(e.message || e)), true, String(e.message || e)); return; }   // stay on this step
+      }
+      await guideLeave(b);
+      g.i += dir;
+      if (g.i < 0) g.i = 0;
+      if (g.i >= g.order.length) { g.done = true; refresh(); return; }
+      await guideEnter(b);
+    } finally { g.busy = false; }
+  }
+  async function guideStop(b) { if (S.guide && !S.guide.done) await guideLeave(b); S.guide = null; refresh(); }
+  function guidePanel(b) {
+    const g = S.guide, all = b.modules.flatMap(m => m.points);
+    const can = b.can.assign && b.can.command;
+    if (!g) {
+      const only = h("select", { "aria-label": "Which modules" }, h("option", { value: "" }, "every module"), b.modules.map(m => h("option", { value: m.device_uid }, m.device_uid)));
+      const skip = h("input", { type: "checkbox", checked: true, "aria-label": "Skip channels that already passed" });
+      const c = b.checked || {};
+      return h("div", { class: "card guide" }, h("h2", null, "Guided check"),
+        h("p", null, "Checks one channel at a time; you move on with Next. An output is switched ON for you to see it (and OFF again at Next), an input waits for you to change it, an analog input shows its reading."),
+        h("p", { class: "muted small" }, `So far: ${c.PASS || 0} work, ${c.FAIL || 0} don't, ${c.SKIPPED || 0} skipped, of ${all.length} channels.`),
+        b.mode === "BENCH" && !b.lease ? h("p", { class: "warn-text" }, "Start a test session first, so the outputs can be switched.") : null,
+        h("div", { class: "row" }, h("label", null, "Check ", only), h("label", null, skip, " skip channels that already work"),
+          h("button", { class: "cmd", disabled: !can || (b.mode === "BENCH" && !b.lease), onclick: () => guideStart(b, only.value, skip.checked) }, "Start guided check")),
+        can ? null : h("p", { class: "muted small" }, "The guided check needs the commissioning permission and the right to switch outputs."));
+    }
+    if (g.done) {
+      return h("div", { class: "card guide" }, h("h2", null, "Guided check finished"),
+        h("p", null, `${g.order.length} channels: ${g.counts.PASS} work, ${g.counts.FAIL} don't, ${g.counts.SKIPPED} skipped. Every output it switched is OFF again.`),
+        h("div", { class: "row" }, h("a", { href: "/api/assignments/export?fmt=yaml", download: "" }, "Export results and assignments (YAML)"),
+          h("button", { class: "cmd ghost", onclick: () => { S.guide = null; refresh(); } }, "Close")));
+    }
+    const id = g.order[g.i], p = all.find(x => x.id === id) || { id, kind: "?" };
+    const choose = r => { g.result = g.result === r ? null : r; refresh(); };
+    const choice = h("div", { class: "row" },
+      h("button", { class: "cmd" + (g.result === "PASS" ? "" : " ghost"), "aria-pressed": g.result === "PASS" ? "true" : "false", onclick: () => choose("PASS") }, "Works"),
+      h("button", { class: "cmd" + (g.result === "FAIL" ? " danger" : " ghost"), "aria-pressed": g.result === "FAIL" ? "true" : "false", onclick: () => choose("FAIL") }, "Doesn't work"));
+    const note = h("input", { placeholder: "note (optional)", maxlength: 300, value: g.note || "", style: "min-width:220px", "aria-label": "Note for this channel",
+      oninput: e => { g.note = e.target.value; } });
+    let body;
+    if (p.kind === "DO") {
+      const rep = p.sample ? !!p.sample.value : null;
+      body = [h("p", { class: "lead" }, `Output ${p.id} is switched ON. Is the LED, lamp or relay on this output on?`),
+        h("p", null, led(rep, "", ""), " ", g.sent == null ? "switching ON…" : g.sent === "REFUSED" ? "the ON command was refused (see the message)" :
+          `asked ON: ${g.sent}; the module reads ${rep == null ? "nothing" : rep ? "ON" : "OFF"}`),
+        h("p", { class: "muted small" }, "Next records your answer and switches this output OFF before the next channel.")];
+    } else if (p.kind === "DI") {
+      const seen = (p.changes || []).filter(c => Date.parse(c[0]) >= Date.parse(g.start));
+      if (seen.length && !g.result) g.result = "PASS";
+      const v = p.sample && p.sample.quality === "GOOD" ? !!p.sample.value : null;
+      body = [h("p", { class: "lead" }, `Change input ${p.id} now: press the button or close the switch, then release it.`),
+        h("p", null, led(v, "input", ""), " ", h("strong", { class: "mono" }, v == null ? "—" : v ? "1" : "0"), "  ",
+          seen.length ? `seen: ${seen.map(c => `${c[1] ? "0→1" : "1→0"} at ${fmtTime(c[0]).slice(-8)}`).join(", ")}` : "waiting for the input to change…"),
+        b.mode === "SIMULATION" ? h("div", { class: "row" }, h("span", { class: "muted small" }, "Virtual input:"), cbtn("1", () => act("POST", "/api/io/inject", { point: p.id, raw: true })), cbtn("0", () => act("POST", "/api/io/inject", { point: p.id, raw: false }), "ghost")) : null];
+    } else {
+      const e = p.electrical, s = p.sample || {};
+      const ref = h("input", { type: "number", step: "any", value: g.ref || "", style: "width:90px", "aria-label": "Expected value", oninput: ev => { g.ref = ev.target.value; } });
+      const tol = h("input", { type: "number", step: "any", min: 0, value: g.tol || 0.1, style: "width:70px", "aria-label": "Tolerance", oninput: ev => { g.tol = ev.target.value; } });
+      body = [h("p", { class: "lead" }, `Apply your signal to ${p.id} and read the value.`),
+        h("p", null, h("strong", { class: "mono big" }, e ? `${e.value.toFixed(e.unit === "mA" ? 2 : 3)} ${e.unit}` : "no reading"), " ",
+          h("span", { class: "muted small" }, s.raw == null ? "" : `raw ${s.raw} ${s.raw_unit || ""} · ${ago(s.age_s)}`), " ", qBadge(s.quality || "UNAVAILABLE")),
+        h("div", { class: "row" }, h("label", null, `Expected (${e ? e.unit : "mA"}, optional) `, ref), h("label", null, "± ", tol)),
+        b.mode === "SIMULATION" ? h("p", { class: "muted small" }, "Virtual input: type a raw value in the module's Inject field below.") : null];
+    }
+    return h("div", { class: "card guide armed-soft" },
+      h("div", { class: "row" }, h("h2", null, `Guided check · ${g.i + 1} of ${g.order.length}`), h("span", { class: "mono" }, p.id), p.label ? h("span", { class: "muted small" }, p.label) : null),
+      ...body, choice, h("div", { class: "row" }, note),
+      h("div", { class: "row" },
+        h("button", { class: "cmd ghost", disabled: g.i === 0, onclick: () => guideNext(b, -1) }, "Back"),
+        h("button", { class: "cmd", onclick: () => guideNext(b, +1) }, g.result ? "Next" : "Next (skip this one)"),
+        h("button", { class: "cmd ghost", onclick: () => guideStop(b) }, "Stop guided check")));
+  }
   VIEWS.board = async function () {
     const b = await api("GET", "/api/board");
     if (!S.boardSignals) S.boardSignals = await api("GET", "/api/assignments");
@@ -1127,7 +1251,7 @@
       h("p", { class: "muted" }, "For commissioning: check every module and channel, then assign each channel to the installation signal it carries. Click a channel name to assign or verify it. Lights: left = asked (last command), right = reported (read back from the module)."),
       h("div", { class: "row" }, h("button", { class: "cmd danger", disabled: !b.can.all_off || (b.mode === "SIMULATION" && !onCount), onclick: () => boardAllOff(b) }, "All outputs OFF"),
         h("span", { class: "muted small" }, `${onCount} of ${outs.length} outputs read ON`)));
-    mount("v-board", head, boardSession(b), h("div", { class: "modules" }, b.modules.map(m => boardModule(b, m))));
+    mount("v-board", head, boardSession(b), guidePanel(b), h("div", { class: "modules" }, b.modules.map(m => boardModule(b, m))));
   };
 
   // ------------------------------------------------ control

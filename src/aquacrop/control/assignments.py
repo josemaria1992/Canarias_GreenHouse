@@ -209,8 +209,8 @@ class Assignments:
                 "unit": unit, "raw": s.raw_value, "raw_unit": s.raw_unit, "sample_utc": s.acquired_utc.isoformat()}
 
     # ------------------------------------------------------------------ export
-    def export(self, software_version: str) -> dict:
-        cur = self.current()
+    def export(self, software_version: str, checks: dict | None = None) -> dict:
+        cur, checks = self.current(), checks or {}
         pts = []
         for p in self.cfg.all_points():
             a = cur.get(str(p))
@@ -219,7 +219,7 @@ class Assignments:
                         "kind": p.kind.value, "channel": p.channel, "signal": a["signal"] if a else None,
                         "status": a["status"] if a else "UNASSIGNED", "by": a["actor"] if a else None,
                         "utc": a["utc"] if a else None, "note": a["note"] if a else None,
-                        "evidence": a["evidence"] if a else None})
+                        "evidence": a["evidence"] if a else None, "check": checks.get(str(p))})
         n = {s: sum(1 for x in pts if x["status"] == s) for s in ("VERIFIED", "PROPOSED", "UNASSIGNED")}
         return {"kind": "AQUACROP_IO_ASSIGNMENT_PROPOSAL", "config_id": self.cfg.config_id,
                 "config_version": self.cfg.config_version, "profile": self.cfg.profile.value,
@@ -229,3 +229,74 @@ class Assignments:
                          "VERIFIED means the channel was exercised on the bench and the user saw the device respond; "
                          "it says nothing about scaling, setpoints or the plant."),
                 "points": pts}
+
+
+CHECK_RESULTS = ("PASS", "FAIL", "SKIPPED")
+
+
+class ChannelChecks:
+    """The guided channel check of the I/O board (ADR-0016): one result per channel and step, append-only
+    (`io_checks`). The board steps through every channel with a manual Next; this records what was seen.
+
+    A PASS carries what the server saw during the step, from the step's start: for an output a command ON
+    confirmed by readback; for an input at least one change; for an analog input a fresh reading (within
+    the tolerance when the user gave a reference). The user's own judgement (the lamp lit, the light came
+    on) is the PASS itself; FAIL and SKIPPED need no evidence."""
+
+    def __init__(self, hist, cfg, assignments: Assignments):
+        self.h, self.cfg, self.a = hist, cfg, assignments
+
+    def latest(self) -> dict[str, dict]:
+        rows = self.h.query(
+            "SELECT c.point, c.run_id, c.result, c.actor, c.utc, c.note, c.evidence_json FROM io_checks c "
+            "JOIN (SELECT point, max(seq) AS seq FROM io_checks WHERE config_id=? GROUP BY point) m ON c.seq = m.seq",
+            (self.cfg.config_id,))
+        return {r["point"]: {"run_id": r["run_id"], "result": r["result"], "actor": r["actor"], "utc": r["utc"],
+                             "note": r["note"], "evidence": json.loads(r["evidence_json"] or "{}")} for r in rows}
+
+    def record(self, actor: str, *, run_id: str, point: str, result: str, started_utc: datetime, note: str | None,
+               samples: dict, edges: EdgeWatch, reference: float | None = None, tolerance: float | None = None,
+               now: datetime | None = None) -> dict:
+        pid = self.a._point(point)
+        if result not in CHECK_RESULTS:
+            raise AssignmentRefused(f"result is one of {', '.join(CHECK_RESULTS)}")
+        now = now or datetime.now(timezone.utc)
+        if started_utc.tzinfo is None or not now - timedelta(hours=2) <= started_utc <= now + timedelta(seconds=5):
+            raise AssignmentRefused("the step start time is not plausible; start the step again")
+        evidence: dict = {"step_started_utc": started_utc.isoformat()}
+        if result == "PASS":
+            if pid.kind == PointKind.DO:
+                rows = self.h.query("SELECT request_id, intent_utc FROM commands WHERE target=? AND actor=? AND desired=1 "
+                                    "AND outcome='READBACK_CONFIRMED' AND intent_utc>=? ORDER BY intent_utc LIMIT 1",
+                                    (point, actor, started_utc.isoformat(timespec="microseconds")))
+                if not rows:
+                    raise AssignmentRefused(f"{point} was not confirmed ON during this step; switch it ON first")
+                evidence |= {"check": "DO_ON", "on": rows[0]["request_id"], "on_utc": rows[0]["intent_utc"]}
+            elif pid.kind == PointKind.DI:
+                seen = edges.since(point, started_utc)
+                if not seen:
+                    raise AssignmentRefused(f"no change of {point} was seen during this step")
+                evidence |= {"check": "DI_CHANGED", "changes": seen}
+            else:
+                s = samples.get(point)
+                e = electrical(s)
+                if e is None or (now - s.acquired_utc).total_seconds() > FRESH_S:
+                    raise AssignmentRefused(f"{point} has no fresh reading in mA or V")
+                if reference is not None:
+                    if tolerance is None or tolerance <= 0:
+                        raise AssignmentRefused("give the tolerance with the reference")
+                    if abs(e[0] - reference) > tolerance:
+                        raise AssignmentRefused(f"{point} reads {e[0]:.3f} {e[1]}, outside {reference:g} ± {tolerance:g} {e[1]}")
+                evidence |= {"check": "AI_READING", "reading": round(e[0], 4), "unit": e[1], "raw": s.raw_value,
+                             "raw_unit": s.raw_unit, "quality": s.quality.value, "reference": reference, "tolerance": tolerance,
+                             "sample_utc": s.acquired_utc.isoformat()}
+        utc = now.isoformat(timespec="microseconds")
+        row = (run_id, point, result, actor, utc, note, json.dumps(evidence, sort_keys=True), self.cfg.config_id,
+               self.cfg.config_version)
+        self.h.submit(lambda c: c.execute(
+            "INSERT INTO io_checks(run_id, point, result, actor, utc, note, evidence_json, config_id, config_version)"
+            " VALUES(?,?,?,?,?,?,?,?,?)", row), wait=True)
+        self.h.event("IO_CHECK", {"run_id": run_id, "point": point, "result": result, "note": note,
+                                  "evidence": evidence}, actor=actor)
+        return {"point": point, "run_id": run_id, "result": result, "actor": actor, "utc": utc, "note": note,
+                "evidence": evidence}

@@ -147,3 +147,40 @@ def test_changing_a_signal_starts_again_and_the_export_lists_every_channel(hw):
     j = c.get("/api/assignments/export", params={"fmt": "json"}, headers=h).json()
     di4 = next(x for x in j["points"] if x["point"] == "relay_A.DI4")
     assert (di4["signal"], di4["status"], di4["by"], di4["address"]) == ("tank.SUMP.high", "PROPOSED", "bench1", 1)
+
+
+def test_guided_check_results_carry_what_the_server_saw(hw):
+    from datetime import datetime, timedelta, timezone
+    app, c, bus, relay, ai = hw
+    h = login(c, "bench1")
+    start = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    step = {"run_id": "chk_test1", "started_utc": start}
+    r = c.post("/api/iochecks", json=step | {"point": "relay_A.DO2", "result": "PASS"}, headers=h)
+    assert r.status_code == 409 and "not confirmed ON" in r.json()["detail"]
+    lease = c.post("/api/bench/lease", json=arm_body(allowlist=["relay_A.DO2"]), headers=h).json()
+    bench(c, h, lease, "relay_A.DO2", True)
+    r = c.post("/api/iochecks", json=step | {"point": "relay_A.DO2", "result": "PASS", "note": "LED 2 lit"}, headers=h)
+    assert r.status_code == 200 and r.json()["evidence"]["check"] == "DO_ON"
+    bench(c, h, lease, "relay_A.DO2", False)
+    assert c.post("/api/iochecks", json=step | {"point": "relay_A.DO3", "result": "FAIL", "note": "no LED"}, headers=h).status_code == 200
+    r = c.post("/api/iochecks", json=step | {"point": "relay_A.DI1", "result": "PASS"}, headers=h)
+    assert r.status_code == 409 and "no change" in r.json()["detail"]
+    relay.di[0] = True
+    assert wait(lambda: point(c.get("/api/board", headers=h).json(), "relay_A.DI1")["changes"])
+    assert c.post("/api/iochecks", json=step | {"point": "relay_A.DI1", "result": "PASS"}, headers=h).status_code == 200
+    ai.modes[1], ai.ai[1] = 3, 4010
+    assert wait(lambda: (point(c.get("/api/board", headers=h).json(), "analog_A.AI2")["electrical"] or {}).get("value") == 4.01)
+    r = c.post("/api/iochecks", json=step | {"point": "analog_A.AI2", "result": "PASS", "reference": 20, "tolerance": 0.1}, headers=h)
+    assert r.status_code == 409 and "outside 20" in r.json()["detail"]
+    r = c.post("/api/iochecks", json=step | {"point": "analog_A.AI2", "result": "PASS", "reference": 4, "tolerance": 0.05}, headers=h)
+    assert r.status_code == 200 and r.json()["evidence"]["reading"] == 4.01
+    old = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    assert c.post("/api/iochecks", json={"run_id": "x", "started_utc": old, "point": "relay_A.DO4", "result": "FAIL"}, headers=h).status_code == 409
+    b = c.get("/api/board", headers=h).json()
+    assert b["checked"] == {"PASS": 3, "FAIL": 1, "SKIPPED": 0}
+    assert point(b, "relay_A.DO3")["check"]["note"] == "no LED"
+    doc = yaml.safe_load(c.get("/api/assignments/export", headers=h).text)
+    assert next(x for x in doc["points"] if x["point"] == "relay_A.DO2")["check"]["result"] == "PASS"
+    c.post("/api/auth/logout", headers=h)
+    h2 = login(c, "oper1")
+    assert c.post("/api/iochecks", json=step | {"point": "relay_A.DO3", "result": "FAIL"}, headers=h2).status_code == 403
