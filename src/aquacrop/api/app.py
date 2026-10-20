@@ -30,7 +30,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .. import __version__
 from ..config.catalog import CATALOG
 from ..config.schema import InstallationConfig
-from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
+from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, Quality, SignalSource, new_id
 from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
 from ..historian.trends import TrendCache, trend_buckets, trend_level
@@ -175,6 +175,19 @@ class BenchRenewIn(Body):
     duration_s: int
 
 
+class AssignIn(Body):
+    point: str = Field(max_length=64)
+    signal: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=300)
+
+
+class VerifyIn(Body):
+    point: str = Field(max_length=64)
+    observation: str = Field(max_length=300)
+    reference: float | None = Field(default=None, ge=-1000, le=1000)
+    tolerance: float | None = Field(default=None, gt=0, le=100)
+
+
 class BenchCommandIn(Body):
     backend: Literal["REAL_BENCH"]
     config_version: str
@@ -264,17 +277,32 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     from ..historian.offsite import Busy, NotActivated, Offsite, OffsiteMonitor, PolicyMismatch
     offsite = OffsiteMonitor(cfg, state_dir, hist)
     svc.offsite = offsite
+    from ..control.assignments import AssignmentRefused, Assignments, EdgeWatch, electrical
+    from ..twin.installation_params import InstallationFacts
+    assignments = Assignments(hist, cfg, InstallationFacts().signal_catalogue())
+    edges = EdgeWatch()
+
+    async def watch_edges():
+        # every change of a digital input, for the I/O board's verify step (a poll is the shortest change)
+        while True:
+            with contextlib.suppress(RuntimeError):     # a point's first sample may land mid-copy
+                edges.observe(dict(_samples()))
+            await asyncio.sleep(0.2)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(svc.run_forever()) if is_sim else None
         if not is_sim:
             svc.start()
+        watcher = asyncio.create_task(watch_edges())
         hist.event("PROCESS_STARTED", {"session_id": session_id, "config_id": cfg.config_id,
                                        "profile": cfg.profile.value, "version": __version__}, actor="system")
         try:
             yield
         finally:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watcher
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -596,6 +624,111 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                            "last_error": h.last_error, "points": pts})
         return {"freshness": _freshness(), "source": rt().backend.source.value if is_sim else "REAL",
                 "devices": groups}
+
+    # ------------------------------------------------------------------ I/O board and assignment (ADR-0016)
+    def _asked(targets: list[str]) -> dict:
+        def run(con):
+            out = {}
+            for t in targets:
+                r = con.execute("SELECT desired, outcome, intent_utc, actor, origin FROM commands WHERE target=? "
+                                "ORDER BY intent_utc DESC LIMIT 1", (t,)).fetchone()
+                if r:
+                    out[t] = {"desired": bool(r[0]), "outcome": r[1], "utc": r[2], "actor": r[3], "origin": r[4]}
+            return out
+        return hist.read(run)
+
+    @app.get("/api/board")
+    def board(p: Principal = Depends(require(Perm.READ))):
+        """Everything the I/O board draws, in one answer: each module with its channels, the latest reading,
+        the last output command (asked) beside the coil readback (reported), the input changes seen and
+        the channel's assignment record. On the simulation the modules are virtual."""
+        samples, now = _samples(), datetime.now(timezone.utc)
+        cur = assignments.current()
+        dos = [str(x) for x in cfg.all_points() if x.kind == PointKind.DO]
+        asked = _asked(dos)
+        mods = []
+        for d in cfg.devices:
+            hl = _health(d.device_uid)
+            cat = CATALOG[d.model]
+            pts = []
+            for x in d.point_ids():
+                pid, s = str(x), samples.get(str(x))
+                e = {"id": pid, "kind": x.kind.value, "channel": x.channel, "label": d.label_for(x),
+                     "assignment": cur.get(pid)}
+                if is_sim:
+                    m = cfg.mapping_for_point(pid)
+                    e["model_signal"] = m.signal if m else None
+                if s is not None:
+                    e["sample"] = {"quality": s.quality.value, "reason": s.reason, "raw": s.raw_value,
+                                   "raw_unit": s.raw_unit, "value": s.value, "unit": s.unit, "override": s.override,
+                                   "age_s": round((now - s.acquired_utc).total_seconds(), 2)}
+                if x.kind == PointKind.AI:
+                    el = electrical(s) if s is not None and s.quality in (Quality.GOOD, Quality.UNSCALED,
+                                                                           Quality.OVERRIDDEN) else None
+                    e["electrical"] = {"value": round(el[0], 4), "unit": el[1]} if el else None
+                    e["mode"] = d.ai_channel(x.channel).mode.name
+                elif x.kind == PointKind.DO:
+                    e["asked"] = asked.get(pid)
+                else:
+                    e["changes"] = edges.since(pid, now - timedelta(minutes=15))[-2:]
+                pts.append(e)
+            mods.append({"device_uid": d.device_uid, "label": d.label, "model": cat.vendor_name, "sku": d.sku,
+                         "model_id": d.model.value, "bus_id": d.bus_id, "address": d.address, "online": hl.online,
+                         "last_error": hl.last_error, "output_type": cat.output_type,
+                         "output_current_limit_ma": cat.output_current_limit_ma,
+                         "hardware_variant": d.hardware_variant.value if cat.ai else None, "points": pts})
+        out = {"mode": "SIMULATION" if is_sim else "BENCH", "profile": cfg.profile.value, "config_id": cfg.config_id,
+               "config_version": cfg.config_version, "freshness": _freshness(), "modules": mods,
+               "assigned": {s: sum(1 for a in cur.values() if a["status"] == s) for s in ("PROPOSED", "VERIFIED")},
+               "can": {"command": p.can(Perm.SIM_COMMAND) if is_sim else p.can(Perm.BENCH_ARM),
+                       "assign": p.can(Perm.IO_ASSIGN), "all_off": p.can(Perm.PROCESS_CONTROL if not is_sim
+                                                                         else Perm.SIM_COMMAND)}}
+        if is_sim:
+            out |= {"source": rt().backend.source.value}
+        else:
+            from ..control.bench import CONFIRMATION_PHRASE, MAX_LEASE_S, MIN_LEASE_S
+            out |= {"lease": svc.lease_view(), "relay_modes": svc.relay_mode_view(),
+                    "confirmation_phrase": CONFIRMATION_PHRASE, "duration_range_s": [MIN_LEASE_S, MAX_LEASE_S],
+                    "safe_state": {"outputs_off_on": sorted(svc.safe_triggers), "last": svc.last_safe_off},
+                    "poll_s": {k: round(v, 3) for k, v in svc.poll_times.items()},
+                    "poll_interval_s": {b.bus_id: b.poll_interval_s for b in cfg.buses},
+                    "workers": {k: w.health() for k, w in svc.workers.items()}}
+        return out
+
+    @app.get("/api/assignments")
+    def assignment_list(p: Principal = Depends(require(Perm.READ))):
+        return {"assignments": assignments.current(), "signals": assignments.options()}
+
+    @app.get("/api/assignments/history")
+    def assignment_history(point: str = Query(..., max_length=64), p: Principal = Depends(require(Perm.READ))):
+        return assignments.history(point)
+
+    @app.post("/api/assignments")
+    def assignment_set(body: AssignIn, p: Principal = Depends(require(Perm.IO_ASSIGN))):
+        try:
+            return assignments.assign(p.username, body.point, body.signal or None, body.note)
+        except AssignmentRefused as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/assignments/verify")
+    def assignment_verify(body: VerifyIn, p: Principal = Depends(require(Perm.IO_ASSIGN))):
+        try:
+            return assignments.verify(p.username, body.point, observation=body.observation, samples=_samples(),
+                                      edges=edges, reference=body.reference, tolerance=body.tolerance)
+        except AssignmentRefused as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/api/assignments/export")
+    def assignment_export(fmt: str = Query("yaml", pattern="^(yaml|json)$"), p: Principal = Depends(require(Perm.READ))):
+        doc = assignments.export(__version__)
+        name = f"aquacrop-io-assignments-{cfg.config_id}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+        if fmt == "json":
+            body, mt = json.dumps(doc, indent=2), "application/json"
+        else:
+            import yaml
+            body, mt = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), "application/x-yaml"
+        hist.event("IO_ASSIGNMENTS_EXPORTED", {"format": fmt, "counts": doc["counts"]}, actor=p.username)
+        return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'})
 
     @app.get("/api/plant")
     async def plant_view(p: Principal = Depends(require(Perm.READ))):

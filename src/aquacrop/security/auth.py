@@ -50,13 +50,14 @@ class Perm(str, enum.Enum):
     PROCESS_CONTROL = "process_control"  # process AUTO/MANUAL/STOP, bounded manual operations, stock readiness
     RECIPE_EDIT = "recipe_edit"          # save and validate recipe drafts
     RECIPE_ACTIVATE = "recipe_activate"  # activate or roll back a recipe version
+    IO_ASSIGN = "io_assign"              # assign and verify I/O channels on the I/O board; needs commissioning
 
 
 PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.ALARM_ACK: Role.OPERATOR,
                  Perm.LOCKOUT_RESET: Role.OPERATOR, Perm.EXPORT_AUDIT: Role.ADMIN, Perm.CONFIG_ADMIN: Role.ADMIN,
                  Perm.USER_ADMIN: Role.ADMIN, Perm.BACKUP: Role.ADMIN, Perm.BENCH_ARM: Role.OPERATOR,
                  Perm.PROCESS_CONTROL: Role.OPERATOR, Perm.RECIPE_EDIT: Role.OPERATOR,
-                 Perm.RECIPE_ACTIVATE: Role.ADMIN}
+                 Perm.RECIPE_ACTIVATE: Role.ADMIN, Perm.IO_ASSIGN: Role.OPERATOR}
 
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library
@@ -71,7 +72,7 @@ class Principal:
     must_change_password: bool
 
     def can(self, perm: Perm) -> bool:
-        if perm == Perm.BENCH_ARM and not self.commissioning:
+        if perm in (Perm.BENCH_ARM, Perm.IO_ASSIGN) and not self.commissioning:
             return False
         if self.must_change_password and perm != Perm.READ:
             return False
