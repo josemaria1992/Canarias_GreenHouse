@@ -30,7 +30,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .. import __version__
 from ..config.catalog import CATALOG
 from ..config.schema import InstallationConfig
-from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, Quality, SignalSource, new_id
+from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
 from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
 from ..historian.trends import TrendCache, trend_buckets, trend_level
@@ -663,8 +663,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                                    "raw_unit": s.raw_unit, "value": s.value, "unit": s.unit, "override": s.override,
                                    "age_s": round((now - s.acquired_utc).total_seconds(), 2)}
                 if x.kind == PointKind.AI:
-                    el = electrical(s) if s is not None and s.quality in (Quality.GOOD, Quality.UNSCALED,
-                                                                           Quality.OVERRIDDEN) else None
+                    el = electrical(s)           # the module's measurement, also when outside a scaling's range
                     e["electrical"] = {"value": round(el[0], 4), "unit": el[1]} if el else None
                     e["mode"] = d.ai_channel(x.channel).mode.name
                 elif x.kind == PointKind.DO:

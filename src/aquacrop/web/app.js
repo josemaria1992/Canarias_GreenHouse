@@ -284,6 +284,8 @@
     const real = st.profile !== "SIMULATED";
     document.querySelectorAll('#nav a[href="#twin"]').forEach(a => a.classList.toggle("hidden", real));
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
+    // the developer I/O board is for the people who commission the modules: not for a viewer account
+    $("nav-board").classList.toggle("hidden", !(can("sim_command") || can("process_control") || can("io_assign")));
     if ((real || isInst()) && window.AqPlant) window.AqPlant.buildNav();   // process pages (read-only on hardware, ADR-0009 addendum)
     plainStatus(st);
     const lines = [];
@@ -947,6 +949,185 @@
         h("p", { class: "muted" }, ioTest ? "IO_TEST: process control is inactive; injected raw values and DO commands do not drive the plant." :
           "TWIN: inputs derive from the model; overrides take precedence until cleared and are shown with owner and base value. DO ON requires MANUAL.")),
       groups);
+  };
+
+  // ------------------------------------------------ I/O board (ADR-0016): a developer page for the bench bring-up
+  // One card per module: outputs as switches with two lights (asked = the last command, reported = the coil
+  // readback), inputs as lights, analog inputs in mA or V with a bar. On the simulation the modules are
+  // virtual; on the bench a switch works only inside a test session (bench lease). Assignments are records
+  // of which channel carries which installation signal; they never change what the program reads or commands.
+  const MODEL_SHORT = { WAVESHARE_MODBUS_RTU_RELAY_D: "Relay (D)", WAVESHARE_MODBUS_RTU_IO_8CH: "IO 8CH",
+    WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH: "Analog input 8CH" };
+  const SAFE_WHEN = { START: "the service starts", STOP: "the service stops", LEASE_END: "the test session ends",
+    MODULE_RETURN: "a module answers again after dropping out" };
+  function led(on, cls, title) { return h("span", { class: "led " + (on == null ? "led-unk" : on ? "led-on " + (cls || "") : "led-off"), title, "aria-hidden": "true" }); }
+  function mmss(s) { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+  function boardRange(p) {          // the bar's full scale, from the channel's mode (not a scaling)
+    const m = p.mode || "";
+    if (/4_20|0_20/.test(m)) return [0, 20, "mA"];
+    if (/10/.test(m)) return [0, 10, "V"];
+    if (/5/.test(m)) return [0, 5, "V"];
+    return p.electrical ? [0, p.electrical.unit === "mA" ? 20 : 10, p.electrical.unit] : null;
+  }
+  async function boardSend(b, target, desired) {
+    if (b.mode === "SIMULATION") {
+      return act("POST", "/api/commands", { backend: "SIMULATED", config_version: S.cfgVersion, target, desired, request_id: rid(), reason: "I/O board" })
+        .then(r => r && toast(`${target} ${desired ? "ON" : "OFF"}: ${W.outcome ? W.outcome(r.outcome) : r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, !OK_OUTCOMES.has(r.outcome)));
+    }
+    return act("POST", "/api/bench/command", { backend: "REAL_BENCH", config_version: S.cfgVersion, lease_id: b.lease.lease_id,
+      target, desired, request_id: rid(), reason: "I/O board" })
+      .then(r => r && toast(`REAL ${target} ${desired ? "ON" : "OFF"}: ${r.outcome}${r.detail ? " (" + r.detail + ")" : ""}`, !OK_OUTCOMES.has(r.outcome)));
+  }
+  async function boardAllOff(b) {
+    if (b.mode === "BENCH") return act("POST", "/api/bench/all-off", undefined).then(r => r && toast("All outputs OFF: " +
+      r.results.map(x => `${x.device_uid} ${x.result}`).join(", "), r.results.some(x => x.result !== "OFF_CONFIRMED")));
+    const now = await api("GET", "/api/board");     // the outputs as they read now, not as last drawn
+    const on = now.modules.flatMap(m => m.points).filter(p => p.kind === "DO" && p.sample && p.sample.value);
+    if (!on.length) return toast("No output reads ON");
+    let bad = 0;
+    for (const p of on) {
+      try { const r = await api("POST", "/api/commands", { backend: "SIMULATED", config_version: S.cfgVersion, target: p.id, desired: false, request_id: rid(), reason: "I/O board: all outputs OFF" });
+        if (!OK_OUTCOMES.has(r.outcome)) bad++; } catch (e) { bad++; }
+    }
+    toast(bad ? `${on.length - bad} of ${on.length} outputs switched OFF; ${bad} refused` : `${on.length} outputs switched OFF`, bad > 0);
+    refresh();
+  }
+  function boardSession(b) {
+    if (b.mode === "SIMULATION") {
+      const raw = b.source === "IO_TEST";
+      return h("div", { class: "card" }, h("h2", null, "Virtual modules"),
+        h("p", null, raw ? "I/O test mode: switches and injected inputs go to the virtual modules only, and no process runs."
+          : "The model drives the inputs. Switch to I/O test mode to toggle every output and inject inputs by hand."),
+        h("div", { class: "row" }, raw ? cbtn("Use the model again", () => act("POST", "/api/io/source", { source: "TWIN" }, "the model drives the inputs"), "ghost")
+          : cbtn("Use I/O test mode", () => act("POST", "/api/io/source", { source: "IO_TEST" }, "I/O test mode"))));
+    }
+    const ss = b.safe_state || {}, when = (ss.outputs_off_on || []).map(t => SAFE_WHEN[t] || t);
+    const safe = h("p", { class: "muted" }, when.length ? "Every output that reads ON is switched OFF when " + when.join(", ") + "." : "No automatic OFF is configured (safe_state is empty): outputs stay as they are when a session ends.",
+      ss.last ? ` Last: ${ss.last.trigger} ${fmtTime(ss.last.utc)}, ${(ss.last.results || []).map(r => `${r.device_uid} ${r.result}`).join(", ")}.` : "");
+    const L = b.lease;
+    if (L) {
+      return h("div", { class: "card armed" }, h("h2", null, "TEST SESSION ON: real outputs can switch"),
+        h("p", null, h("strong", null, mmss(L.remaining_s)), ` left · ${L.username} · ${L.allowlist.length} outputs · ${L.setup_description}`),
+        h("div", { class: "row" },
+          b.can.command ? h("button", { class: "cmd", onclick: () => act("POST", "/api/bench/lease/renew", { lease_id: L.lease_id, duration_s: b.duration_range_s[1] }, "session renewed") }, `Renew (${b.duration_range_s[1] / 60} min)`) : null,
+          h("button", { class: "cmd danger", onclick: () => act("POST", "/api/bench/lease/revoke", {}, "session ended") }, "End session")), safe);
+    }
+    if (!b.can.command) return h("div", { class: "card" }, h("h2", null, "Real modules, read only"),
+      h("p", null, "Switching outputs needs a user with the commissioning permission (an admin sets it under Settings, Users)."), safe);
+    if (S.boardArm) return S.boardArm;               // typed values and ticks survive the refresh
+    const outs = b.modules.flatMap(m => m.points.filter(p => p.kind === "DO").map(p => p.id));
+    const boxes = outs.map(id => ({ id, el: h("input", { type: "checkbox", checked: true, "aria-label": id }) }));
+    const conf = h("input", { placeholder: b.confirmation_phrase, autocomplete: "off", "aria-label": "Confirmation" });
+    const setup = h("input", { placeholder: "e.g. bench, lamps on all outputs, no pumps or valves", "aria-label": "Bench setup", style: "min-width:280px" });
+    const dur = h("input", { type: "number", min: b.duration_range_s[0], max: b.duration_range_s[1], value: b.duration_range_s[1], style: "width:90px", "aria-label": "Duration in seconds" });
+    const panel = h("div", { class: "card" }, h("h2", null, "Start a test session"),
+      h("p", null, "Only on the bench, with nothing connected that can move water or hurt anyone. The switches below then reach the real modules."),
+      h("div", { class: "row" }, h("label", null, "Bench setup ", setup), h("label", null, "Seconds ", dur)),
+      h("div", { class: "row" }, h("label", null, "Type ", h("strong", null, b.confirmation_phrase), " ", conf)),
+      h("details", { class: "inline" }, h("summary", null, `Outputs in the session (${outs.length})`),
+        h("div", { class: "row" }, cbtn("All", () => boxes.forEach(x => { x.el.checked = true; }), "ghost"), cbtn("None", () => boxes.forEach(x => { x.el.checked = false; }), "ghost")),
+        h("div", { class: "row" }, ...boxes.map(x => h("label", { class: "mono small" }, x.el, " ", x.id)))),
+      h("div", { class: "row" }, h("button", { class: "cmd danger", onclick: () => act("POST", "/api/bench/lease", { confirmation: conf.value, setup_description: setup.value,
+        allowlist: boxes.filter(x => x.el.checked).map(x => x.id), duration_s: Number(dur.value) }, "test session started").then(r => { if (r) S.boardArm = null; }) }, "Start test session")), safe);
+    S.boardArm = panel;
+    return panel;
+  }
+  function boardModule(b, m) {
+    const sim = b.mode === "SIMULATION", raw = sim && b.source === "IO_TEST";
+    const inLease = new Set(b.lease ? b.lease.allowlist : []);
+    const pick = p => h("button", { class: "linkbtn chan", onclick: () => { S.boardSel = S.boardSel === p.id ? null : p.id; refresh(); },
+      "aria-expanded": S.boardSel === p.id ? "true" : "false", title: "Assign or verify this channel" }, p.kind + p.channel);
+    const asg = p => p.assignment ? h("span", { class: "asg asg-" + p.assignment.status, title: p.assignment.status }, p.assignment.signal, " ", p.assignment.status === "VERIFIED" ? "✓" : "?")
+      : sim && p.model_signal ? h("span", { class: "muted small", title: "what the simulation wires to this channel" }, "model: " + p.model_signal) : h("span", { class: "muted small" }, "free");
+    const dos = m.points.filter(p => p.kind === "DO"), dis = m.points.filter(p => p.kind === "DI"), ais = m.points.filter(p => p.kind === "AI");
+    const doTile = p => {
+      const rep = p.sample && ["GOOD", "OVERRIDDEN"].includes(p.sample.quality) ? !!p.sample.value : null;
+      const ask = p.asked ? p.asked.desired : null;
+      const differs = ask != null && rep != null && ask !== rep;
+      const ok = sim ? b.can.command : b.can.command && b.lease && inLease.has(p.id);
+      const why = sim ? (b.can.command ? "" : "needs the operator role") : !b.lease ? "start a test session first" : !inLease.has(p.id) ? "not in this test session" : "";
+      return h("div", { class: "tile" + (differs ? " differs" : ""), "data-point": p.id },
+        h("div", { class: "tile-head" }, pick(p), h("span", { class: "lights" }, led(ask, "asked", "asked: " + (ask == null ? "no command yet" : ask ? "ON" : "OFF")), led(rep, "", "reported: " + (rep == null ? "not read" : rep ? "ON" : "OFF")))),
+        h("button", { class: "switch" + (rep ? " on" : ""), role: "switch", "aria-checked": rep ? "true" : "false", "aria-label": `${p.id} ${p.label || ""}`.trim(),
+          disabled: !ok || rep == null, title: why || (rep ? "switch OFF" : "switch ON"), onclick: () => boardSend(b, p.id, !rep) }, rep == null ? "?" : rep ? "ON" : "OFF"),
+        h("div", { class: "small" }, differs ? h("strong", null, "asked " + (ask ? "ON" : "OFF") + ", reads " + (rep ? "ON" : "OFF")) : p.asked ? `asked ${ask ? "ON" : "OFF"} ${ago((Date.now() - Date.parse(p.asked.utc)) / 1000)}` : "no command yet"),
+        asg(p));
+    };
+    const diTile = p => {
+      const v = p.sample && p.sample.quality === "GOOD" ? !!p.sample.value : null;
+      return h("div", { class: "tile", "data-point": p.id }, h("div", { class: "tile-head" }, pick(p), led(v, "input", v == null ? "not read" : v ? "1" : "0")),
+        h("div", { class: "big mono" }, v == null ? "—" : v ? "1" : "0"),
+        raw && b.can.command ? h("div", { class: "row" }, cbtn("1", () => act("POST", "/api/io/inject", { point: p.id, raw: true })), cbtn("0", () => act("POST", "/api/io/inject", { point: p.id, raw: false }), "ghost")) : null,
+        h("div", { class: "small muted" }, (p.changes || []).length ? `changed ${(p.changes || []).length}× in 15 min` : "no change seen"), asg(p));
+    };
+    const aiRow = p => {
+      const s = p.sample || {}, e = p.electrical, r = boardRange(p);
+      const pct = e && r ? Math.max(0, Math.min(100, 100 * (e.value - r[0]) / (r[1] - r[0]))) : 0;
+      const inj = raw && b.can.command ? h("input", { type: "number", min: 0, max: 65535, step: 1, style: "width:80px", "aria-label": `${p.id} raw value to inject`, placeholder: (s.raw_unit || "raw") }) : null;
+      const mode = (p.mode || "").replace(/^CURRENT_|^VOLTAGE_/, "").replace(/_/g, "-") + ({ CURRENT: " mA", VOLTAGE: " V" }[(p.mode || "").split("_")[0]] || "");
+      return h("tr", { "data-point": p.id }, h("td", null, pick(p), h("div", { class: "small muted" }, mode), h("div", null, asg(p))),
+        h("td", null, h("div", { class: "mono big" }, e ? `${e.value.toFixed(e.unit === "mA" ? 2 : 3)} ${e.unit}` : "—"),
+          h("div", { class: "mono small muted" }, s.raw == null ? "no raw value" : `raw ${s.raw} ${s.raw_unit || ""}`)),
+        h("td", { class: "barcell" }, h("div", { class: "bar", title: r ? `${r[0]}–${r[1]} ${r[2]}` : "" }, h("div", { class: "fill", style: `width:${pct.toFixed(1)}%` })),
+          h("div", { class: "small muted" }, s.age_s == null ? "" : ago(s.age_s))),
+        h("td", null, qBadge(s.quality || "UNAVAILABLE"), s.value != null && s.unit ? h("div", { class: "small muted" }, `scaled ${num(s.value)} ${s.unit}`) : null,
+          inj ? h("div", { class: "row" }, inj, cbtn("Inject", () => act("POST", "/api/io/inject", { point: p.id, raw: Number(inj.value) }))) : null));
+    };
+    const poll = !sim && b.poll_s ? b.poll_s[m.bus_id] : null;
+    return h("div", { class: "card module", "data-module": m.device_uid },
+      h("div", { class: "row" }, led(m.online, "online", m.online ? "answering" : "not answering"),
+        h("h2", null, `${m.device_uid} · ${MODEL_SHORT[m.model_id] || m.model}`),
+        h("span", { class: "muted" }, `${m.bus_id} · address ${m.address}${poll ? ` · round ${(poll * 1000).toFixed(0)} ms` : ""}`),
+        m.online ? pill("answering", "ok") : pill("NOT ANSWERING" + (m.last_error ? ": " + m.last_error : ""), "bad"), outputPill(m),
+        m.hardware_variant ? pill("version " + ({ STANDARD: "A", B: "B" }[m.hardware_variant] || "unknown"), m.hardware_variant === "UNKNOWN" ? "warn" : "") : null,
+        sim && b.can.command ? cbtn(m.online ? "Simulate no answer" : "Answer again", () => act("POST", "/api/io/device-fault", { device_uid: m.device_uid, fault: m.online ? "TIMEOUT" : null }), "ghost") : null),
+      dos.length ? [h("h3", null, "Outputs"), h("div", { class: "tiles" }, dos.map(doTile))] : null,
+      dis.length ? [h("h3", null, "Inputs"), h("div", { class: "tiles" }, dis.map(diTile))] : null,
+      ais.length ? h("table", { class: "ai-table" }, h("thead", null, h("tr", null, ["Channel", "Reading", "Scale", "Quality"].map(x => h("th", null, x)))), h("tbody", null, ais.map(aiRow))) : null,
+      S.boardSel && m.points.some(p => p.id === S.boardSel) ? boardAssign(b, m.points.find(p => p.id === S.boardSel)) : null);
+  }
+  function boardAssign(b, p) {
+    const sig = S.boardSignals || { signals: {}, assignments: {} };
+    const used = new Map(b.modules.flatMap(m => m.points).filter(x => x.assignment).map(x => [x.assignment.signal, x.id]));
+    const sel = h("select", { "aria-label": `Signal for ${p.id}` }, h("option", { value: "" }, "— choose a signal —"),
+      (sig.signals[p.kind] || []).map(n => h("option", { value: n, disabled: used.has(n) && used.get(n) !== p.id }, W.signal ? `${W.signal(n)} (${n})${used.has(n) && used.get(n) !== p.id ? " · on " + used.get(n) : ""}` : n)));
+    if (p.assignment) sel.value = p.assignment.signal;
+    const note = h("input", { placeholder: "note, e.g. wire 12, lamp L3", maxlength: 300, style: "min-width:220px", "aria-label": "Note" });
+    const a = p.assignment, can = b.can.assign;
+    const obs = h("input", { placeholder: p.kind === "DO" ? "e.g. lamp L3 lit, then went off" : p.kind === "DI" ? "e.g. pressed button B2, then released" : "e.g. calibrator 12.00 mA on AI3",
+      maxlength: 300, style: "min-width:280px", "aria-label": "What you saw" });
+    const ref = p.kind === "AI" ? h("input", { type: "number", step: "any", style: "width:90px", "aria-label": "Reference applied" }) : null;
+    const tol = p.kind === "AI" ? h("input", { type: "number", step: "any", min: 0, value: (p.electrical && p.electrical.unit === "V") ? 0.05 : 0.1, style: "width:80px", "aria-label": "Tolerance" }) : null;
+    const how = { DO: "Switch this output ON and then OFF above, watch the device, then describe what it did.",
+      DI: "Change the input by hand (press, close, lift) and back again, holding each state for 2 seconds, then describe what you did.",
+      AI: "Apply a known signal (a calibrator or a known resistor and supply), enter it below, then describe the setup." }[p.kind];
+    return h("div", { class: "assign", id: "assign-" + p.id.replace(".", "-") },
+      h("h3", null, `Assign ${p.id}`, p.label ? h("span", { class: "muted small" }, " · " + p.label) : null),
+      a ? h("p", null, pill(a.status, a.status === "VERIFIED" ? "ok" : "warn"), ` ${a.signal} · ${a.actor} · ${fmtTime(a.utc)}${a.note ? " · " + a.note : ""}`,
+        a.status === "VERIFIED" ? h("span", { class: "muted small" }, ` · checked: ${a.evidence.observation}`) : null) : h("p", { class: "muted" }, "Not assigned."),
+      h("div", { class: "row" }, sel, note,
+        h("button", { class: "cmd small", disabled: !can, onclick: () => sel.value && act("POST", "/api/assignments", { point: p.id, signal: sel.value, note: note.value || null }, `${p.id}: ${sel.value} proposed`).then(() => { S.boardSignals = null; }) }, "Save assignment"),
+        a ? h("button", { class: "cmd small ghost", disabled: !can, onclick: () => confirm(`Free ${p.id}? The record stays in the history.`) && act("POST", "/api/assignments", { point: p.id, signal: null }, `${p.id} freed`) }, "Free this channel") : null),
+      a && a.status !== "VERIFIED" ? h("div", null, h("p", null, h("strong", null, "Verify: "), how),
+        h("div", { class: "row" }, obs, ref ? h("label", null, `Reference (${p.electrical ? p.electrical.unit : "mA or V"}) `, ref) : null, tol ? h("label", null, "± ", tol) : null,
+          h("button", { class: "cmd small", disabled: !can, onclick: () => act("POST", "/api/assignments/verify", { point: p.id, observation: obs.value,
+            reference: ref ? (ref.value === "" ? null : Number(ref.value)) : null, tolerance: tol ? Number(tol.value) : null }, `${p.id} verified`) }, "Mark verified"))) : null,
+      can ? null : h("p", { class: "muted small" }, "Assigning needs the commissioning permission."),
+      h("p", { class: "muted small" }, "An assignment is a record for the later wiring approval. It does not connect the channel to the irrigation program."));
+  }
+  VIEWS.board = async function () {
+    const b = await api("GET", "/api/board");
+    if (!S.boardSignals) S.boardSignals = await api("GET", "/api/assignments");
+    const outs = b.modules.flatMap(m => m.points).filter(p => p.kind === "DO");
+    const onCount = outs.filter(p => p.sample && p.sample.value).length;
+    const head = h("div", { class: "card" },
+      h("div", { class: "row" }, h("h2", null, "I/O board"), b.mode === "SIMULATION" ? pill("SIMULATION · virtual modules", "") : pill("REAL MODULES", "bad"),
+        h("span", { class: "muted" }, `${b.modules.length} modules · ${b.modules.reduce((n, m) => n + m.points.length, 0)} channels · ${b.assigned.VERIFIED} verified, ${b.assigned.PROPOSED} proposed`),
+        h("a", { href: "/api/assignments/export?fmt=yaml", download: "" }, "Export assignments (YAML)"), h("a", { href: "/api/assignments/export?fmt=json", download: "" }, "JSON")),
+      h("p", { class: "muted" }, "For commissioning: check every module and channel, then assign each channel to the installation signal it carries. Click a channel name to assign or verify it. Lights: left = asked (last command), right = reported (read back from the module)."),
+      h("div", { class: "row" }, h("button", { class: "cmd danger", disabled: !b.can.all_off || (b.mode === "SIMULATION" && !onCount), onclick: () => boardAllOff(b) }, "All outputs OFF"),
+        h("span", { class: "muted small" }, `${onCount} of ${outs.length} outputs read ON`)));
+    mount("v-board", head, boardSession(b), h("div", { class: "modules" }, b.modules.map(m => boardModule(b, m))));
   };
 
   // ------------------------------------------------ control

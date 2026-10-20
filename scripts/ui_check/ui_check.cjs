@@ -90,6 +90,7 @@ const RAW_LABELS = /^(AUTO|MANUAL|STOP|Ack|Reset|Reset lockout|Acknowledge prepa
 
 async function main() {
   if (process.env.AQ_ONLY === "0.3.4") { const b0 = await launch(); return o34(b0); }   // only the 0.3.4 checks (for working on them)
+  if (process.env.AQ_ONLY === "0.4.0") { const b0 = await launch(); return board040(b0); }
   const b = await launch();
   const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, acceptDownloads: true });
   const p = await ctx.newPage();
@@ -467,6 +468,7 @@ async function main() {
   }
   check("UI page errors", errs.length === 0 && verrs.length === 0, errs.concat(verrs).join("; ") || "none");
   await o34(b);
+  await board040(b);
   await b.close();
 }
 
@@ -806,6 +808,83 @@ async function o34run(b, ctx0) {
   await ctx.close();
 }
 
+// 0.4.0 (ADR-0016): the developer I/O board on the simulation's six virtual modules
+const boardPoint = async (q, id) => (await get(q, "/api/board")).modules.flatMap(m => m.points).find(x => x.id === id);
+async function board040(b) {
+  const ctx = await b.newContext({ viewport: { width: 1366, height: 1000 }, acceptDownloads: true });
+  const p = await ctx.newPage();
+  const errs = watchErrors(p);
+  await login(p, USER, PASS);
+  await api(p, "/api/users/" + USER, "POST", { commissioning: true });     // the throwaway admin commissions
+  await login(p, USER, PASS);
+  const nav = await p.locator("#nav").innerText();
+  await show(p, "board");
+  const n = await p.evaluate(() => ({ mods: document.querySelectorAll("#v-board .card.module").length, ch: document.querySelectorAll("#v-board [data-point]").length }));
+  await shot(p, "board-1-simulation");
+  check("BOARD-01 one card per module, every channel", /I\/O board/.test(nav) && n.mods === 6 && n.ch === 80, `menu has I/O board; ${n.mods} module cards, ${n.ch} channels`);
+  await p.locator("#v-board").getByRole("button", { name: "Use I/O test mode" }).click();
+  await until(p, async () => (await get(p, "/api/board")).source === "IO_TEST", 10000);
+  const sw = p.locator('#v-board [data-point="relay_A.DO3"] .switch');
+  await until(p, async () => !(await sw.isDisabled()), 5000);
+  await sw.click();
+  const on = await until(p, async () => { const x = await boardPoint(p, "relay_A.DO3"); return x.sample.value === true && x.asked && x.asked.desired === true && x; }, 10000);
+  const dom = await until(p, () => p.evaluate(() => { const t = document.querySelector('#v-board [data-point="relay_A.DO3"]');
+    return t.querySelector(".switch").getAttribute("aria-checked") === "true" && t.querySelectorAll(".led.led-on").length === 2 && t.innerText; }), 5000);
+  check("BOARD-02 a switch sends the command; asked and reported lights", !!on && !!dom, `relay_A.DO3 asked ON (${on && on.asked.outcome}), reads ON; both lights on`);
+  await p.locator('#v-board [data-point="relay_B.DO5"] .switch').click();
+  await until(p, async () => (await boardPoint(p, "relay_B.DO5")).sample.value === true, 10000);
+  await p.locator("#v-board").getByRole("button", { name: "All outputs OFF" }).click();
+  const off = await until(p, async () => (await get(p, "/api/board")).modules.flatMap(m => m.points).filter(x => x.kind === "DO" && x.sample.value).length === 0, 10000);
+  check("BOARD-03 All outputs OFF", off, "relay_A.DO3 and relay_B.DO5 read OFF after one press");
+  const di = p.locator('#v-board [data-point="digital_A.DI2"]');
+  await di.getByRole("button", { name: "1", exact: true }).click();
+  await until(p, async () => (await boardPoint(p, "digital_A.DI2")).sample.value === true, 10000);
+  await p.waitForTimeout(600);
+  await p.locator('#v-board [data-point="digital_A.DI2"]').getByRole("button", { name: "0", exact: true }).click();
+  const diTxt = await until(p, async () => { const t = await p.locator('#v-board [data-point="digital_A.DI2"]').innerText(); return /changed 2×/.test(t) && t; }, 10000);
+  check("BOARD-04 an input light follows the input", !!diTxt, "digital_A.DI2 injected 1 then 0: light on then off, \"changed 2× in 15 min\"");
+  const ai = p.locator('#v-board tr[data-point="analog_A.AI1"]');
+  await ai.locator("input").fill("12000");
+  await ai.getByRole("button", { name: "Inject" }).click();
+  const aiTxt = await until(p, async () => { const t = await p.locator('#v-board tr[data-point="analog_A.AI1"]').innerText(); return /12\.00 mA/.test(t) && t; }, 10000);
+  check("BOARD-05 an analog reading in mA with the raw value", !!aiTxt && /raw 12000 uA/.test(aiTxt), (aiTxt || "").replace(/\s+/g, " ").slice(0, 120));
+  // assign relay_A.DO3, exercise it, verify it
+  await p.locator('#v-board [data-point="relay_A.DO3"] .chan').click();
+  const form = p.locator("#v-board .assign");
+  await form.locator("select").selectOption("valve.S1.cmd");
+  await form.locator('input[aria-label="Note"]').fill("ui check: lamp L3");
+  await form.getByRole("button", { name: "Save assignment" }).click();
+  const prop = await until(p, async () => { const x = await boardPoint(p, "relay_A.DO3"); return x.assignment && x.assignment.status === "PROPOSED"; }, 10000);
+  await p.locator("#v-board").getByRole("button", { name: "Mark verified" }).waitFor();
+  await p.locator('#v-board input[aria-label="What you saw"]').fill("virtual lamp on, then off");
+  await p.locator("#v-board").getByRole("button", { name: "Mark verified" }).click();
+  await until(p, async () => /switch relay_A.DO3 ON and then OFF/.test(await p.locator("#toast").innerText()), 5000);
+  const refused = await p.locator("#toast").innerText();
+  await sw.click();
+  // the switch sends the opposite of what it shows, so wait until it shows ON
+  await until(p, async () => (await p.locator('#v-board [data-point="relay_A.DO3"] .switch').getAttribute("aria-checked")) === "true", 10000);
+  await p.locator('#v-board [data-point="relay_A.DO3"] .switch').click();
+  await until(p, async () => (await boardPoint(p, "relay_A.DO3")).sample.value === false, 10000);
+  await p.locator('#v-board input[aria-label="What you saw"]').fill("virtual lamp on, then off");
+  await p.locator("#v-board").getByRole("button", { name: "Mark verified" }).click();
+  const ver = await until(p, async () => { const x = await boardPoint(p, "relay_A.DO3"); return x.assignment && x.assignment.status === "VERIFIED" && x.assignment; }, 10000);
+  await shot(p, "board-2-assigned-verified");
+  check("BOARD-06 assign, then verify after ON and OFF", prop && !!ver && ver.evidence.check === "DO_ON_OFF" && /ON and then OFF/i.test(refused),
+    `PROPOSED valve.S1.cmd; verify refused before the ON/OFF ("${refused}"); VERIFIED after it, observation recorded`);
+  const [dl] = await Promise.all([p.waitForEvent("download"), p.locator("#v-board a", { hasText: "Export assignments (YAML)" }).click()]);
+  const yml = fs.readFileSync(await dl.path(), "utf8");
+  check("BOARD-07 export", /AQUACROP_IO_ASSIGNMENT_PROPOSAL/.test(yml) && /VERIFIED: 1/.test(yml) && /signal: valve.S1.cmd/.test(yml), `${dl.suggestedFilename()}, ${yml.length} bytes`);
+  await p.setViewportSize({ width: 390, height: 900 });
+  await show(p, "board");
+  const wide = await p.evaluate(() => document.scrollingElement.scrollWidth);
+  await shot(p, "board-3-phone");
+  check("BOARD-08 phone width", wide <= 391, `page ${wide} px wide at 390 px`);
+  await api(p, "/api/io/source", "POST", { source: "TWIN" });
+  await api(p, "/api/users/" + USER, "POST", { commissioning: false });
+  check("BOARD page errors", errs.length === 0, errs.join("; ") || "none");
+  await ctx.close();
+}
+
 // The same pages on HARDWARE_READ_ONLY (fake bus): observation only, controls replaced by the reason.
 async function hardware() {
   const b = await launch();
@@ -848,6 +927,11 @@ async function hardware() {
   const hwDig = hwIoHead.find(t => t.startsWith("digital_A")) || "", hwRel = hwIoHead.find(t => t.startsWith("relay_A")) || "";
   check("HW output types", /TRANSISTOR SINK — not relay contacts, max 500 mA/.test(hwDig) && /relay contacts/.test(hwRel) && !/TRANSISTOR/.test(hwRel),
     "I/O page: digital_A (SKU 26244) labelled transistor sink, relay_A labelled relay contacts");
+  await show(p, "board");
+  const hb = await p.evaluate(() => ({ t: document.querySelector("#v-board").innerText, sw: [...document.querySelectorAll("#v-board .switch")].map(x => x.disabled) }));
+  await shot(p, "hw-board");
+  check("HW I/O board read only", /REAL MODULES/.test(hb.t) && /Real modules, read only/.test(hb.t) && hb.sw.length === 16 && hb.sw.every(Boolean),
+    `${hb.sw.length} output switches, all disabled without a commissioning user and a test session`);
   check("HW page errors", errs.length === 0, errs.join("; ") || "none");
   await b.close();
 }
