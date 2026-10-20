@@ -218,7 +218,8 @@ def checks(host: Host, rel: Release | None, *, allow_arch: bool) -> list[str]:
     # Read-only observations for the commissioning record (nothing is changed)
     serial = sorted(str(p) for p in Path("/dev").glob("ttyAMA*")) + sorted(str(p) for p in Path("/dev").glob("ttyS0"))
     byid = sorted(str(p) for p in Path("/dev/serial/by-id").glob("*")) if Path("/dev/serial/by-id").is_dir() else []
-    print(f"  [info] serial devices: {', '.join(serial + byid) or 'none'} (verify each port by hand: docs/installation/cm4.md §3)")
+    print(f"  [info] serial devices: {', '.join(serial + byid) or 'none'} (after installing, `aquacrop hw ports` "
+          "checks COM1 to COM3 of the RS485 box: docs/installation/cm4.md §3)")
     sd = [ln for ln in Path("/proc/mounts").read_text().splitlines() if ln.split()[1:2] == [SD_MOUNT]] \
         if Path("/proc/mounts").is_file() else []
     print(f"  [info] backup card mount {SD_MOUNT}: {'mounted' if sd else 'not mounted'} "

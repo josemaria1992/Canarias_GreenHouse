@@ -61,7 +61,9 @@ def add_parser(sub) -> None:
     st.set_defaults(fn=cmd_setup)
 
     from .make_config import add_parser as add_make
+    from .ports import add_parser as add_ports
     add_make(hw)
+    add_ports(hw)
 
 
 def _port_args(p) -> None:
