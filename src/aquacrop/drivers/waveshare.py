@@ -1,7 +1,8 @@
 """Fixed Waveshare V2 operations (brief §6). Register facts: docs/vendor_protocol.md.
 
-This module is the only place that knows register addresses. It offers no way to write IDs, baud
-rates, modes, all-on/all-off, toggle or flash registers; those operations do not exist here.
+This module holds the register addresses the service uses. It offers no way to write IDs, baud rates,
+modes, all-on/all-off, toggle or flash registers; those operations do not exist here. Only the
+one-module-at-a-time setup command (`setup.py`, ADR-0016) writes a module's address and mode registers.
 """
 from __future__ import annotations
 

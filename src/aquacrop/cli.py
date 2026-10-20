@@ -643,6 +643,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     from .drivers.diagnostics import add_parser as add_diag   # light: pymodbus loads only when run
     add_diag(sub)
+    from .drivers.setup import add_parser as add_hw                # module setup and bench configuration
+    add_hw(sub)
     from .launcher import add_parser as add_launch
     add_launch(sub)
     from .netcheck import add_parser as add_netcheck
