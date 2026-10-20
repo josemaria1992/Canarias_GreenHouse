@@ -98,3 +98,15 @@ def test_practise_assigning_and_verifying_on_the_simulation(sim):
     assert b["assigned"] == {"PROPOSED": 0, "VERIFIED": 3}
     doc = c.get("/api/assignments/export", params={"fmt": "json"}, headers=h).json()
     assert doc["counts"] == {"VERIFIED": 3, "PROPOSED": 0, "UNASSIGNED": 77} and doc["profile"] == "SIMULATED"
+
+
+def test_an_input_change_right_after_the_switch_to_io_test_is_seen(sim):
+    """Regression (CI, 0.4.0): the change was missed when the injection came before the edge watcher's next
+    tick had seen the I/O test baseline. Reads and injections now observe, so no waiting is needed."""
+    app, c = sim
+    h = login(c, "bench1")
+    assert c.post("/api/io/source", json={"source": "IO_TEST"}, headers=h).status_code == 200
+    c.post("/api/io/inject", json={"point": "digital_B.DI4", "raw": True}, headers=h)
+    c.post("/api/io/inject", json={"point": "digital_B.DI4", "raw": False}, headers=h)
+    changes = point(c.get("/api/board", headers=h).json(), "digital_B.DI4")["changes"]
+    assert [v for _, v in changes] == [True, False]

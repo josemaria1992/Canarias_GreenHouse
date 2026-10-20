@@ -293,11 +293,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     channel_checks = ChannelChecks(hist, cfg, assignments)
     edges = EdgeWatch()
 
+    def _observe():
+        with contextlib.suppress(RuntimeError):         # a point's first sample may land mid-copy
+            edges.observe(dict(_samples()))
+
     async def watch_edges():
-        # every change of a digital input, for the I/O board's verify step (a poll is the shortest change)
+        # every change of a digital input, for the I/O board's verify step (a poll is the shortest change);
+        # readers and simulated injections also observe, so a change between two ticks is not missed
         while True:
-            with contextlib.suppress(RuntimeError):     # a point's first sample may land mid-copy
-                edges.observe(dict(_samples()))
+            _observe()
             await asyncio.sleep(0.2)
 
     @contextlib.asynccontextmanager
@@ -653,6 +657,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         """Everything the I/O board draws, in one answer: each module with its channels, the latest reading,
         the last output command (asked) beside the coil readback (reported), the input changes seen and
         the channel's assignment record. On the simulation the modules are virtual."""
+        _observe()
         samples, now = _samples(), datetime.now(timezone.utc)
         cur, checked = assignments.current(), channel_checks.latest()
         dos = [str(x) for x in cfg.all_points() if x.kind == PointKind.DO]
@@ -724,6 +729,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.post("/api/assignments/verify")
     def assignment_verify(body: VerifyIn, p: Principal = Depends(require(Perm.IO_ASSIGN))):
         try:
+            _observe()
             return assignments.verify(p.username, body.point, observation=body.observation, samples=_samples(),
                                       edges=edges, reference=body.reference, tolerance=body.tolerance)
         except AssignmentRefused as e:
@@ -732,6 +738,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.post("/api/iochecks")
     def iocheck_record(body: CheckIn, p: Principal = Depends(require(Perm.IO_ASSIGN))):
         try:
+            _observe()
             return channel_checks.record(p.username, run_id=body.run_id, point=body.point, result=body.result,
                                          started_utc=body.started_utc, note=body.note, samples=_samples(), edges=edges,
                                          reference=body.reference, tolerance=body.tolerance)
@@ -885,7 +892,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.post("/api/io/inject")
     async def inject(body: InjectIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
+        _observe()                                      # the value before, then the injected one
         _guard(lambda: rt().inject(p.username, body.point, body.raw))
+        _observe()
         return {"ok": True}
 
     @app.post("/api/io/override")
@@ -902,6 +911,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         ok, msg = rt().set_source(p.username, body.source)
         if not ok:
             raise HTTPException(409, msg)
+        _observe()
         return {"ok": True, "source": msg}
 
     @app.post("/api/io/device-fault")
