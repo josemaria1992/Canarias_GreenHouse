@@ -20,13 +20,21 @@ switched outputs OFF when a bench lease ended, and nothing recorded which channe
    current unit, never to broadcast, never the UART register. Everything is read back from the new address,
    and the old address must no longer answer. A JSON record is always written (DONE or STOPPED).
    `aquacrop hw make-config` turns the records into a HARDWARE_READ_ONLY configuration and sends nothing.
+   The bus tells an analog module from a digital one, but not a Relay (D) (SKU 26517, relay contacts) from
+   an IO 8CH (SKU 26244, 500 mA open-drain transistor outputs), nor one AI 8CH (SKU 25821) from the other.
+   So `--sku` (from the label) and `--label` (the name marked on the module, equal to `--name`) are
+   required, shown in the confirmation, and kept in the record as the installer's statement
+   (`provable_from_bus: false`); make-config refuses a record without them (owner's reviewer, 2026-10-21).
 2. **Safe-state OFF**, owner answer 2. `safe_state.outputs_off_on` lists the moments: START, STOP,
    LEASE_END, MODULE_RETURN. At each one, every digital output that reads ON gets one FC05 OFF with an
    FC01 readback, through its own audited command path (origin SAFE_STATE) whose policy accepts OFF to a
    digital output only. LEASE_END covers only the outputs of that lease. A module whose modes are not all
    NORMAL is not written; the result says INCOMPLETE. Empty by default (configs before 0.4.0 keep their
    behaviour); `hw make-config` sets all four. The simulation refuses the setting. The lease expiry is
-   noticed by the poller, so it applies with no browser open.
+   noticed by the poller, so it applies with no browser open. On the wire: the read-only profile (no
+   moments) writes nothing; the generated bench profile writes only these FC05 OFF frames (none when all
+   outputs are OFF). Nothing ever sends an ON automatically: an ON is a user's switch or guided-check step
+   inside a test session.
 3. **Test session (bench lease)**, owner answer 3. One session may cover all outputs, for up to 30 minutes,
    renewable by the holder from the same browser login (BENCH_LEASE_RENEWED). "All outputs OFF" needs no
    session and switches only OFF.

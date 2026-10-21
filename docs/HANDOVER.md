@@ -1,4 +1,20 @@
-# Handover: AquaCrop platform 0.3.4, the owner demo release (2026-10-19)
+# Handover: AquaCrop platform 0.4.0, the bench bring-up release (2026-10-21)
+
+**0.4.0, bench bring-up (2026-10-20 and 2026-10-21, ADR-0017):** `aquacrop hw setup` gives each module
+its address and channel modes with one module on the wire. The installer states the SKU and the marked
+name from the label, because the bus cannot tell a Relay (D) from an IO 8CH, nor analog_A from
+analog_B. `hw make-config` writes the bench configuration (COM1 for the Relay (D) and IO 8CH, COM2 for
+the AI 8CH, COM3 kept for the drive), and `hw ports` checks the CM4 serial ports. The **I/O board**
+shows every channel, runs the guided check with a manual Next, and records assignments (PROPOSED,
+VERIFIED) with an export. Assignments are records; `physical_mapping` stays empty. What goes on the
+wire now depends on the configuration (`RELEASE_READINESS.md`, "What AquaCrop writes on the wire"):
+
+- read-only configuration: zero writes on its own, as before;
+- generated bench configuration: only FC05 OFF, at start, stop, session end and module return, for
+  outputs that read ON;
+- either: never an automatic ON. An ON comes only from a person inside a test session.
+
+Tested on the in-memory RS485 bus and the simulation only. Owner results NOT RUN.
 
 **0.3.4, owner feedback on 0.3.3 and reviewer corrections (2026-10-19):** O-01 to O-05 (white link
 text, consistent equipment graphics with flow direction and tank trends, plain Digital Twin examples,
@@ -48,7 +64,10 @@ by item, is in `RELEASE_READINESS.md`; the evidence for every gate is in `ACCEPT
   module independently with health and backoff; `diagnostics read` inspects modules without
   writing. Tested only against a simulated serial bus under the real pymodbus client.
 - **Bench writes**: a commissioning user can arm a short, allowlisted, session-bound lease on an
-  isolated bench; every write is preceded by a mode check and followed by a readback.
+  isolated bench; every write is preceded by a mode check and followed by a readback. From 0.4.0 the
+  generated bench configuration also switches outputs that read ON to OFF at start, stop, session end
+  and module return (audited `SAFE_STATE_OFF`); the read-only configuration still writes nothing on its
+  own, and nothing sends an ON automatically.
 - **Operations**: compressed verified backups, restore to a new instance, migrations (backup
   first), v0.1 import, archives, storage alarms, systemd units, hash-locked installs, offline
   wheelhouse.
@@ -189,10 +208,11 @@ OpenVPN); the full list of physical configuration still open is section 3 of `RE
 
 CP-00 platform record (OS image, UART/tty mapping, RTC, CM4 performance, storage growth, WAL
 behaviour, backup time and free space on the eMMC, the SD card in its USB reader, the first
-OneDrive upload and drill, the recovery-key escrow test); CP-01 read-only
-identification of each module; CP-02 AI stimulus; CP-03 DI stimulus; CP-04 DO on dummy loads under
+OneDrive upload and drill, the recovery-key escrow test); CP-01 identification and
+setup of each module (label SKU and marked name, address and modes with `hw setup`); CP-02 AI stimulus; CP-03 DI stimulus; CP-04 DO on dummy loads under
 a bench lease with teardown; CP-05 disconnect/restart/power-loss with a passive bus monitor proving
-zero write frames; CP-06 the drive's Modbus interface (status bits, run/stop under a lease, comm loss,
+zero write frames on the read-only configuration and only the expected safe-state OFF frames on the
+generated bench configuration; CP-06 the drive's Modbus interface (status bits, run/stop under a lease, comm loss,
 power cycle) with the motor disconnected. Each needs the hardware on an isolated bench and your written authorization of
 that setup. Procedures and unsigned templates: `commissioning/`.
 

@@ -1,4 +1,27 @@
-# Release readiness: AquaCrop 0.3.4 (owner demo release of the pre-hardware software)
+# Release readiness: AquaCrop 0.4.0 (bench bring-up release)
+
+**0.4.0, 2026-10-20 and 2026-10-21:** the bench bring-up (ADR-0017, `installation/bench-bringup.md`):
+`aquacrop hw setup` gives each module its address and channel modes with one module on the wire,
+`hw make-config` writes the bench configuration, `hw ports` checks the CM4 serial ports, outputs
+switch OFF at the safe-state moments, and the **I/O board** shows every channel with a guided check
+and I/O assignment records. Assignments are records: `physical_mapping` stays empty and no plant
+signal is bound. Physical AUTO does not exist; the drive stays NOT_CONFIGURED. Tested on the
+in-memory RS485 bus and the simulation only. Every owner result is NOT RUN.
+
+### What AquaCrop writes on the wire, by configuration
+
+From 0.4.0 two kinds of `HARDWARE_READ_ONLY` configuration behave differently on their own, so a write
+seen during commissioning is a fault with one and expected with the other:
+
+| Configuration | Writes on its own (no person acting) | Writes because a person acted |
+|---|---|---|
+| Read-only (`hardware-read-only.example.yaml`, and any configuration without `safe_state`) | **none**: zero FC05/FC06/FC0F/FC10 frames at start, polling, reconnect, restart, stop, lease end and power loss | only inside a test session armed by a commissioning user: FC05 to the session's outputs, each with a readback |
+| Generated bench (`hw make-config`, `safe_state.outputs_off_on` = START, STOP, LEASE_END, MODULE_RETURN) | **only FC05 OFF**: at those four moments, one frame per digital output that reads ON, each followed by an FC01 readback and audited as `SAFE_STATE_OFF`. When every output is OFF, nothing is written | inside a test session: FC05 ON/OFF from a switch or a guided-check step; **All outputs OFF** (FC05 OFF only) at any time |
+| Module setup (`hw setup`, a separate command run with the service stopped) | — | FC06 to the address and mode registers of the one module on the wire, never to broadcast, never the UART register (CP-01 record) |
+
+Nothing ever sends an ON automatically: every ON comes from a person's action inside a test session,
+and safe state accepts OFF only. CP-05 checks this on the wire with a passive monitor for both
+configurations.
 
 **0.3.4, 2026-10-19:** the owner's feedback on 0.3.3 (O-01 to O-05) and the reviewer's corrections
 (R33-01 to R33-03, `operator/owner-tour/issues.md`): white-on-green links, one diagram with flow
@@ -47,7 +70,8 @@ NOT RUN (could run, has not) · NOT CONFIGURED (needs the owner's account or set
 | 60 s history for 365 days, clock holds, timestamp quarantine with review before pruning | Settings | OP-01..05 PASS; OP-06 PASS (desktop) |
 | SD card and encrypted OneDrive backups, drills, replacement-controller recovery | `operations/offsite-backups.md` | BK-01..07 PASS with fakes and the real rclone binary; activation waits for the on-site setup |
 | Guided CM4 install, upgrade and rollback; TLS proxy for OpenVPN access | `installation/cm4.md`, `security/remote-access.md` | DL-02, UI-06 guide and route test PASS in staging; on the CM4 NOT RUN |
-| Release ZIP with SHA-256 manifest, commit, wheel and offline wheelhouses for Windows and the CM4 | `scripts/build_release.py` | DL-05 PASS |
+| Release ZIP with SHA-256 manifest, commit, wheel and offline wheelhouses for Windows and the CM4 (Python 3.11 and 3.13) | `scripts/build_release.py` | DL-05 PASS |
+| I/O board with guided check, assignment records and export, on the simulation (six virtual modules) | browser, **I/O board**, with a commissioning account | BOARD-01..09 PASS (headless Chromium); `tests/integration/test_io_board_sim.py`; on the bench NOT RUN |
 
 ## 2. Gates that can only finish with the hardware or the account
 
@@ -56,8 +80,9 @@ NOT RUN (could run, has not) · NOT CONFIGURED (needs the owner's account or set
 | UI-06 home-to-greenhouse route | NOT RUN | controller installed on the greenhouse LAN; the site values of `remote-access.md` (VPN server, LAN and VPN subnets, controller address, name); Caddy's root certificate on the home PC; `aquacrop netcheck` PASS from the LAN and over the VPN; sign-in with each role | CP-00 |
 | DL-02 CM4 platform | NOT RUN | CM4 variant and carrier revision; OS image checksum; `deploy/aquacrop-cm4.py check` and `install` on the unit; UART overlay and tty for each COM port, proven with one known module per port; RTC on `i2c-10`; CPU and poll cycle time at 48 points | CP-00 |
 | OP-06 storage on the eMMC | NOT RUN (AT-STO-02) | 24 h growth and 365-day projection (`storage report`), WAL during a backup, backup and `verify --full` time, free space after installation, all on the CM4 | CP-00 |
-| DL-03 zero writes on the wire | NOT RUN | passive RS485 monitor on a second PC while starting, unplugging a module, reconnecting, restarting, stopping and cutting power: zero FC05/FC06/FC0F/FC10 frames | CP-05 |
-| DL-04 bench lease on real relays | NOT RUN | written owner authorization of the bench setup; dummy loads on a fused bench supply; every relay mode NORMAL (CP-01); ON/OFF with coil readback and visual check per output; teardown | CP-04 |
+| DL-03 writes on the wire as the configuration allows | NOT RUN | passive RS485 monitor on a second PC while starting, unplugging a module, reconnecting, restarting, stopping and cutting power. Read-only configuration: zero FC05/FC06/FC0F/FC10 frames. Generated bench configuration, no session: only FC05 OFF frames at the safe-state moments for outputs that read ON (none if all are OFF), each matched by a `SAFE_STATE_OFF` event; never an ON, FC06, FC0F or FC10 | CP-05 |
+| DL-04 bench lease on real relays | NOT RUN | written owner authorization of the bench setup; dummy loads on a fused bench supply; every relay mode NORMAL (CP-01, `hw setup`); ON/OFF with coil readback and visual check per output, with the I/O board's guided check; OFF at session end, logout and service stop; teardown | CP-04 |
+| HW-01 module identity | NOT RUN | each module's label photographed (SKU 26517, 26244 or 25821, and the name marked on it) and matched with its `hw setup` record: the bus cannot tell a Relay (D) from an IO 8CH, nor analog_A from analog_B | CP-01 |
 | BK-02 the card | NOT RUN | the 64 GB ext4 card in its USB reader on the CM4: filesystem UUID, `offsite enroll-card`, mount at boot with `nofail`, removal during a backup, write-protect switch, write speed | CP-00 |
 | BK-04 the cloud | NOT CONFIGURED | the colleague shares `AQUACROP_DATOS_CANARIAS` by name with edit rights; rclone authorized on the controller with the owner's personal Microsoft account (`offsite-backups.md` 3.1); crypt password and salt generated, printed and sealed; `offsite check` PASS | `offsite-backups.md` section 5 |
 | BK-06 monthly cloud drill | NOT RUN | BK-02 and BK-04 done; first upload verified (receipt in the folder); `aquacrop-offsite-drill.service` PASS | Settings, Off-device backups |
@@ -75,9 +100,9 @@ Each item is a configuration entry or a recipe field that ships as `TBD`, `NOT_C
 | 1 | 17th output: drive run (the modules give 16 DO) | decided 2026-10-13: over the drive's Modbus interface (ADR-0015); software and simulation done; adapter `NOT_CONFIGURED` on hardware | drive make, model and Modbus manual; the register map entered as `PROPOSED` on the bench and `VERIFIED` by CP-06 (`model/vfd_modbus.md`) |
 | 2 | Point allocation of the 80 channels | relay/analog modules: all 16 DI and 16 DO in use (owner, 2026-10-13), per-channel table still the ADR-0013 proposal; IO 8CH modules: all 16 DI and 16 transistor DO unassigned by owner decision (2026-10-13), DO1 included; the table in `model/signal_budget.md` (last section) is a proposal for later, not fitted devices | owner confirms or changes the relay/analog table; any later IO 8CH binding needs a new owner decision once devices and wiring are verified; wiring drawings that match them |
 | 3 | Cause-and-effect table | proposal (`model/cause_and_effect.md`) | owner confirms each row, especially fault propagation through the shared drive |
-| 4 | Safe-state matrix: what each output does on fault, power loss and restart | relays keep state; software sends no write at start or reconnect | owner and electrician decide per output; hardwired where it matters |
+| 4 | Safe-state matrix: what each output does on fault, power loss and restart | relays keep state through a communication loss. Read-only configuration: no write at start, reconnect or stop. Generated bench configuration: OFF (FC05) at start, stop, session end and module return for outputs that read ON (owner answer 2, 2026-10-20). Never an automatic ON | owner and electrician decide per output for the installation; hardwired where it matters |
 | 5 | Independent protections: E-stop, motor protection, dry-run, overfill, K1/K2 mutual exclusion | outside the software | electrician's design and test record; the software only reads the safety chain |
-| 6 | Module addresses, serial ports, baud and parity | example values in `hardware-read-only.example.yaml` | CP-01 with each module alone on the bus; CP-00 port table |
+| 6 | Module addresses, serial ports, baud and parity | owner plan (2026-10-20): relay_A 1, relay_B 2, analog_A 3, analog_B 4, digital_A 5, digital_B 6; COM1 = Relay (D) and IO 8CH, COM2 = AI 8CH, COM3 kept for the drive; 9600 8N1 as shipped | `hw setup` with each module alone on the bus and its label checked (CP-01); `hw ports` and `hw scan` for the CP-00 port table |
 | 7 | AI channel data types, jumpers and hardware variant | `UNKNOWN`, values unscaled | CP-01 (photos) and CP-02 per channel |
 | 8 | Probes: main, sump and stock levels, pH, EC, flows, pressures | proposed tags; DEMO scaling in simulation; a real profile refuses unverified scaling and shows raw values | sensor model, span and calibration certificate per probe; scaling profile set to `VERIFIED` with that evidence |
 | 9 | Drive stop and run proof | hardwired DI in the proposal (relay_A DI1/DI2); the Modbus status word is a second opinion | which drive outputs prove running and fault, wired to which DI; status bits checked in CP-06 |

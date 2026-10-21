@@ -28,11 +28,14 @@ def run(tmp_path, *argv):
     return main(["hw", *argv, "--state-dir", str(tmp_path / "var")])
 
 
-def setup(tmp_path, port, *extra, name="relay_A", address=3, model="relay"):
+SKU = {"relay": "26517", "io": "26244", "ai": "25821"}
+
+
+def setup(tmp_path, port, *extra, name="relay_A", address=3, model="relay", sku=None, label=None):
     rec = tmp_path / f"setup-{name}.json"
     code = run(tmp_path, "setup", "--port", port, "--model", model, "--address", str(address), "--name", name,
-               "--record", str(rec), "--yes", "--last", "8", *extra)
-    return code, json.loads(rec.read_text())
+               "--sku", sku or SKU[model], "--label", label or name, "--record", str(rec), "--yes", "--last", "8", *extra)
+    return code, json.loads(rec.read_text()) if rec.exists() else None
 
 
 def test_scan_reads_only_and_lists_what_answers(tmp_path, wire, capsys):
@@ -86,7 +89,7 @@ def test_a_voltage_range_needs_the_module_version(tmp_path, wire):
     bus, port = wire
     bus.add("ai", 1)
     assert run(tmp_path, "setup", "--port", port, "--model", "ai", "--address", "2", "--name", "analog_A",
-               "--ai-range", "1=0-10V", "--yes") == 2
+               "--sku", "25821", "--label", "analog_A", "--ai-range", "1=0-10V", "--yes") == 2
     assert bus.write_frames() == []
 
 
@@ -141,6 +144,51 @@ def test_make_config_from_the_records(tmp_path, wire):
     assert cfg.device("analog_A").ai[1].mode.value == "3"
     assert cfg.safe_state.outputs_off_on == ["START", "STOP", "LEASE_END", "MODULE_RETURN"]
     assert "https://aquacrop-bench.local" in cfg.security.allowed_origins and cfg.physical_mapping == []
+
+
+def test_the_sku_and_the_marked_name_come_from_the_label_not_the_bus(tmp_path, wire):
+    """Reviewer, 2026-10-21: a Relay (D) and an IO 8CH answer alike on the bus, and so do two AI 8CH. The SKU and
+    the name marked on the module are the installer's statement; a mismatch stops before the port is opened."""
+    from aquacrop.config.catalog import CATALOG, ModelId
+    from aquacrop.drivers.setup import MODELS, SKUS
+    assert {m: CATALOG[ModelId(v)].sku for m, v in MODELS.items()} == SKUS
+    bus, port = wire
+    bus.add("digital_io", 1)
+    code, rec = setup(tmp_path, port, name="relay_B", address=2, model="relay", sku="26244")
+    assert code == 2 and rec is None and bus.frames_in == []          # IO 8CH label, relay model: nothing sent
+    code, rec = setup(tmp_path, port, name="analog_B", address=4, model="ai", label="analog_A")
+    assert code == 2 and rec is None and bus.frames_in == []
+    # the IO 8CH module, stated as a Relay (D): the bus cannot tell, so the label is what decides
+    code, rec = setup(tmp_path, port, name="relay_B", address=2, model="relay")
+    assert code == 0 and rec["physical_identity"] == {
+        "sku": "26517", "product": "Modbus RTU Relay (D): relay contacts", "label": "relay_B",
+        "source": "installer, from the module's label", "provable_from_bus": False,
+        "note": rec["physical_identity"]["note"]}
+    assert "cannot tell a Relay (D) from an IO 8CH" in rec["physical_identity"]["note"]
+
+
+def test_make_config_refuses_a_record_without_the_label_confirmation(tmp_path, wire):
+    bus, port = wire
+    bus.add("relay", 1)
+    code, rec = setup(tmp_path, port, name="relay_A", address=1)
+    assert code == 0
+    del rec["physical_identity"]
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps(rec))
+    out = tmp_path / "o.yaml"
+    assert main(["hw", "make-config", str(old), "--digital-port", "/dev/ttyAMA1", "--out", str(out)]) == 2
+    assert not out.exists()
+
+
+def test_the_confirmation_names_the_stated_sku(tmp_path, wire, monkeypatch, capsys):
+    bus, port = wire
+    bus.add("relay", 1)
+    monkeypatch.setattr("builtins.input", lambda: "no")
+    assert run(tmp_path, "setup", "--port", port, "--model", "relay", "--address", "2", "--name", "relay_B",
+               "--sku", "26517", "--label", "relay_B", "--last", "4", "--record", str(tmp_path / "r.json")) == 3
+    err = capsys.readouterr().err
+    assert "SKU 26517 (Modbus RTU Relay (D): relay contacts), marked 'relay_B'" in err
+    assert "cannot tell a Relay (D) from an IO 8CH" in err and bus.write_frames() == []
 
 
 def test_make_config_refuses_a_stopped_record(tmp_path):

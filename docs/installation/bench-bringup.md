@@ -15,17 +15,19 @@ outputs (LEDs or lamps; no pumps, valves or anything that can move water).
 
 ## 1. Plan
 
-| Module | Name | Address | Port |
-|---|---|---|---|
-| Relay (D) #1 | relay_A | 1 | COM1 (/dev/ttyAMA1) |
-| Relay (D) #2 | relay_B | 2 | COM1 |
-| AI 8CH #1 (version A) | analog_A | 3 | COM2 (/dev/ttyAMA2) |
-| AI 8CH #2 (version A) | analog_B | 4 | COM2 |
-| IO 8CH #1 | digital_A | 5 | COM1 |
-| IO 8CH #2 | digital_B | 6 | COM1 |
+| Module | SKU on the label | Name | Address | Port |
+|---|---|---|---|---|
+| Relay (D) #1 | 26517 | relay_A | 1 | COM1 (/dev/ttyAMA1) |
+| Relay (D) #2 | 26517 | relay_B | 2 | COM1 |
+| AI 8CH #1 (version A) | 25821 | analog_A | 3 | COM2 (/dev/ttyAMA2) |
+| AI 8CH #2 (version A) | 25821 | analog_B | 4 | COM2 |
+| IO 8CH #1 | 26244 | digital_A | 5 | COM1 |
+| IO 8CH #2 | 26244 | digital_B | 6 | COM1 |
 
-COM3 stays free for the pump drive later. COM0 is not used. Write the name on each module with a marker.
-The IO 8CH outputs are transistor sinks (max 500 mA, DC), not relay contacts.
+COM3 stays free for the pump drive later. COM0 is not used. **Before setup, read the SKU on each module's
+label and write its name on it with a marker.** The Relay (D) outputs are relay contacts; the IO 8CH outputs
+are transistor sinks (open-drain, max 500 mA, DC), not relay contacts. Mixing them up would put a load meant
+for a contact on a transistor.
 
 ## 2. Serial ports on the CM4
 
@@ -69,12 +71,20 @@ they move to COM2 afterwards). For each module, power it, connect it alone, then
 cd /var/lib/aquacrop
 sudo -u aquacrop /opt/aquacrop/current/venv/bin/python -m aquacrop hw scan  --port /dev/ttyAMA1 --state-dir /var/lib/aquacrop
 sudo -u aquacrop /opt/aquacrop/current/venv/bin/python -m aquacrop hw setup --port /dev/ttyAMA1 --state-dir /var/lib/aquacrop \
-     --model relay --name relay_B --address 2 --record /var/lib/aquacrop/setup-relay_B.json
+     --model relay --sku 26517 --name relay_B --label relay_B --address 2 --record /var/lib/aquacrop/setup-relay_B.json
 ```
-- `--model relay` for Relay (D), `io` for IO 8CH, `ai` for AI 8CH. For the analog modules add
-  `--ai-range all=4-20mA --ai-variant A`.
-- It shows what it found and what it will write, and asks you to type YES. It refuses if more than one
-  module answers, if the model is different, or if AquaCrop is already using the port (stop the service).
+- `--model relay --sku 26517` for Relay (D), `--model io --sku 26244` for IO 8CH, `--model ai --sku 25821` for
+  AI 8CH. For the analog modules add `--ai-range all=4-20mA --ai-variant A`.
+- `--sku` is what the label of the connected module says, and `--label` is the name you marked on it (the same
+  as `--name`). **The bus cannot prove either.** A Relay (D) and an IO 8CH answer the same way over Modbus, and
+  so do analog_A and analog_B. AquaCrop can only tell an analog module from a digital one. So the SKU and the
+  name are your statement from the label, and the record keeps them as that (`physical_identity`,
+  `provable_from_bus: false`).
+- It shows what it found, the SKU and name you stated, and what it will write, and asks you to type YES.
+  Check the label of the module on the wire before you type it. It refuses if the SKU does not match
+  `--model`, if `--label` is not the name, if more than one module answers, if the module is analog when you
+  said digital (or the reverse), or if AquaCrop is already using the port (stop the service). `hw make-config`
+  refuses any record without this confirmation.
 - It sets every channel to Normal mode (relay and IO) or 4-20 mA (analog), then the address, reads
   everything back from the new address and checks the old address is silent. The record says DONE.
 - relay_A keeps address 1; setup still checks and sets its modes.
@@ -97,7 +107,14 @@ sudo install -o root -g aquacrop -m 0640 /tmp/bench.yaml /etc/aquacrop/bench.yam
 ```
 Set `AQUACROP_CONFIG=/etc/aquacrop/bench.yaml` in `/etc/aquacrop/aquacrop.env`. The configuration is
 HARDWARE_READ_ONLY with all four safe-state moments, 1 s polling, the 60 s / 365 day history and no
-channel bound to any plant signal. Then:
+channel bound to any plant signal.
+
+What it writes on the wire (watch it with the USB adapter as a passive monitor, CP-05): at service start
+and stop, when a test session ends and when a module answers again, one FC05 OFF frame for each output
+that reads ON, followed by an FC01 readback. When every output is already OFF, nothing is written. It
+never sends an ON by itself. An ON goes out only when you press a switch, or Start / Next in the guided
+check, inside a test session. The read-only example configuration (`hardware-read-only.example.yaml`)
+has no safe-state moments and writes nothing at all. Then:
 ```text
 sudo -u aquacrop /opt/aquacrop/current/venv/bin/python -m aquacrop users bootstrap --config /etc/aquacrop/bench.yaml \
      --state-dir /var/lib/aquacrop --username <you> --generate

@@ -11,9 +11,14 @@ results stay NOT RUN. No control algorithm or production mapping changed.
 ### Module setup and the bench configuration
 - `aquacrop hw scan` lists the modules that answer on a port (reads only).
 - `aquacrop hw setup` gives one module its address, Normal channel modes (Relay (D), IO 8CH) or analog
-  ranges (AI 8CH), with only that module on the wire: refuses two answering modules, a different model or
-  a port in use; never broadcasts, never writes the UART register; reads back from the new address and
-  checks the old one is silent; always writes a JSON record.
+  ranges (AI 8CH), with only that module on the wire: refuses two answering modules, an analog module
+  given as digital (or the reverse) or a port in use; never broadcasts, never writes the UART register;
+  reads back from the new address and checks the old one is silent; always writes a JSON record.
+- The bus cannot tell a Relay (D) from an IO 8CH, nor one AI 8CH from another, so `hw setup` requires
+  `--sku` (26517, 26244 or 25821, from the label, matching `--model`) and `--label` (the name marked on the
+  module, equal to `--name`). It shows them in the confirmation and keeps them in the record as the
+  installer's statement (`provable_from_bus: false`). `hw make-config` refuses a record without them
+  (owner's reviewer, 2026-10-21).
 - `aquacrop hw make-config` builds a HARDWARE_READ_ONLY configuration from the records (two ports: digital
   modules on one, analog on the other), validated before it is written.
 - `aquacrop hw ports` checks COM1 to COM3 of the RS485 box (boot overlays, device nodes, permissions, port
@@ -24,6 +29,9 @@ results stay NOT RUN. No control algorithm or production mapping changed.
   (only its outputs) and when a module answers again, every digital output that reads ON gets one OFF with
   readback, audited with origin SAFE_STATE. OFF only, digital outputs only, never a drive. Empty by default;
   `hw make-config` sets all four moments. The poller notices an expired session with no page open.
+- Writes on the wire now depend on the configuration (`RELEASE_READINESS.md`, "What AquaCrop writes on the
+  wire"; CP-05 updated): the read-only configuration still writes nothing on its own; the generated bench
+  configuration writes only these FC05 OFF frames; no configuration ever sends an ON automatically.
 - A bench session can be renewed by its holder; "All outputs OFF" needs no session.
 - A bus poller that fails restarts after 30 s; port locks use the device's real path (a symlink and its
   target are one port).

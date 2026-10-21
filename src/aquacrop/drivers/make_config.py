@@ -2,8 +2,9 @@
 
 The configuration is HARDWARE_READ_ONLY: it reads every module, and writes only under a bench lease or
 as a safe-state OFF. Device ids, addresses, models, analog ranges and labels come from the records,
-the ports from the arguments (each one proven with `hw scan`). Digital modules (Relay (D), IO 8CH) go
-on one port and the analog modules on another, when a second port is given. The result is validated
+the ports from the arguments (each one proven with `hw scan`). Each record must carry the installer's
+label confirmation (SKU and marked name), because the bus cannot tell a Relay (D) from an IO 8CH. Digital
+modules (Relay (D), IO 8CH) go on one port and the analog modules on another, when a second port is given. The result is validated
 before it is written; nothing is sent to any module.
 """
 from __future__ import annotations
@@ -51,12 +52,16 @@ def build(records: list[dict], *, digital_port: str, analog_port: str | None, co
         model = ModelId(r["model"])
         after = r["after"]
         name = r["name"]
+        ident = r.get("physical_identity") or {}
+        if ident.get("sku") != CATALOG[model].sku or ident.get("label") != name:
+            raise ValueError(f"{name}: the record has no label confirmation for SKU {CATALOG[model].sku}; "
+                             "run hw setup again with --sku and --label (the bus cannot tell the modules apart)")
         if name in seen_names:
             raise ValueError(f"two records are named {name}")
         seen_names.add(name)
         d = {"device_uid": name, "bus_id": "rs485_b" if two and model == ModelId.WAVESHARE_AI_8CH else "rs485_a",
              "address": after["address"], "model": model.value, "sku": CATALOG[model].sku,
-             "label": r.get("label") or name,
+             "label": f"{name} (SKU {ident['sku']}, from its label)",
              "firmware_evidence": f"version register {after.get('version_register')} (hw setup {r['utc'][:10]})"}
         if model == ModelId.WAVESHARE_AI_8CH:
             d["hardware_variant"] = {"A": "STANDARD", "B": "B"}.get(r.get("ai_variant") or "", "UNKNOWN")

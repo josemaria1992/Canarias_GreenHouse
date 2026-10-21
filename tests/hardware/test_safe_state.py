@@ -69,6 +69,18 @@ def test_without_triggers_nothing_is_written_at_start_or_stop(service, fake_bus)
     assert bus.write_frames() == [] and relay.coils[2] is True
 
 
+def test_with_every_trigger_and_every_output_off_nothing_is_written(service):
+    """RELEASE_READINESS, "What AquaCrop writes on the wire": the generated bench configuration writes only
+    FC05 OFF for outputs that read ON, so with all outputs OFF start, a module return and stop send no frame."""
+    svc, bus, relay, hist = service("START", "STOP", "LEASE_END", "MODULE_RETURN")
+    relay.fault = "timeout"
+    assert wait(lambda: svc.backend.health("relay_A").online is False)
+    relay.fault = None
+    assert wait(lambda: svc.backend.health("relay_A").online is True)
+    svc.stop()
+    assert bus.write_frames() == [] and not any(relay.coils)
+
+
 def test_start_switches_on_outputs_off_and_audits_them(service, fake_bus):
     _, bus, relay, _ = fake_bus
     relay.coils[2] = relay.coils[6] = True

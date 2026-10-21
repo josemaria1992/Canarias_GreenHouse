@@ -11,6 +11,10 @@ Rules, whatever the arguments:
   answering at the new address and no longer at the old one.
 * The UART register (0x2000) is never written: the bus speed stays what the module already uses.
 * It takes the port's ownership lock, so it cannot run while `serve` or `diagnostics` owns the port.
+* The bus can tell an analog module from a digital one, but not a Relay (D) from an IO 8CH (both answer
+  as eight-channel digital modules), nor one AI 8CH from another. The installer states the SKU printed
+  on the module (`--sku`) and the name marked on it (`--label`, the same as `--name`); the record keeps
+  them as the installer's confirmation, not as something the bus proved.
 
 Output is a JSON record per run (before, after, each write and its readback): the CP-01 evidence.
 pymodbus and pyserial are imported only when a command runs.
@@ -31,6 +35,12 @@ CHANNELS = 8
 
 MODELS = {"relay": "WAVESHARE_MODBUS_RTU_RELAY_D", "io": "WAVESHARE_MODBUS_RTU_IO_8CH",
           "ai": "WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH"}
+# The SKU printed on each module's label (config/catalog.py) and what its outputs are.
+SKUS = {"relay": "26517", "io": "26244", "ai": "25821"}
+PRODUCTS = {"26517": "Modbus RTU Relay (D): relay contacts", "26244": "Modbus RTU IO 8CH: 500 mA transistor (open-drain) outputs",
+            "25821": "Modbus RTU Analog Input 8CH"}
+NOT_FROM_THE_BUS = ("The bus cannot tell a Relay (D) from an IO 8CH, nor one AI 8CH from another: the SKU and the "
+                    "name come from the label on the module you connected, as you state them.")
 # AI 8CH data type register values (docs/vendor_protocol.md); the jumper inside the module must match.
 AI_RANGES = {"0-5V": 0, "0-10V": 0, "1-5V": 1, "2-10V": 1, "0-20mA": 2, "4-20mA": 3, "raw": 4}
 AI_VOLTAGE_BY_VARIANT = {"A": {"0-5V", "1-5V"}, "B": {"0-10V", "2-10V"}}
@@ -50,7 +60,10 @@ def add_parser(sub) -> None:
     st.add_argument("--model", required=True, choices=sorted(MODELS), help="relay = Relay (D), io = IO 8CH, ai = AI 8CH")
     st.add_argument("--address", type=int, required=True, help="the new address, 1..247")
     st.add_argument("--name", required=True, help="a short name, e.g. relay_A; it becomes the device id")
-    st.add_argument("--label", default=None, help="what is written on the module's sticker")
+    st.add_argument("--sku", required=True, choices=sorted(PRODUCTS),
+                    help="the SKU printed on the module's label: 26517 Relay (D), 26244 IO 8CH, 25821 AI 8CH")
+    st.add_argument("--label", required=True,
+                    help="the name you marked on the module, the same as --name (it tells analog_A from analog_B)")
     st.add_argument("--ai-range", action="append", default=[], metavar="CH=RANGE",
                     help=f"AI only: e.g. 1=4-20mA or all=4-20mA; ranges {', '.join(AI_RANGES)}")
     st.add_argument("--ai-variant", choices=["A", "B"], help="AI only: A = 0-5 V version, B = 0-10 V version")
@@ -147,6 +160,18 @@ def parse_ai_ranges(items: list[str], variant: str | None) -> dict[int, str]:
         for c in chans:
             out[c] = rng
     return out
+
+
+def physical_identity(model: str, sku: str, label: str, name: str) -> dict:
+    """The installer's statement of what is connected, checked for consistency before the port is opened."""
+    if SKUS[model] != sku:
+        raise SetupError(f"SKU {sku} is the {PRODUCTS[sku].split(':')[0]}, not --model {model} "
+                         f"(SKU {SKUS[model]}); read the label again")
+    if label.strip() != name:
+        raise SetupError(f"--label {label!r} must be the name marked on the module, the same as --name {name!r}; "
+                         "mark the module first")
+    return {"sku": sku, "product": PRODUCTS[sku], "label": name, "source": "installer, from the module's label",
+            "provable_from_bus": False, "note": NOT_FROM_THE_BUS}
 
 
 def plan_setup(found: list[dict], model: str, new_address: int, ai_ranges: dict[int, str]) -> dict:
@@ -248,6 +273,7 @@ def cmd_setup(args) -> int:
         return 2
     try:
         ranges = parse_ai_ranges(args.ai_range, args.ai_variant)
+        identity = physical_identity(args.model, args.sku, args.label, args.name)
     except SetupError as e:
         print(str(e), file=sys.stderr)
         return 2
@@ -258,7 +284,8 @@ def cmd_setup(args) -> int:
         return 4
     rec: dict = {"record": "aquacrop module setup (CP-01)", "utc": datetime.now(timezone.utc).isoformat(),
                  "port": args.port, "baud": args.baud, "name": args.name, "label": args.label,
-                 "model": MODELS[args.model], "ai_variant": args.ai_variant,
+                 "model": MODELS[args.model], "sku": args.sku, "physical_identity": identity,
+                 "ai_variant": args.ai_variant,
                  "ai_ranges": {str(k): v for k, v in sorted(ranges.items())}}
     path = Path(args.record or f"setup-{args.name}.json")
     bus = None
@@ -275,7 +302,9 @@ def cmd_setup(args) -> int:
         if not what:
             print("the module already has this address and these modes; nothing to write", file=sys.stderr)
         elif not args.yes and not _confirm(f"One module answers on {args.port}, at address {plan['current_address']}. "
-                                           f"This will write: {'; '.join(what)}."):
+                                           f"{NOT_FROM_THE_BUS} You state: SKU {args.sku} "
+                                           f"({PRODUCTS[args.sku]}), marked {args.label!r}. Check the label of the "
+                                           f"module that is connected now. This will write: {'; '.join(what)}."):
             print("cancelled; nothing was written", file=sys.stderr)
             return 3
         cur, new = plan["current_address"], plan["new_address"]
