@@ -89,8 +89,8 @@ def main() -> int:
     check("RELEASE.json wheel SHA-256", wheel.is_file() and sha(wheel) == info["wheel"]["sha256"], info["wheel"]["file"])
     check("RELEASE.json says no physical verification", info.get("physical_verification") is False, info.get("evidence"))
     houses = sorted(p.name for p in rel.glob("wheelhouse-*") if p.is_dir())
-    check("offline wheelhouse for the CM4 (aarch64, Python 3.11)", "wheelhouse-aarch64-py311" in houses
-          and houses == sorted(info.get("wheelhouses", [])), houses)
+    check("offline wheelhouses for the CM4 (aarch64, Python 3.11 and 3.13)", {"wheelhouse-aarch64-py311", "wheelhouse-aarch64-py313"}
+          <= set(houses) and houses == sorted(info.get("wheelhouses", [])), houses)
     # F-01: the Windows demo runs on the Python bundled in runtime/, with AquaCrop and the locked packages in it
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from build_release import WINDOWS_RUNTIME, lock_for

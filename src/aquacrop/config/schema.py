@@ -379,6 +379,23 @@ class OffsiteBackupSettings(_Strict):
         return self
 
 
+SAFE_STATE_TRIGGERS = ("START", "STOP", "LEASE_END", "MODULE_RETURN")
+
+
+class SafeStateSettings(_Strict):
+    """When the hardware service switches digital outputs OFF by itself (ADR-0017). OFF only, each coil that
+    reads ON, with an FC01 readback; never ON, never a drive. Empty (the default) keeps the read-only rule
+    that nothing is written without a bench lease: start, stop, lease end and comm loss send no frame."""
+    outputs_off_on: list[Literal["START", "STOP", "LEASE_END", "MODULE_RETURN"]] = Field(default_factory=list)
+
+    @field_validator("outputs_off_on")
+    @classmethod
+    def _unique(cls, v: list[str]) -> list[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("each safe-state trigger may be listed once")
+        return v
+
+
 class SecuritySettings(_Strict):
     session_idle_minutes: int = Field(default=30, ge=1, le=24 * 60)
     session_absolute_hours: int = Field(default=12, ge=1, le=7 * 24)
@@ -430,6 +447,7 @@ class InstallationConfig(_Strict):
     historian: HistorianSettings = HistorianSettings()
     offsite_backup: OffsiteBackupSettings = OffsiteBackupSettings()
     security: SecuritySettings = SecuritySettings()
+    safe_state: SafeStateSettings = SafeStateSettings()
 
     @field_validator("twin", mode="before")
     @classmethod
@@ -474,6 +492,8 @@ class InstallationConfig(_Strict):
             errs.append("SIMULATED profile allows virtual buses only")
         if self.profile in (AccessPolicy.HARDWARE_READ_ONLY, AccessPolicy.HYBRID_SHADOW) and "virtual" in kinds:
             errs.append(f"{self.profile.value} profile allows rtu buses only")
+        if self.safe_state.outputs_off_on and self.profile != AccessPolicy.HARDWARE_READ_ONLY:
+            errs.append("safe_state applies to a HARDWARE_READ_ONLY profile only (the simulation has no real outputs)")
         ports = [b.port for b in self.buses if b.port]
         if len(ports) != len(set(ports)):
             errs.append("two buses name the same serial port (one owner per bus)")

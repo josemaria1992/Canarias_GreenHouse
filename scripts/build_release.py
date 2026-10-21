@@ -2,7 +2,7 @@
 optional bundled Windows Python (runtime/), optional offline wheelhouses, RELEASE.json and a SHA-256 manifest of every file.
 
     python scripts/build_release.py --out dist-release                                   # no wheelhouses
-    python scripts/build_release.py --out dist-release --windows-runtime download --wheelhouse aarch64:3.11
+    python scripts/build_release.py --out dist-release --windows-runtime download --wheelhouse aarch64:3.11 --wheelhouse aarch64:3.13
 
 The owner tour ships as docs/operator/walkthrough.md, owner-checklist.csv (every result NOT RUN) and
 owner-feedback-template.md. With --owner-tour (the output folder of scripts/ui_check/run_tour_rehearsal.py run
@@ -220,7 +220,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path, default=ROOT / "dist-release")
     ap.add_argument("--wheelhouse", action="append", default=[], metavar="PLATFORM:PYTHON",
-                    help="aarch64:3.11 (CM4, Bookworm), win_amd64:3.14, x86_64:3.12, macosx_11_0_arm64:3.12")
+                    help="aarch64:3.11 (CM4, Bookworm), aarch64:3.13 (CM4, Trixie), win_amd64:3.14, x86_64:3.12, macosx_11_0_arm64:3.12")
     ap.add_argument("--wheel", type=Path, help="use this built wheel instead of building one")
     ap.add_argument("--owner-tour", type=Path, help="evidence folder of run_tour_rehearsal.py: adds owner-tour/")
     ap.add_argument("--windows-runtime", metavar="NUPKG|download",

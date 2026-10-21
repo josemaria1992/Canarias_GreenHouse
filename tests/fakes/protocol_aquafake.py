@@ -36,6 +36,7 @@ class FakeDevice:
         self.inputs: dict[int, int] = {}
         self.writable: set[int] = set()
         self.on_write = None                # vfd: callable(address, value)
+        self.answer_address_change_from_new = False   # some firmware echoes an address change from the new address
 
 
 class FakeBus:
@@ -103,6 +104,21 @@ class FakeBus:
             if f == "apply_then_timeout":
                 return b""
             pdu = bytes([addr, fc]) + (body if f != "readback_mismatch" else struct.pack(">HH", a, v ^ 1))
+        elif fc == 0x06:      # Waveshare setup registers: address 0x4000, channel modes 0x1000..0x1007
+            a, v = struct.unpack(">HH", body)
+            if a == 0x4000 and 1 <= v <= 247 and v not in self.devices:
+                del self.devices[addr]
+                d.address = d.meta[0x4000] = v
+                self.devices[v] = d
+                d.writes_applied += 1
+                if d.answer_address_change_from_new:
+                    addr = v
+            elif 0x1000 <= a < 0x1008 and 0 <= v <= 4:
+                d.modes[a - 0x1000] = v
+                d.writes_applied += 1
+            else:
+                return exc(2)
+            pdu = bytes([addr, fc]) + body
         elif fc in (0x03, 0x04):
             start, count = struct.unpack(">HH", body)
             if fc == 0x04:

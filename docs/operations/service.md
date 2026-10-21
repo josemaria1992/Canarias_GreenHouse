@@ -271,8 +271,9 @@ and waits for `/api/health`. The configuration and secrets in `/etc/aquacrop` ar
 If the new release does not report healthy it says so and how to roll back.
 
 Schema migrations: a new version migrates the database on its first start, after its own safety
-copy. This release (0.3.0) migrates schema 2 to 3 (recipes, recipe activations and stock readiness,
-ADR-0014); a database from an earlier version (schema 2) is migrated once and that version cannot open it afterwards. The safety copy
+copy. 0.3.0 migrated schema 2 to 3 (recipes, recipe activations and stock readiness, ADR-0014); 0.4.0
+migrates 3 to 4 (I/O assignment and channel check records, an index on output commands, ADR-0017). A
+database is migrated once and an older version cannot open it afterwards. The safety copy
 needs the database size plus 20 % free above the reserve; once the window is full that does not fit
 on the eMMC, so the migration refuses to start until space is provided (ADR-0008). Before an upgrade
 with a full year of history, test it on a restored copy:

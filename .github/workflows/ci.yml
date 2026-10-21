@@ -179,7 +179,7 @@ jobs:
           T="$RUNNER_TEMP"; REL1=$(ls -d "$T"/x1/aquacrop-*)
           BUILT=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['built_utc'])" "$REL1/RELEASE.json")
           python scripts/build_release.py --out dist-release --wheel "$(ls "$REL1"/wheels/aquacrop_greenhouse-*.whl)" \
-            --built-utc "$BUILT" --owner-tour "$T/tour-evidence" --windows-runtime download --wheelhouse aarch64:3.11
+            --built-utc "$BUILT" --owner-tour "$T/tour-evidence" --windows-runtime download --wheelhouse aarch64:3.11 --wheelhouse aarch64:3.13
           mkdir "$T/x2" && unzip -q dist-release/aquacrop-*.zip -d "$T/x2"
           REL2=$(ls -d "$T"/x2/aquacrop-*)
           python - "$REL1/RELEASE.json" "$REL2/RELEASE.json" <<'PY'
@@ -311,10 +311,14 @@ jobs:
     # application runs its checks; then upgrade and rollback switch releases.
     needs: release
     runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]          # Raspberry Pi OS Bookworm and Trixie
     steps:
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - uses: actions/download-artifact@v4
         with:
           name: release

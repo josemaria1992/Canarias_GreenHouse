@@ -122,8 +122,20 @@ def main() -> int:
                "passed": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results),
                "checks": results}
     (out / "checks.json").write_text(json.dumps(summary, indent=1))
+    annotate_failures(results, "browser check failure")
     print(f"{summary['passed']} passed, {summary['failed']} failed; evidence in {out}")
     return 0 if summary["failed"] == 0 and results else 1
+
+
+def annotate_failures(results: list[dict], title: str) -> None:
+    """On GitHub Actions, each failed check also becomes an annotation on the check run (readable through the
+    checks API when the job log cannot be downloaded)."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    for r in results:
+        if not r.get("ok"):
+            msg = f"{r.get('id')}: {r.get('detail')}"[-1500:].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+            print(f"::error title={title}::{msg}", flush=True)
 
 
 if __name__ == "__main__":

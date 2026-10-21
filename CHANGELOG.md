@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.4.0 (2026-10-20): bench bring-up of the CM4 box and the six modules, the I/O board
+
+For the owner's hardware bring-up brief of 2026-10-20 and the owner's answers (ADR-0017). Tested on the in-memory
+RS485 bus and the simulation; **nothing was run on the CM4 or the modules**. Physical AUTO still does not
+exist, the drive interface stays NOT_CONFIGURED, `physical_mapping` stays empty, off-device backups stay
+disabled, retention (365 d), cadence (60 s) and the 17 GiB budget are unchanged, and the 16 owner tour
+results stay NOT RUN. No control algorithm or production mapping changed.
+
+### Module setup and the bench configuration
+- `aquacrop hw scan` lists the modules that answer on a port (reads only).
+- `aquacrop hw setup` gives one module its address, Normal channel modes (Relay (D), IO 8CH) or analog
+  ranges (AI 8CH), with only that module on the wire: refuses two answering modules, an analog module
+  given as digital (or the reverse) or a port in use; never broadcasts, never writes the UART register;
+  reads back from the new address and checks the old one is silent; always writes a JSON record.
+- The bus cannot tell a Relay (D) from an IO 8CH, nor one AI 8CH from another, so `hw setup` requires
+  `--sku` (26517, 26244 or 25821, from the label, matching `--model`) and `--label` (the name marked on the
+  module, equal to `--name`). It shows them in the confirmation and keeps them in the record as the
+  installer's statement (`provable_from_bus: false`). `hw make-config` refuses a record without them
+  (owner's reviewer, 2026-10-21).
+- `aquacrop hw make-config` builds a HARDWARE_READ_ONLY configuration from the records (two ports: digital
+  modules on one, analog on the other), validated before it is written.
+- `aquacrop hw ports` checks COM1 to COM3 of the RS485 box (boot overlays, device nodes, permissions, port
+  owner) and changes nothing.
+
+### Safety on the bench
+- Safe-state OFF (`safe_state.outputs_off_on`): at service start and stop, at the end of a bench session
+  (only its outputs) and when a module answers again, every digital output that reads ON gets one OFF with
+  readback, audited with origin SAFE_STATE. OFF only, digital outputs only, never a drive. Empty by default;
+  `hw make-config` sets all four moments. The poller notices an expired session with no page open.
+- Writes on the wire now depend on the configuration (`RELEASE_READINESS.md`, "What AquaCrop writes on the
+  wire"; CP-05 updated): the read-only configuration still writes nothing on its own; the generated bench
+  configuration writes only these FC05 OFF frames; no configuration ever sends an ON automatically.
+- A bench session can be renewed by its holder; "All outputs OFF" needs no session.
+- A bus poller that fails restarts after 30 s; port locks use the device's real path (a symlink and its
+  target are one port).
+
+### I/O board (developer page)
+- One card per module: output switches with asked and reported lights, input lights with the changes
+  seen, analog readings in mA or V with a bar, the raw value, quality and age, the module's answering state
+  and the port's polling time. Virtual modules on the simulation (I/O test mode), real ones on the bench.
+- Guided check: every channel in turn with a manual Next; an output is switched ON during its own step,
+  an input waits for its change, an analog input shows its reading; Works / Doesn't work / skipped is
+  recorded with what the server saw.
+- I/O assignment: a channel gets an installation signal (PROPOSED), and VERIFIED after the server-side
+  check and the user's observation; export as YAML or JSON. Records only: nothing is bound or controlled.
+- Schema 4 (`io_assignments`, `io_checks`, an index on output commands), migrated after a safety copy.
+
+### Release
+- Offline packages for the CM4 on Python 3.11 (Bookworm) and 3.13 (Trixie); CI stages the installer on both.
+- New guide `docs/installation/bench-bringup.md`; ADR-0017.
+
 ## 0.3.4 (2026-10-19): owner feedback on 0.3.3 and the reviewer's corrections
 
 The owner's ad hoc feedback on 0.3.3 (O-01 to O-05, 2026-10-19) and the reviewer's findings R33-01 to R33-03.

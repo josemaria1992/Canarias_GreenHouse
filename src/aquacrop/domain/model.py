@@ -164,6 +164,7 @@ class CommandOrigin(str, enum.Enum):
     REPLAY = "REPLAY"
     SYSTEM = "SYSTEM"             # stop / fault sequences
     BENCH = "BENCH"               # operator command under an armed bench lease (real coil)
+    SAFE_STATE = "SAFE_STATE"     # OFF only, real coil: the configured safe-state triggers or "All outputs OFF"
 
 
 class Outcome(str, enum.Enum):

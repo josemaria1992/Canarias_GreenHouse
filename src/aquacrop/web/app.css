@@ -238,3 +238,44 @@ details.tech > summary, details.card > summary { padding: 2px 0; }
   .w-kind { min-width: 0; width: 100%; }
   .subcard .row input[type=text], details.inline input[type=text] { width: 100%; }
 }
+/* I/O board (ADR-0017): lights, switches and bars for the bench bring-up */
+.modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; }
+.module h2 { margin: 0; font-size: 16px; }
+.module h3 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; }
+.tile { border: 1px solid var(--line); border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tile.differs { border-color: var(--st-move); box-shadow: 0 0 0 1px var(--st-move) inset; }
+.tile-head { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+.tile .big { font-size: 20px; text-align: center; }
+.tile .asg, .tile .muted.small { overflow-wrap: anywhere; }
+.lights { display: inline-flex; gap: 3px; }
+.led { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--muted); flex: none; }
+.led-off { background: transparent; }
+.led-unk { background: repeating-linear-gradient(45deg, var(--line), var(--line) 2px, transparent 2px, transparent 4px); }
+.led-on { background: var(--st-on); border-color: var(--st-on); box-shadow: 0 0 6px var(--st-on); }
+.led-on.asked { background: var(--sim); border-color: var(--sim); box-shadow: none; }
+.led-on.input { background: var(--st-move); border-color: var(--st-move); box-shadow: 0 0 6px var(--st-move); }
+.led-on.online { box-shadow: none; }
+.switch { width: 100%; padding: 6px 0; border-radius: 16px; border: 1px solid var(--line); background: var(--st-off-pill); color: #fff; font-weight: 700; cursor: pointer; }
+.switch.on { background: var(--st-on); }
+.switch:disabled { opacity: .55; cursor: not-allowed; }
+.linkbtn.chan { font-family: ui-monospace, monospace; font-size: 12px; border: 0; cursor: pointer; }
+.asg { font-size: 11px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.asg-VERIFIED { color: var(--st-on-t); font-weight: 700; }
+.asg-PROPOSED { color: var(--st-move-t); }
+.ai-table .big { font-size: 15px; white-space: nowrap; }
+.ai-table td { vertical-align: top; }
+.barcell { width: 30%; min-width: 80px; }
+.bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.bar .fill { height: 100%; background: var(--water); }
+.assign { margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--muted); border-radius: 8px; }
+.assign h3 { color: var(--ink); }
+@media (max-width: 760px) { .modules { grid-template-columns: minmax(0, 1fr); } .tiles { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); } }
+.assign select, .assign input { max-width: 100%; }
+.tile.current, .ai-table tr.current td { outline: 3px solid var(--focus); outline-offset: -2px; }
+.guide .lead { font-size: 16px; font-weight: 600; }
+.guide.armed-soft { border: 2px solid var(--focus); position: sticky; top: 34px; z-index: 5; }
+.chk { font-size: 11px; font-weight: 700; }
+.chk-PASS { color: var(--st-on-t); } .chk-FAIL { color: var(--st-fault-t); } .chk-SKIPPED { color: var(--muted); }
+.warn-text { color: var(--st-move-t); font-weight: 600; }
+@media (max-width: 760px) { .guide.armed-soft { position: static; } }

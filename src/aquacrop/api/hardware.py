@@ -4,9 +4,13 @@ One worker thread per RS485 bus owns all traffic on that bus. Between polls it e
 bench commands, STOP priority first; each command is re-checked against the lease, its expiry and
 the configuration version at the moment it runs (CommandService re-validates before dispatch).
 
-Starting, polling, reconnecting and stopping send read frames only. Nothing here writes on start,
-on reconnect, on lease expiry or on shutdown. A drive with a Modbus register map (ADR-0015) is polled
-on its bus like a module (status word only); its running and fault changes are written as events.
+Starting, polling, reconnecting and stopping send read frames only, unless the configuration lists
+safe-state triggers (`safe_state.outputs_off_on`, ADR-0017): then, at each listed moment, every digital
+output that reads ON is switched OFF (origin SAFE_STATE, FC05 once, FC01 readback, audited like any
+command). START also covers a module that did not answer at start, at its first answer. "All outputs
+OFF" does the same on request. Nothing here ever switches an output ON by itself or writes to a drive.
+A drive with a Modbus register map (ADR-0015) is polled on its bus like a module (status word only);
+its running and fault changes are written as events.
 
 Polling, edge detection, alarm evaluation and the dashboard keep the bus poll rate. The historian is
 separate: a recorder thread writes one complete snapshot of every point on each wall-clock boundary of
@@ -28,23 +32,29 @@ from ..config.schema import InstallationConfig
 from ..control.alarms import AlarmEngine
 from ..control.bench import BenchGate, close_stale_leases, historian_persistence
 from ..control.commands import CommandService
-from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Origin, Outcome, OutputCommand, PointKind,
-                            Sample, utcnow)
+from ..domain.model import (CommandOrigin, CommandRecord, ControllerState, Origin, Outcome, OutputCommand, PointId,
+                            PointKind, Priority, Sample, utcnow)
 from ..historian.recording import HistoryRecorder, complete_snapshot, stale_limit_s
 from ..historian.retention import RetentionTask, evaluate_recorder_alarm, evaluate_storage_alarm
 from ..historian.writer import Historian
-from ..io.modbus_backend import ModbusBackend
+from ..drivers.rtu_errors import RtuError
+from ..io.modbus_backend import ModbusBackend, safe_state_policy
 from ..io.sampling import AcqContext
 from ..security.auth import Principal
 
 MAX_FAILURES_PER_10_MIN = 5
+RESTART_AFTER_FAILED_S = 30.0      # a FAILED bus worker waits this long, then polls again (counted in restarts)
+SAFE_OFF_WAIT_S = 20.0
 
 
 class BusWorker:
     """Serializes one bus: queued commands (priority, FIFO) run before the next due poll."""
 
-    def __init__(self, bus_id: str, interval_s: float, poll, *, monotonic=time.monotonic):
+    def __init__(self, bus_id: str, interval_s: float, poll, *, monotonic=time.monotonic,
+                 restart_after_s: float = RESTART_AFTER_FAILED_S):
         self.bus_id, self.interval_s, self._poll, self._mono = bus_id, interval_s, poll, monotonic
+        self.restart_after_s = restart_after_s
+        self.restarts = 0
         self._heap: list = []
         self._seq = itertools.count()
         self._cv = threading.Condition()
@@ -62,11 +72,15 @@ class BusWorker:
         self._thread.start()
 
     def submit(self, cmd: OutputCommand, execute) -> Future:
+        return self.submit_job(int(cmd.priority), execute, cmd)
+
+    def submit_job(self, priority: int, execute, cmd: OutputCommand | None = None) -> Future:
+        """Queue work for this bus (a command, or a safe-state job when `cmd` is None); it runs before the next poll."""
         fut: Future = Future()
         with self._cv:
             if self._stop:
                 raise RuntimeError("bus worker stopped")
-            heapq.heappush(self._heap, (int(cmd.priority), next(self._seq), cmd, execute, fut))
+            heapq.heappush(self._heap, (priority, next(self._seq), cmd, execute, fut))
             self._cv.notify()
         return fut
 
@@ -76,7 +90,7 @@ class BusWorker:
             pending, self._heap = self._heap, []
             self._cv.notify()
         for _, _, cmd, _, fut in pending:
-            fut.set_result(cancel(cmd, "process stopping before dispatch"))
+            fut.set_result(cancel(cmd, "process stopping before dispatch") if cmd is not None else None)
         if self._thread.is_alive():
             self._thread.join(timeout=10)
 
@@ -109,14 +123,20 @@ class BusWorker:
                 self.last_error = f"{utcnow().isoformat()} {e!r}"
                 if len([t for t in self.failures if now - t < 600]) > MAX_FAILURES_PER_10_MIN:
                     self.state = "FAILED"
-                    return
+                    with self._cv:   # visible as FAILED, then one more attempt after the pause
+                        self._cv.wait_for(lambda: self._stop, timeout=self.restart_after_s)
+                        if self._stop:
+                            self.state = "STOPPED"
+                            return
+                    self.failures.clear()
+                    self.restarts += 1
                 self.state = "RESTARTING"
 
     def health(self) -> dict:
         age = None if self.heartbeat is None else self._mono() - self.heartbeat
         ok = self.state == "RUNNING" and age is not None and age < max(5.0, 2 * self.interval_s)
         return {"bus_id": self.bus_id, "state": self.state, "heartbeat_age_s": age, "ok": ok, "polls": self.polls,
-                "last_error": self.last_error}
+                "last_error": self.last_error, "restarts": self.restarts}
 
 
 class HardwareService:
@@ -135,10 +155,17 @@ class HardwareService:
         closed = close_stale_leases(hist, session_id)
         if closed:
             hist.event("BENCH_LEASES_CLOSED_AT_START", {"count": closed}, actor="system")
-        arm, end = historian_persistence(hist)
+        arm, end, renew = historian_persistence(hist)
         self.gate = BenchGate(cfg, session_id, arm, end, self._preflight,
-                              lambda kind, payload, actor: hist.event(kind, payload, actor=actor), monotonic)
+                              lambda kind, payload, actor: hist.event(kind, payload, actor=actor), monotonic,
+                              on_end=self._lease_ended, persist_renew=renew)
         self.commands = CommandService(cfg, self.backend, hist, self._policy, lambda: ControllerState.STOPPED)
+        self.safe_commands = CommandService(cfg, self.backend, hist, safe_state_policy, lambda: ControllerState.STOPPED)
+        self.safe_triggers = frozenset(cfg.safe_state.outputs_off_on)
+        self._off_at_first_answer: set[str] = set()   # START could not read these modules
+        self._offline: set[str] = set()
+        self.last_safe_off: dict | None = None
+        self.poll_times: dict[str, float] = {}
         self.workers = {b.bus_id: BusWorker(b.bus_id, b.poll_interval_s, self.poll_bus, monotonic=monotonic)
                         for b in cfg.buses}
         self._sync_authorizer()
@@ -155,12 +182,21 @@ class HardwareService:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
+        if "START" in self.safe_triggers:   # queued before the first poll of each bus
+            self._queue_safe_off(self._digital_uids(), "START", "system")
         for w in self.workers.values():
             w.start()
         self.recorder.start()
 
     def stop(self) -> None:
         self.recorder.stop()
+        if "STOP" in self.safe_triggers:
+            futs = self._queue_safe_off(self._digital_uids(), "STOP", "system")
+            for f in futs:
+                try:
+                    f.result(timeout=SAFE_OFF_WAIT_S)
+                except Exception:
+                    pass   # recorded by the job itself; stopping goes on
         for w in self.workers.values():
             w.stop(self._cancel)
         self.backend.close()   # releases ports; sends nothing
@@ -192,6 +228,7 @@ class HardwareService:
                 # inputs already failed this cycle: don't spend another timeout on coils
                 got += self.backend.unavailable(d.device_uid, ri.error or "device read failed", (PointKind.DO,)).samples
             status[d.device_uid] = (ok, err)
+            self._note_answer(d.device_uid, d.model in DIGITAL_IO_MODELS, ok)
         edges = []
         for target, dv in self.backend.drives.items():
             if dv.m.bus_id == bus_id:
@@ -215,7 +252,9 @@ class HardwareService:
             self.hist.alarms(dirty)
         for kind, payload in edges:
             self.hist.event(kind, payload, actor=None)
+        self.gate.active()     # notices an expired lease even when no page is open (and runs its lease-end OFF)
         took = self._mono() - t0
+        self.poll_times[bus_id] = took
         if took > self.cfg.bus(bus_id).poll_interval_s:
             self.hist.event("POLL_OVERRUN", {"bus_id": bus_id, "cycle_s": round(took, 3),
                                              "interval_s": self.cfg.bus(bus_id).poll_interval_s}, actor="system")
@@ -298,6 +337,92 @@ class HardwareService:
                                                             "around this point are uncertain"}, actor="system")
         self._clock_ref = (mono, wall)
 
+    # ------------------------------------------------------------------ safe state (ADR-0017)
+    def _digital_uids(self) -> list[str]:
+        return [d.device_uid for d in self.cfg.devices if d.model in DIGITAL_IO_MODELS]
+
+    def _note_answer(self, uid: str, digital: bool, ok: bool) -> None:
+        """Runs on the bus thread after each module read: a module that answers again after a gap, or for the
+        first time after START could not read it, has its ON outputs switched OFF when configured."""
+        if not ok:
+            self._offline.add(uid)
+            return
+        if not digital:
+            self._offline.discard(uid)
+            return
+        if uid in self._off_at_first_answer:
+            self._off_at_first_answer.discard(uid)
+            self._offline.discard(uid)
+            self._queue_safe_off([uid], "START", "system")
+        elif uid in self._offline:
+            self._offline.discard(uid)
+            if "MODULE_RETURN" in self.safe_triggers:
+                self._queue_safe_off([uid], "MODULE_RETURN", "system")
+
+    def _lease_ended(self, lease) -> None:
+        if "LEASE_END" not in self.safe_triggers:
+            return
+        by_dev: dict[str, set[int]] = {}
+        for t in lease.allowlist:
+            if t.startswith("drive:"):
+                continue
+            pid = PointId.parse(t)
+            by_dev.setdefault(pid.device_uid, set()).add(pid.channel)
+        for uid, chans in by_dev.items():
+            self._queue_safe_off([uid], "LEASE_END", lease.username, only=chans)
+
+    def _queue_safe_off(self, uids: list[str], trigger: str, actor: str, *, only: set[int] | None = None) -> list[Future]:
+        futs = []
+        for uid in uids:
+            w = self.workers[self.cfg.device(uid).bus_id]
+            try:
+                futs.append(w.submit_job(int(Priority.STOP), lambda u=uid: self._safe_off_device(u, trigger, actor, only)))
+            except RuntimeError:
+                pass    # the worker is stopping
+        return futs
+
+    def _safe_off_device(self, uid: str, trigger: str, actor: str, only: set[int] | None) -> dict:
+        """Runs on the bus thread: read the coils, switch each one that reads ON to OFF, record the result."""
+        rec: dict = {"trigger": trigger, "device_uid": uid, "utc": utcnow().isoformat()}
+        try:
+            on = self.backend.coils_on(uid)
+        except RtuError as e:
+            rec |= {"result": "NOT_READ", "detail": f"{e.kind}: {e}", "switched": []}
+            if trigger == "START":
+                self._off_at_first_answer.add(uid)
+                rec["detail"] += "; it is switched OFF at its first answer"
+            self._record_safe_off(rec, actor)
+            return rec
+        targets = [ch for ch in on if only is None or ch in only]
+        switched = []
+        for ch in targets:
+            cmd = self.safe_commands.build(actor=actor, target=f"{uid}.DO{ch}", desired=False,
+                                           origin=CommandOrigin.SAFE_STATE, reason=f"safe state ({trigger})")
+            r = self.safe_commands.submit(cmd)
+            switched.append({"point": cmd.target, "outcome": r.outcome.value, "detail": r.detail})
+        ok = all(x["outcome"] == Outcome.READBACK_CONFIRMED.value for x in switched)
+        rec |= {"result": "OFF_CONFIRMED" if ok else "INCOMPLETE", "were_on": [f"{uid}.DO{c}" for c in on],
+                "switched": switched}
+        self._record_safe_off(rec, actor)
+        return rec
+
+    def _record_safe_off(self, rec: dict, actor: str) -> None:
+        self.last_safe_off = rec
+        self.hist.event("SAFE_STATE_OFF", rec, actor=actor)
+
+    def all_off(self, actor: str) -> list[dict]:
+        """"All outputs OFF" on request: every digital module, every output that reads ON (no lease needed)."""
+        out = []
+        for f in self._queue_safe_off(self._digital_uids(), "OPERATOR", actor):
+            try:
+                out.append(f.result(timeout=SAFE_OFF_WAIT_S))
+            except Exception as e:
+                out.append({"result": "NOT_DONE", "detail": repr(e)})
+        return out
+
+    def renew(self, p: Principal, lease_id: str | None, duration_s: int):
+        return self.gate.renew(p, lease_id, duration_s)
+
     # ------------------------------------------------------------------ bench
     def _preflight(self, devices: set[str]) -> str | None:
         for uid in sorted(devices):
@@ -379,7 +504,7 @@ class HardwareService:
         rec_ok = rec["ok"] or rec["state"] == "NOT_STARTED"
         return {"state": "RUNNING" if all(h["ok"] for h in hs) and rec_ok else
                 ("FAILED" if any(h["state"] == "FAILED" for h in hs) else "DEGRADED"),
-                "ok": all(h["ok"] for h in hs) and rec_ok, "buses": hs, "restarts": 0,
+                "ok": all(h["ok"] for h in hs) and rec_ok, "buses": hs, "restarts": sum(h["restarts"] for h in hs),
                 "last_error": next((h["last_error"] for h in hs if h["last_error"]), None),
                 "heartbeat_age_s": max((h["heartbeat_age_s"] or 0) for h in hs) if hs else None,
                 "recorder": rec, "retention": self.retention.view()}

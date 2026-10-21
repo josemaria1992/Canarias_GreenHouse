@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-CURRENT_VERSION = 3
+CURRENT_VERSION = 4
 
 MIGRATIONS: dict[int, tuple[str, str]] = {
     1: ("initial AquaCrop v0.2 schema", """
@@ -67,6 +67,17 @@ CREATE TABLE recipe_activations (seq INTEGER PRIMARY KEY, utc TEXT NOT NULL, act
     recipe TEXT NOT NULL, digest TEXT NOT NULL, action TEXT NOT NULL, json TEXT NOT NULL);
 CREATE TABLE stock_readiness (seq INTEGER PRIMARY KEY, stock TEXT NOT NULL, status TEXT NOT NULL, actor TEXT,
     utc TEXT, json TEXT NOT NULL);
+"""),
+    4: ("I/O board records: channel checks, assignments and a per-output command index (bench bring-up, ADR-0017)", """
+CREATE TABLE io_assignments (seq INTEGER PRIMARY KEY, point TEXT NOT NULL, signal TEXT, status TEXT NOT NULL,
+    actor TEXT NOT NULL, utc TEXT NOT NULL, note TEXT, evidence_json TEXT NOT NULL, config_id TEXT NOT NULL,
+    config_version TEXT NOT NULL);
+CREATE INDEX ix_io_assignments_point ON io_assignments(config_id, point, seq);
+CREATE TABLE io_checks (seq INTEGER PRIMARY KEY, run_id TEXT NOT NULL, point TEXT NOT NULL, result TEXT NOT NULL,
+    actor TEXT NOT NULL, utc TEXT NOT NULL, note TEXT, evidence_json TEXT NOT NULL, config_id TEXT NOT NULL,
+    config_version TEXT NOT NULL);
+CREATE INDEX ix_io_checks_point ON io_checks(config_id, point, seq);
+CREATE INDEX ix_commands_target ON commands(target, intent_utc);
 """),
 }
 

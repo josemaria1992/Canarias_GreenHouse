@@ -1,4 +1,4 @@
-# CP-05 Faults and zero writes
+# CP-05 Faults and writes on the wire
 
 > **UNSIGNED TEMPLATE.** Not evidence until filled in on the actual hardware and signed. Leave unknown fields blank; never copy expected values into "actual".
 
@@ -13,8 +13,13 @@
 | Location / bench description | |
 
 Profile: HARDWARE_READ_ONLY, no lease. Passive bus monitor: device ______, capture files attached.
+Configuration (tick one; fill one copy per configuration): ☐ read-only (no `safe_state`) ☐ generated bench (`hw make-config`, safe-state OFF at START, STOP, LEASE_END, MODULE_RETURN)
 
-| Action | Write frames on monitor (FC05/06/0F/10) | Software `writes_sent`/events | Points affected | Relay states unchanged? |
+Expected. Read-only: zero FC05/06/0F/10 frames in every row. Generated bench: no FC06/0F/10 and no FC05 ON
+in any row; FC05 OFF only at start, stop and module return, one per output that read ON just before (none
+when all were OFF), each with an FC01 read and a `SAFE_STATE_OFF` event. Any automatic ON is a FAIL.
+
+| Action | Write frames on monitor (FC05 ON / FC05 OFF / FC06 / 0F / 10) | Software `writes_sent`, `SAFE_STATE_OFF` events | Points affected | Output states as expected? |
 |---|---|---|---|---|
 | Service start | | | | |
 | Steady polling 10 min | | | | |

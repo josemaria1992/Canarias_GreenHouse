@@ -33,7 +33,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from run_ui_check import port_free, wait_healthy  # noqa: E402
+from run_ui_check import annotate_failures, port_free, wait_healthy  # noqa: E402
 
 
 def start(args, state: Path, port: int, log: Path, password: str | None) -> subprocess.Popen:
@@ -186,6 +186,7 @@ def main() -> int:
                "physical_verification": False,
                "passed": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results), "checks": results}
     (out / "rehearsal.json").write_text(json.dumps(summary, indent=1))
+    annotate_failures(results, "tour rehearsal failure")
     print(f"{summary['passed']} passed, {summary['failed']} failed; evidence in {out}")
     return 0 if summary["failed"] == 0 and results else 1
 
