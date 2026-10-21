@@ -173,10 +173,12 @@ class Assignments:
 
     def _do_evidence(self, actor: str, point: str, start: datetime) -> dict:
         rows = self.h.query("SELECT request_id, desired, outcome, intent_utc, origin FROM commands WHERE target=? "
-                            "AND actor=? AND intent_utc>=? ORDER BY intent_utc", (point, actor, start.isoformat(timespec="microseconds")))
+                            "AND actor=? AND intent_utc>=? ORDER BY intent_utc, rowid",   # rowid: equal clock ticks
+                            (point, actor, start.isoformat(timespec="microseconds")))
         ok = [r for r in rows if r["outcome"] == "READBACK_CONFIRMED"]
-        on = [r for r in ok if r["desired"]]
-        off = [r for r in ok if not r["desired"] and on and r["intent_utc"] > on[0]["intent_utc"]]
+        first_on = next((i for i, r in enumerate(ok) if r["desired"]), None)
+        on = [] if first_on is None else [ok[first_on]]
+        off = [] if first_on is None else [r for r in ok[first_on + 1:] if not r["desired"]]
         if not on or not off:
             raise AssignmentRefused(f"switch {point} ON and then OFF from this page first (both confirmed by readback, "
                                     f"within {CHECK_WINDOW_S // 60} minutes)")

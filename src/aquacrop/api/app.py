@@ -646,7 +646,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             out = {}
             for t in targets:
                 r = con.execute("SELECT desired, outcome, intent_utc, actor, origin FROM commands WHERE target=? "
-                                "ORDER BY intent_utc DESC LIMIT 1", (t,)).fetchone()
+                                "ORDER BY intent_utc DESC, rowid DESC LIMIT 1", (t,)).fetchone()
                 if r:
                     out[t] = {"desired": bool(r[0]), "outcome": r[1], "utc": r[2], "actor": r[3], "origin": r[4]}
             return out

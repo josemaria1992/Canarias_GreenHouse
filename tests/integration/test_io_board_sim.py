@@ -110,3 +110,21 @@ def test_an_input_change_right_after_the_switch_to_io_test_is_seen(sim):
     c.post("/api/io/inject", json={"point": "digital_B.DI4", "raw": False}, headers=h)
     changes = point(c.get("/api/board", headers=h).json(), "digital_B.DI4")["changes"]
     assert [v for _, v in changes] == [True, False]
+
+
+def test_on_and_off_in_the_same_clock_tick_still_verify(sim, monkeypatch):
+    """Regression (CI, Windows, Python 3.12): its clock can give the ON and the OFF the same time stamp. The
+    order of the commands is kept by their insertion order, so the OFF still counts as after the ON."""
+    import aquacrop.historian.writer as writer
+    from aquacrop.historian.schema import utc_iso
+    app, c = sim
+    h = login(c, "bench1")
+    assert c.post("/api/io/source", json={"source": "IO_TEST"}, headers=h).status_code == 200
+    assert c.post("/api/assignments", json={"point": "relay_B.DO2", "signal": "contactor.MP2.cmd"}, headers=h).status_code == 200
+    tick = utc_iso()
+    monkeypatch.setattr(writer, "utc_iso", lambda dt=None: tick)
+    cmd(c, h, "relay_B.DO2", True)
+    cmd(c, h, "relay_B.DO2", False)
+    assert point(c.get("/api/board", headers=h).json(), "relay_B.DO2")["asked"]["desired"] is False
+    r = c.post("/api/assignments/verify", json={"point": "relay_B.DO2", "observation": "virtual LED on and off"}, headers=h)
+    assert r.status_code == 200 and r.json()["status"] == "VERIFIED", r.text
