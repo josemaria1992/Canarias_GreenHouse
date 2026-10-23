@@ -1,0 +1,289 @@
+"""Program bodies: a trigger and an action over equipment items, as validated data.
+
+Triggers
+  MANUAL      started by an authorized user ("run now"), in MANUAL mode only
+  WEEKLY      weekly windows in the site time zone (`schedule.py`)
+  CONDITION   an input condition held for a debounce time, re-armed only after it clears
+  CONTINUOUS  always armed while the program is active (KEEP_BETWEEN), optionally limited to weekly windows
+
+Actions
+  RUN_FOR         one item ON for a bounded duration (or for the window, bounded by the item's max runtime)
+  DELIVER_VOLUME  one item ON until a measured volume, a runtime guard or a no-flow timeout
+  KEEP_BETWEEN    one item switched to keep a measurement inside [low, high] with hysteresis and debounce
+  SEQUENCE        ordered steps: ON / OFF with verification, WAIT, RUN, DELIVER; a stop path in reverse
+
+Bounds that every program carries: a maximum runtime per operation (never above the item's), a maximum
+number of steps (no loops exist), timeouts on every verification, and a failure path (`on_failure`).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Literal, Union
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from ..equipment.definitions import ID_RE, ItemBody, Operation, Purpose, TypeBody
+from .schedule import written_length_s
+
+MAX_STEPS = 32
+
+
+class _M(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+
+class WeeklyEntry(_M):
+    days: tuple[Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"], ...] = Field(min_length=1)
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class Condition(_M):
+    """An input condition: a digital role's state, or an analog measurement against a threshold."""
+    item: str = Field(pattern=ID_RE)
+    role: str = Field(pattern=ID_RE)
+    op: Literal["IS_ON", "IS_OFF", "ABOVE", "BELOW"]
+    value: float | None = None
+    debounce_s: float = Field(default=2.0, ge=0, le=3600)
+
+    @model_validator(mode="after")
+    def _v(self):
+        if (self.op in ("ABOVE", "BELOW")) != (self.value is not None):
+            raise ValueError("ABOVE/BELOW need a value; IS_ON/IS_OFF take none")
+        return self
+
+
+class ManualTrigger(_M):
+    type: Literal["MANUAL"]
+
+
+class WeeklyTrigger(_M):
+    type: Literal["WEEKLY"]
+    entries: tuple[WeeklyEntry, ...] = Field(min_length=1, max_length=28)
+
+
+class ConditionTrigger(_M):
+    type: Literal["CONDITION"]
+    when: Condition
+    rearm_after_s: float = Field(default=60, ge=0, le=86400)
+
+
+class ContinuousTrigger(_M):
+    type: Literal["CONTINUOUS"]
+    entries: tuple[WeeklyEntry, ...] = ()            # empty: always armed
+
+
+Trigger = Union[ManualTrigger, WeeklyTrigger, ConditionTrigger, ContinuousTrigger]
+
+
+class RunFor(_M):
+    type: Literal["RUN_FOR"]
+    item: str = Field(pattern=ID_RE)
+    duration_s: float | None = Field(default=None, gt=0, le=86400)    # None: the window (WEEKLY only)
+
+
+class DeliverVolume(_M):
+    type: Literal["DELIVER_VOLUME"]
+    item: str = Field(pattern=ID_RE)                 # the actuator
+    meter: str = Field(pattern=ID_RE)                # an item with an analog MEASUREMENT role (flow rate, L/min)
+    meter_role: str = Field(default="flow", pattern=ID_RE)
+    target_L: float = Field(gt=0, le=1e6)
+    max_runtime_s: float = Field(gt=0, le=86400)
+    no_flow_timeout_s: float = Field(default=20, gt=0, le=600)
+    min_flow_L_min: float = Field(default=0.5, gt=0)
+
+
+class KeepBetween(_M):
+    type: Literal["KEEP_BETWEEN"]
+    item: str = Field(pattern=ID_RE)
+    sensor: str = Field(pattern=ID_RE)
+    sensor_role: str = Field(pattern=ID_RE)
+    direction: Literal["RAISE", "LOWER"]             # RAISE: ON below low until high; LOWER: ON above high until low
+    low: float
+    high: float
+    debounce_s: float = Field(default=5, ge=0, le=3600)
+    max_run_s: float = Field(gt=0, le=86400)
+    min_off_s: float = Field(default=30, ge=0, le=86400)
+
+    @model_validator(mode="after")
+    def _v(self):
+        if self.low >= self.high:
+            raise ValueError("low must be below high (the gap is the hysteresis)")
+        return self
+
+
+class Step(_M):
+    do: Literal["ON", "OFF", "WAIT", "RUN", "DELIVER"]
+    item: str | None = Field(default=None, pattern=ID_RE)
+    verify_role: str | None = Field(default=None, pattern=ID_RE)   # ON/OFF: a feedback role that must follow
+    timeout_s: float = Field(default=10, gt=0, le=600)
+    seconds: float | None = Field(default=None, gt=0, le=86400)    # WAIT / RUN
+    meter: str | None = Field(default=None, pattern=ID_RE)         # DELIVER
+    meter_role: str = Field(default="flow", pattern=ID_RE)
+    target_L: float | None = Field(default=None, gt=0, le=1e6)
+    no_flow_timeout_s: float = Field(default=20, gt=0, le=600)
+    min_flow_L_min: float = Field(default=0.5, gt=0)
+
+    @model_validator(mode="after")
+    def _v(self):
+        if self.do in ("ON", "OFF") and not self.item:
+            raise ValueError(f"{self.do} needs an item")
+        if self.do in ("WAIT", "RUN") and self.seconds is None:
+            raise ValueError(f"{self.do} needs seconds")
+        if self.do == "DELIVER" and (not self.meter or self.target_L is None):
+            raise ValueError("DELIVER needs a meter and target_L")
+        return self
+
+
+class Sequence(_M):
+    type: Literal["SEQUENCE"]
+    steps: tuple[Step, ...] = Field(min_length=1, max_length=MAX_STEPS)
+    max_runtime_s: float = Field(gt=0, le=86400)
+
+
+Action = Union[RunFor, DeliverVolume, KeepBetween, Sequence]
+
+
+class ProgramBody(_M):
+    description: str = Field(default="", max_length=500)
+    trigger: Trigger = Field(discriminator="type")
+    action: Action = Field(discriminator="type")
+    on_failure: Literal["STOP_AND_ALARM"] = "STOP_AND_ALARM"
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _v(self):
+        t, a = self.trigger.type, self.action.type
+        if a == "KEEP_BETWEEN" and t != "CONTINUOUS":
+            raise ValueError("KEEP_BETWEEN runs with a CONTINUOUS trigger")
+        if t == "CONTINUOUS" and a != "KEEP_BETWEEN":
+            raise ValueError("a CONTINUOUS trigger is for KEEP_BETWEEN only")
+        if a == "RUN_FOR" and self.action.duration_s is None and t != "WEEKLY":
+            raise ValueError("RUN_FOR without a duration runs for its weekly window; give a duration otherwise")
+        return self
+
+
+def parse(body: dict) -> ProgramBody:
+    return ProgramBody.model_validate(body)
+
+
+def digest(body: dict) -> str:
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def actuators(p: ProgramBody) -> list[str]:
+    """The items whose COMMAND outputs this program switches: its resources for ownership."""
+    a = p.action
+    if a.type == "SEQUENCE":
+        return sorted({s.item for s in a.steps if s.do in ("ON", "OFF") and s.item})
+    return [a.item]
+
+
+def sensors(p: ProgramBody) -> list[tuple[str, str]]:
+    out = []
+    a, t = p.action, p.trigger
+    if t.type == "CONDITION":
+        out.append((t.when.item, t.when.role))
+    if a.type == "DELIVER_VOLUME":
+        out.append((a.meter, a.meter_role))
+    if a.type == "KEEP_BETWEEN":
+        out.append((a.sensor, a.sensor_role))
+    if a.type == "SEQUENCE":
+        for s in a.steps:
+            if s.verify_role:
+                out.append((s.item, s.verify_role))
+            if s.do == "DELIVER":
+                out.append((s.meter, s.meter_role))
+    return out
+
+
+def required_operation(p: ProgramBody) -> dict[str, Operation]:
+    a, t = p.action, p.trigger
+    if a.type == "SEQUENCE":
+        return {i: Operation.SEQUENCE_STEP for i in actuators(p)}
+    op = {"RUN_FOR": Operation.SCHEDULE if t.type == "WEEKLY" else Operation.TRIGGERED if t.type == "CONDITION"
+          else Operation.RUN_FOR, "DELIVER_VOLUME": Operation.DELIVER_VOLUME, "KEEP_BETWEEN": Operation.KEEP_BETWEEN}[a.type]
+    return {a.item: op}
+
+
+def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int], TypeBody], *,
+             physical: bool, bindings: dict[str, dict], readiness: dict[str, dict]) -> list[str]:
+    """Problems that block activation (empty list: valid). `physical` adds the checks a real runtime needs:
+    every role used is bound and VERIFIED, every measurement scaled with non-DEMO provenance."""
+    out = []
+
+    def item(iid: str):
+        it = items.get(iid)
+        if it is None or it["status"] != "ACTIVE":
+            out.append(f"equipment {iid} does not exist or is retired")
+            return None, None
+        return it, types[(it["type_id"], it["type_version"])]
+
+    for iid, op in required_operation(p).items():
+        it, tb = item(iid)
+        if it is None:
+            continue
+        if op not in tb.operations and not (op == Operation.RUN_FOR and Operation.SCHEDULE in tb.operations):
+            out.append(f"{it['name']}: its type does not permit {op.value}")
+        if not any(r.purpose == Purpose.COMMAND for r in tb.roles):
+            out.append(f"{it['name']} has no command output")
+        cap = tb.limits.max_runtime_s
+        for need, what in ((_runtime(p), "the program's runtime"),):
+            if cap is not None and need is not None and need > cap:
+                out.append(f"{it['name']}: {what} {need:g} s is above the type's maximum {cap:g} s")
+    for iid, role in sensors(p):
+        it, tb = item(iid)
+        if it is None:
+            continue
+        r = next((x for x in tb.roles if x.role == role), None)
+        if r is None:
+            out.append(f"{it['name']} has no role {role}")
+            continue
+        if r.direction.value != "INPUT":
+            out.append(f"{it['name']} {r.label} is not an input")
+        if physical:
+            b = bindings.get(iid, {}).get(role)
+            if not b or b["status"] != "VERIFIED":
+                out.append(f"{it['name']} {r.label}: no VERIFIED channel")
+            if r.purpose == Purpose.MEASUREMENT:
+                sc = ItemBody.model_validate(it["body"]).scaling.get(role)
+                if sc is None:
+                    out.append(f"{it['name']} {r.label}: no scaling")
+                elif sc.provenance == "DEMO":
+                    out.append(f"{it['name']} {r.label}: DEMO scaling cannot measure a real operation")
+    if physical:
+        for iid in actuators(p):
+            rd = readiness.get(iid)
+            if rd and not rd["ready"]:
+                out.append(f"equipment {iid} is not ready: " + "; ".join(
+                    x for x in (", ".join(rd["missing_required"]) and f"no channel for {', '.join(rd['missing_required'])}",
+                                ", ".join(rd["unverified"]) and f"not verified: {', '.join(rd['unverified'])}") if x))
+    t = p.trigger
+    if t.type == "CONDITION":
+        it, tb = item(t.when.item)
+        if tb is not None:
+            r = next((x for x in tb.roles if x.role == t.when.role), None)
+            if r is not None and (r.signal.value == "ANALOG") != (t.when.op in ("ABOVE", "BELOW")):
+                out.append("the trigger's comparison does not fit its signal (ABOVE/BELOW for analog, IS_ON/IS_OFF for digital)")
+    if t.type == "WEEKLY" and p.action.type == "RUN_FOR" and p.action.duration_s is None:
+        longest = max(written_length_s(e.start, e.end) for e in t.entries)
+        it, tb = item(p.action.item)
+        if tb is not None and tb.limits.max_runtime_s is not None and longest > tb.limits.max_runtime_s:
+            out.append(f"a window of {longest / 60:g} min is longer than {it['name']}'s maximum runtime "
+                       f"{tb.limits.max_runtime_s / 60:g} min")
+    return out
+
+
+def _runtime(p: ProgramBody) -> float | None:
+    a = p.action
+    return {"RUN_FOR": getattr(a, "duration_s", None), "DELIVER_VOLUME": getattr(a, "max_runtime_s", None),
+            "KEEP_BETWEEN": getattr(a, "max_run_s", None), "SEQUENCE": getattr(a, "max_runtime_s", None)}[a.type]
+
+
+def errors_text(e: ValidationError) -> list[str]:
+    out = []
+    for err in e.errors():
+        loc = ".".join(str(x) for x in err.get("loc", ()))
+        out.append(f"{loc}: {err.get('msg', '').removeprefix('Value error, ')}")
+    return out

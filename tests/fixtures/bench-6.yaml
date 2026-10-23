@@ -1,0 +1,149 @@
+# TEST FIXTURE: a copy of the CM4 bench configuration (bench-20261023-195449, read 2026-10-24) with the
+# serial ports replaced by in-memory test buses. Not commissioning evidence.
+# Bench configuration made by `aquacrop hw make-config` from the module setup records:
+#   setup-relay_A.json, setup-relay_B.json, setup-digital_A.json, setup-digital_B.json, setup-analog_A.json, setup-analog_B.json
+# HARDWARE_READ_ONLY: AquaCrop reads every module. Outputs switch only under a bench lease armed in the
+# browser by a commissioning user, or OFF at the safe-state moments below (ADR-0017).
+# Nothing here assigns a channel to a plant signal: assignments are made and verified on the I/O board.
+schema_version: 1
+config_id: bench-malmo
+config_version: bench-20261023-195449
+profile: HARDWARE_READ_ONLY
+label: REAL BENCH — read only, outputs only under a bench lease
+site:
+  name: AquaCrop bench
+  timezone: Europe/Stockholm
+buses:
+- bus_id: rs485_a
+  kind: rtu
+  port: aquafake://BENCH_A
+  port_evidence: 'Port1=/dev/ttyAMA3, Port2=/dev/ttyAMA4: single-module hw scan on
+    each of ttyAMA3/4/5, 2026-10-23'
+  serial: &id001
+    baudrate: 9600
+    parity: N
+    bytesize: 8
+    stopbits: 1
+    timeout_s: 0.3
+    read_retries: 1
+  poll_interval_s: 1.0
+- bus_id: rs485_b
+  kind: rtu
+  port: aquafake://BENCH_B
+  port_evidence: 'Port1=/dev/ttyAMA3, Port2=/dev/ttyAMA4: single-module hw scan on
+    each of ttyAMA3/4/5, 2026-10-23'
+  serial: *id001
+  poll_interval_s: 1.0
+devices:
+- device_uid: relay_A
+  bus_id: rs485_a
+  address: 1
+  model: WAVESHARE_MODBUS_RTU_RELAY_D
+  sku: '26517'
+  label: relay_A (SKU 26517, from its label)
+  firmware_evidence: version register 200 (hw setup 2026-10-23)
+- device_uid: relay_B
+  bus_id: rs485_a
+  address: 2
+  model: WAVESHARE_MODBUS_RTU_RELAY_D
+  sku: '26517'
+  label: relay_B (SKU 26517, from its label)
+  firmware_evidence: version register 200 (hw setup 2026-10-23)
+- device_uid: digital_A
+  bus_id: rs485_a
+  address: 5
+  model: WAVESHARE_MODBUS_RTU_IO_8CH
+  sku: '26244'
+  label: digital_A (SKU 26244, from its label)
+  firmware_evidence: version register 200 (hw setup 2026-10-23)
+- device_uid: digital_B
+  bus_id: rs485_a
+  address: 6
+  model: WAVESHARE_MODBUS_RTU_IO_8CH
+  sku: '26244'
+  label: digital_B (SKU 26244, from its label)
+  firmware_evidence: version register 200 (hw setup 2026-10-23)
+- device_uid: analog_A
+  bus_id: rs485_b
+  address: 3
+  model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+  sku: '25821'
+  label: analog_A (SKU 25821, from its label)
+  firmware_evidence: version register 210 (hw setup 2026-10-23)
+  hardware_variant: STANDARD
+  ai:
+    1:
+      mode: '3'
+    2:
+      mode: '3'
+    3:
+      mode: '3'
+    4:
+      mode: '3'
+    5:
+      mode: '3'
+    6:
+      mode: '3'
+    7:
+      mode: '3'
+    8:
+      mode: '3'
+- device_uid: analog_B
+  bus_id: rs485_b
+  address: 4
+  model: WAVESHARE_MODBUS_RTU_ANALOG_INPUT_8CH
+  sku: '25821'
+  label: analog_B (SKU 25821, from its label)
+  firmware_evidence: version register 210 (hw setup 2026-10-23)
+  hardware_variant: STANDARD
+  ai:
+    1:
+      mode: '3'
+    2:
+      mode: '3'
+    3:
+      mode: '3'
+    4:
+      mode: '3'
+    5:
+      mode: '3'
+    6:
+      mode: '3'
+    7:
+      mode: '3'
+    8:
+      mode: '3'
+scaling_profiles: []
+virtual_mapping: []
+physical_mapping: []
+alarm_rules: []
+drive_adapters:
+- adapter_id: MAIN
+  kind: NOT_CONFIGURED
+  signals:
+  - drive.MAIN.run
+  note: the drive's register map is pending CP-06
+safe_state:
+  outputs_off_on:
+  - START
+  - STOP
+  - LEASE_END
+  - MODULE_RETURN
+historian:
+  db_path: aquacrop-bench-malmo.sqlite3
+  recording_interval_s: 60
+  retention_days: 365
+  retention_provenance: APPROVED
+  db_budget_bytes: 18253611008
+  free_space_warning_bytes: 4294967296
+  free_space_reserve_bytes: 2147483648
+  snapshot_floor_bytes: 536870912
+security:
+  allowed_hosts:
+  - 127.0.0.1
+  - localhost
+  - aquacrop-bench.local
+  allowed_origins:
+  - http://127.0.0.1:8000
+  - http://localhost:8000
+  - https://aquacrop-bench.local
