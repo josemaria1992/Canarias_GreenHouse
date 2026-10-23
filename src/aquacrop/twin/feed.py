@@ -29,6 +29,7 @@ def _atomic(path: Path, doc: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, default=str), encoding="utf-8")
+    os.chmod(tmp, 0o640)              # the services run with umask 077; the other side reads through its group
     os.replace(tmp, path)
 
 
