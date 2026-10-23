@@ -459,7 +459,7 @@ def test_pre_migration_copy_is_verified_or_nothing_migrates(tmp_path, monkeypatc
     assert schema_version(con) == 1                  # nothing migrated
     assert not [p for p in (tmp_path / "backups").iterdir()]   # no unverified copy left behind
     monkeypatch.setattr(bk, "_table_counts", real)
-    assert migrate(con, tmp_path / "old.sqlite3") == [2, 3, 4]
+    assert migrate(con, tmp_path / "old.sqlite3") == [2, 3, 4, 5]
     con.close()
 
 

@@ -53,6 +53,7 @@ class Perm(str, enum.Enum):
     IO_ASSIGN = "io_assign"              # assign and verify I/O channels on the I/O board; needs commissioning
     EQUIPMENT_EDIT = "equipment_edit"    # equipment type drafts, items and program drafts (0.5.0)
     EQUIPMENT_ACTIVATE = "equipment_activate"  # activate or retire equipment types; activate programs
+    MODULE_SETUP = "module_setup"        # dashboard module wizard: reserve and write a new module's address; commissioning
 
 
 PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.ALARM_ACK: Role.OPERATOR,
@@ -60,7 +61,8 @@ PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.A
                  Perm.USER_ADMIN: Role.ADMIN, Perm.BACKUP: Role.ADMIN, Perm.BENCH_ARM: Role.OPERATOR,
                  Perm.PROCESS_CONTROL: Role.OPERATOR, Perm.RECIPE_EDIT: Role.OPERATOR,
                  Perm.RECIPE_ACTIVATE: Role.ADMIN, Perm.IO_ASSIGN: Role.OPERATOR,
-                 Perm.EQUIPMENT_EDIT: Role.OPERATOR, Perm.EQUIPMENT_ACTIVATE: Role.ADMIN}
+                 Perm.EQUIPMENT_EDIT: Role.OPERATOR, Perm.EQUIPMENT_ACTIVATE: Role.ADMIN,
+                 Perm.MODULE_SETUP: Role.OPERATOR}
 
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library
@@ -75,7 +77,7 @@ class Principal:
     must_change_password: bool
 
     def can(self, perm: Perm) -> bool:
-        if perm in (Perm.BENCH_ARM, Perm.IO_ASSIGN) and not self.commissioning:
+        if perm in (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP) and not self.commissioning:
             return False
         if self.must_change_password and perm != Perm.READ:
             return False

@@ -123,6 +123,7 @@ def test_new_type_version_changes_no_item_until_upgraded(sim):
                   headers=h).json()["version"] == 2
     ha = login(c, "admin1")
     assert c.post("/api/equipment/types/activate", json={"type_id": "pump", "version": 2}, headers=ha).status_code == 200
+    h = ha                                      # one browser session per client: the admin's from here on
     E = c.get("/api/equipment", headers=h).json()
     assert next(i for i in E["items"] if i["item_id"] == "p1")["type_version"] == 1
     assert {(t["version"], t["status"]) for t in E["types"] if t["type_id"] == "pump"} == {(1, "SUPERSEDED"), (2, "ACTIVE")}
@@ -166,8 +167,11 @@ def test_equipment_survives_restart_and_retire_keeps_history(sim):
         assert [i["item_id"] for i in items] == ["b1"]
         r = c2.post("/api/equipment/items/b1/retire", json={"reason": "bench rebuilt"}, headers=h)
         assert r.status_code == 200 and r.json()["status"] == "RETIRED"
-        rows = app2.state.equipment.h.query("SELECT count(*) AS n FROM equipment_items WHERE item_id='b1'")
-        assert rows[0]["n"] == 2          # both versions kept
+        rows = app2.state.equipment.h.query("SELECT status FROM equipment_items WHERE item_id='b1'")
+        assert [r["status"] for r in rows] == ["RETIRED"]          # kept, not deleted
+        assert c2.post("/api/equipment/items", json={"item_id": "b1", "name": "Button 1", "type_id": "button",
+                                                     "icon": "button", "body": {}, "expected_version": 1},
+                       headers=h).status_code == 409
 
 
 def test_export_and_import_create_drafts_only(sim):

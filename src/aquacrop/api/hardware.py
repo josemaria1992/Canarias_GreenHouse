@@ -179,6 +179,8 @@ class HardwareService:
                                         high_water=hist.newest_wall_label, wall=wall, monotonic=monotonic)
         self.retention = RetentionTask(hist, wall=wall, monotonic=monotonic)
         self.offsite = None                 # OffsiteMonitor, attached by the app
+        from ..commissioning.discovery import Discovery
+        self.discovery = Discovery(cfg, self.backend.buses, monotonic=monotonic)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -255,9 +257,20 @@ class HardwareService:
         self.gate.active()     # notices an expired lease even when no page is open (and runs its lease-end OFF)
         took = self._mono() - t0
         self.poll_times[bus_id] = took
+        self.discovery.after_poll(bus_id, took, self.cfg.bus(bus_id).poll_interval_s)
         if took > self.cfg.bus(bus_id).poll_interval_s:
             self.hist.event("POLL_OVERRUN", {"bus_id": bus_id, "cycle_s": round(took, 3),
                                              "interval_s": self.cfg.bus(bus_id).poll_interval_s}, actor="system")
+
+    def probe(self, bus_id: str, unit: int, timeout_s: float = 15.0) -> dict | None:
+        """Read one unit on an installation bus through that bus's own worker, after queued commands and
+        before its next poll; reads only (the commissioning wizard's destination check)."""
+        from ..drivers import setup as hw
+        bus = self.backend.buses[bus_id]
+
+        def job():
+            return hw.identify(bus, unit) if hw.read_one(bus, unit, hw.ADDRESS_REGISTER) is not None else None
+        return self.workers[bus_id].submit_job(int(Priority.NORMAL) + 50, job).result(timeout=timeout_s)
 
     # ------------------------------------------------------------------ historian snapshots
     def _stale_reason(self, s: Sample, now: datetime) -> str | None:

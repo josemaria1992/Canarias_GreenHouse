@@ -768,6 +768,18 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     app.state.equipment = equipment
     equipment_routes.register(app, require, equipment, _samples, edges)
 
+    # ------------------------------------------------------------------ module commissioning and discovery (0.5.0)
+    from . import commissioning as commissioning_routes
+    wizard = None
+    if not is_sim:
+        import os
+        from ..commissioning.wizard import Wizard
+        wizard = Wizard(hist, cfg, state_dir=state_dir, lock_root=Path(os.environ.get("AQUACROP_LOCK_DIR", state_dir)),
+                        probe_destination=svc.probe)
+        wizard.startup()
+    app.state.wizard = wizard
+    commissioning_routes.register(app, require, wizard, None if is_sim else svc)
+
     @app.get("/api/plant")
     async def plant_view(p: Principal = Depends(require(Perm.READ))):
         """The installation as the controllers see it: every logical signal of the confirmed layout with
