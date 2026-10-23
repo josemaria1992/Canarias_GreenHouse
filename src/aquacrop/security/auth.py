@@ -51,13 +51,16 @@ class Perm(str, enum.Enum):
     RECIPE_EDIT = "recipe_edit"          # save and validate recipe drafts
     RECIPE_ACTIVATE = "recipe_activate"  # activate or roll back a recipe version
     IO_ASSIGN = "io_assign"              # assign and verify I/O channels on the I/O board; needs commissioning
+    EQUIPMENT_EDIT = "equipment_edit"    # equipment type drafts, items and program drafts (0.5.0)
+    EQUIPMENT_ACTIVATE = "equipment_activate"  # activate or retire equipment types; activate programs
 
 
 PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.ALARM_ACK: Role.OPERATOR,
                  Perm.LOCKOUT_RESET: Role.OPERATOR, Perm.EXPORT_AUDIT: Role.ADMIN, Perm.CONFIG_ADMIN: Role.ADMIN,
                  Perm.USER_ADMIN: Role.ADMIN, Perm.BACKUP: Role.ADMIN, Perm.BENCH_ARM: Role.OPERATOR,
                  Perm.PROCESS_CONTROL: Role.OPERATOR, Perm.RECIPE_EDIT: Role.OPERATOR,
-                 Perm.RECIPE_ACTIVATE: Role.ADMIN, Perm.IO_ASSIGN: Role.OPERATOR}
+                 Perm.RECIPE_ACTIVATE: Role.ADMIN, Perm.IO_ASSIGN: Role.OPERATOR,
+                 Perm.EQUIPMENT_EDIT: Role.OPERATOR, Perm.EQUIPMENT_ACTIVATE: Role.ADMIN}
 
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library

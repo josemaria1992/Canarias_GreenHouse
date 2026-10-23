@@ -279,3 +279,8 @@ details.tech > summary, details.card > summary { padding: 2px 0; }
 .chk-PASS { color: var(--st-on-t); } .chk-FAIL { color: var(--st-fault-t); } .chk-SKIPPED { color: var(--muted); }
 .warn-text { color: var(--st-move-t); font-weight: 600; }
 @media (max-width: 760px) { .guide.armed-soft { position: static; } }
+/* equipment pages (0.5.0) */
+.eq-icon { stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.eq-item h3 { margin: 0; }
+.row.col { flex-direction: column; align-items: stretch; }
+textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; box-sizing: border-box; }

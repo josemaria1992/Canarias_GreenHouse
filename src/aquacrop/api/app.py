@@ -761,6 +761,13 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         hist.event("IO_ASSIGNMENTS_EXPORTED", {"format": fmt, "counts": doc["counts"]}, actor=p.username)
         return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'})
 
+    # ------------------------------------------------------------------ equipment (0.5.0)
+    from ..equipment.store import EquipmentStore
+    from . import equipment as equipment_routes
+    equipment = EquipmentStore(hist, cfg, assignments)
+    app.state.equipment = equipment
+    equipment_routes.register(app, require, equipment, _samples, edges)
+
     @app.get("/api/plant")
     async def plant_view(p: Principal = Depends(require(Perm.READ))):
         """The installation as the controllers see it: every logical signal of the confirmed layout with
