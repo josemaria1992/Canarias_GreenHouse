@@ -310,12 +310,20 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         if not is_sim:
             svc.start()
         watcher = asyncio.create_task(watch_edges())
+
+        async def publish_twin_feed():           # the twin reads this snapshot; it never writes back here
+            while True:
+                with contextlib.suppress(Exception):
+                    await run_in_threadpool(app.state.publish_snapshot)
+                await asyncio.sleep(30)
+        feeder = asyncio.create_task(publish_twin_feed())
         hist.event("PROCESS_STARTED", {"session_id": session_id, "config_id": cfg.config_id,
                                        "profile": cfg.profile.value, "version": __version__}, actor="system")
         try:
             yield
         finally:
             watcher.cancel()
+            feeder.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watcher
             if task is not None:
@@ -779,6 +787,42 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         wizard.startup()
     app.state.wizard = wizard
     commissioning_routes.register(app, require, wizard, None if is_sim else svc)
+
+    # ------------------------------------------------------------------ programs and the twin feed (0.5.0)
+    import os
+    from ..programs.store import ProgramStore
+    from ..twin import feed as twin_feed
+    from . import programs as program_routes
+    programs = ProgramStore(hist)
+    equipment.dependents = programs.dependents
+    app.state.programs = programs
+    feed_dir = Path(os.environ["AQUACROP_FEED_DIR"]) if os.environ.get("AQUACROP_FEED_DIR") else None
+    twin_url = os.environ.get("AQUACROP_TWIN_URL")
+
+    def publish():
+        if feed_dir is None:
+            return None
+        try:
+            return twin_feed.publish_snapshot(feed_dir, cfg=cfg, equipment=equipment, programs=programs, hist=hist,
+                                              software_version=__version__)
+        except OSError as e:
+            hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
+            return None
+    app.state.publish_snapshot = publish
+    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
+
+    @app.get("/api/twin-link")
+    def twin_link(p: Principal = Depends(require(Perm.READ))):
+        return {"url": twin_url, "feed": feed_dir is not None,
+                "note": ("The digital twin is a separate service with its own database and virtual modules. "
+                         "Opening or running it never affects the real system.")}
+
+    @app.post("/api/twin-link/publish")
+    def twin_publish(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        r = publish()
+        if r is None:
+            raise HTTPException(409, "no twin feed directory is configured on this controller")
+        return r
 
     @app.get("/api/plant")
     async def plant_view(p: Principal = Depends(require(Perm.READ))):
