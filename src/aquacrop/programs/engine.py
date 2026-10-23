@@ -177,7 +177,7 @@ class Engine:
         feedback = self._role_value(it, fb.role) if fb else None
         owner = self.arbiter.owner.get(iid)
         return {"item_id": iid, "name": it.name, "commanded": commanded,
-                "coil": "UNKNOWN" if coil is None else ("ON" if coil else "OFF"),
+                "coil": "NONE" if cp is None else "UNKNOWN" if coil is None else ("ON" if coil else "OFF"),
                 "feedback": "NONE" if fb is None else ("UNKNOWN" if feedback is None else ("ON" if feedback else "OFF")),
                 "owner": owner, "verified_channels": all(it.verified.values()) if it.verified else False}
 

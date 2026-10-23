@@ -287,3 +287,14 @@ textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; b
 .steps { display: flex; gap: 12px; list-style: none; padding: 0; margin: 4px 0; }
 .steps li { opacity: .5; } .steps li.done { opacity: .8; } .steps li.now { opacity: 1; font-weight: 600; }
 .diagram-text { overflow-x: auto; white-space: pre; }
+/* digital twin page (0.5.0) */
+.twin-banner { background: #3b2a6b; color: #fff; }
+.eq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.eq-card { border: 1px solid var(--line, #444); border-radius: 8px; padding: 10px; }
+.eq-card.eq-busy { border-color: var(--ok, #2a8); }
+.led-wrap { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+.narrow-num { width: 6em; }
+.clock { font-variant-numeric: tabular-nums; }
+.card.bad { border-color: var(--bad, #c33); }
+.twin-page main { max-width: 100%; overflow-x: hidden; }
+.eq-card table { width: 100%; table-layout: fixed; word-break: break-word; }
