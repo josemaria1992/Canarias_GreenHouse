@@ -309,6 +309,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         task = asyncio.create_task(svc.run_forever()) if is_sim else None
         if not is_sim:
             svc.start()
+            if app.state.live_engine is not None:
+                app.state.live_engine.start()      # comes up in RECOVERY: nothing runs until approved
         watcher = asyncio.create_task(watch_edges())
 
         async def publish_twin_feed():           # the twin reads this snapshot; it never writes back here
@@ -331,6 +333,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
             else:
+                if app.state.live_engine is not None:
+                    await run_in_threadpool(app.state.live_engine.stop)
                 await run_in_threadpool(svc.stop)   # releases ports; sends nothing
             # Shutdown issues no output commands; it only records the event and closes storage.
             hist.event("PROCESS_STOPPING", {"session_id": session_id}, actor="system")
@@ -810,6 +814,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             return None
     app.state.publish_snapshot = publish
     program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
+
+    # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
+    from . import operation as operation_routes
+    live_engine = None
+    if not is_sim and cfg.bench_tests.enabled:
+        from ..programs.live import LiveEngineHost
+        live_engine = LiveEngineHost(svc, hist, equipment, programs, session_id)
+    app.state.live_engine = live_engine
+    operation_routes.register(app, require, live_engine, programs, equipment, cfg)
 
     @app.get("/api/twin-link")
     def twin_link(p: Principal = Depends(require(Perm.READ))):

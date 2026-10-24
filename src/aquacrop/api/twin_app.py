@@ -261,7 +261,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         return v
 
     def _programs() -> list[dict]:
-        active = svc.programs.active(svc.runtime_id)
+        active = svc.programs.active(svc.store_id)
         out = []
         for v in svc.programs.versions():
             a = active.get(v["program_id"])
@@ -340,7 +340,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         v = refused(svc.programs.get, body.program_id, body.version)
         if v["status"] != "VALIDATED":
             refused(_validate_here, p.username, body.program_id, body.version)
-        return refused(svc.programs.activate, p.username, svc.runtime_id, body.program_id, body.version,
+        return refused(svc.programs.activate, p.username, svc.store_id, body.program_id, body.version,
                        require_simulation=False, overlaps_accepted=True, overlaps=[])
 
     def _validate_here(actor, pid, ver):
@@ -356,7 +356,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/programs/deactivate")
     def deactivate(body: ProgramRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
-        refused(svc.programs.deactivate, p.username, svc.runtime_id, body.program_id)
+        refused(svc.programs.deactivate, p.username, svc.store_id, body.program_id)
         return {"ok": True}
 
     @app.post("/api/twin/accept")

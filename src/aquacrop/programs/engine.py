@@ -145,6 +145,7 @@ class Engine:
         self._lock = threading.RLock()
         self._items: dict[str, ItemView] = {}
         self.last_tick_utc: datetime | None = None
+        self._pending_stop: str | None = None
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> dict:
@@ -374,6 +375,17 @@ class Engine:
                 self._begin_stop(o, reason, result="STOPPED_BY_USER")
             return o.public(self.clock.mono())
 
+    def request_stop_all(self, reason: str) -> None:
+        """From another thread (a bus worker noticing a lease end): stop everything on the next tick, without
+        waiting for the engine's lock, which a tick may hold while it waits for that same worker."""
+        self._pending_stop = reason
+
+    def on_refusal(self) -> str | None:
+        """For the command policy at dispatch, under the bus lock: may a program's ON go out now?"""
+        if self.mode in ("RECOVERY", "STOPPING"):
+            return f"program ON refused: the installation is {self.mode}"
+        return None
+
     def stop_all(self, actor: str, reason: str) -> None:
         with self._lock:
             for o in list(self.ops.values()):
@@ -439,6 +451,11 @@ class Engine:
                                 self.event("PROGRAM_OCCURRENCE_MISSED", {"key": w.key, "why": "clock jump"}, "system")
             self.last_tick_utc = now_utc
             self._items = self.resolve()
+            if self._pending_stop is not None:
+                why, self._pending_stop = self._pending_stop, None
+                for o in list(self.ops.values()):
+                    if o.state == "RUNNING":
+                        self._begin_stop(o, why, result="STOPPED")
             for o in list(self.ops.values()):
                 self._advance(o)
             if self.mode == "STOPPING":
@@ -574,6 +591,10 @@ class Engine:
                claimed=False) -> Op:
         if self.mode in ("RECOVERY", "STOPPING"):
             raise Refused(f"nothing starts while the installation is {self.mode}")
+        if (why := getattr(self.io, "start_refusal", lambda: None)()) is not None:
+            if key:
+                self.store.occurrence_update(key, "FAILED", outcome=why)
+            raise Refused(why)
         need = actuators(body)
         for iid in need:
             it = self._items.get(iid)

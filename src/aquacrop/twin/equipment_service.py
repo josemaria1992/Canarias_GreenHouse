@@ -89,20 +89,25 @@ class EquipmentTwinService:
 
     def __init__(self, cfg: InstallationConfig, hist, session_id: str, feed_dir: Path, *, start_utc: datetime | None = None):
         self.cfg, self.hist, self.session_id, self.feed_dir = cfg, hist, session_id, Path(feed_dir)
-        self.runtime_id = f"TWIN:{session_id}"
+        self.store_id = "TWIN"                      # activations, occurrences and mode persist across twin restarts
         self.lock = threading.RLock()
         self.items = TwinItems()
         self.clock = SimClock(start_utc or datetime.now(timezone.utc).replace(microsecond=0))
         self.twin = EquipmentTwin(cfg, self.clock, self.items.views)
         self.commands = CommandService(cfg, self.twin.backend, hist, lambda c: None, lambda: ControllerState.AUTO)
         self.programs = ProgramStore(hist)
-        self.store = SqlEngineStore(hist, self.runtime_id, session_id)
+        self.store = SqlEngineStore(hist, self.store_id, session_id)
         self.speed, self.running = 1, False
         self.effective_speed = 0.0
         self.snapshot_utc: str | None = None
         self.run_id = new_id("twinrun")
         self.results: list[dict] = []
         self.engine = self._engine()
+
+    @property
+    def runtime_id(self) -> str:
+        """What every state-changing request must carry: this process and this twin run (a reset changes it)."""
+        return f"TWIN:{self.session_id}:{self.run_id}"
 
     def _engine(self) -> Engine:
         svc = self
@@ -129,8 +134,8 @@ class EquipmentTwinService:
             if kind == "PROGRAM_OP_ENDED":
                 self.results.append(payload | {"twin_run_id": self.run_id})
                 del self.results[:-500]
-        return Engine(self.runtime_id, self.cfg.site.timezone, IO(), Clock(self.clock.utc, self.clock.mono), self.store,
-                      resolve=self.items.views, programs=lambda: self.programs.active(self.runtime_id),
+        return Engine(self.store_id, self.cfg.site.timezone, IO(), Clock(self.clock.utc, self.clock.mono), self.store,
+                      resolve=self.items.views, programs=lambda: self.programs.active(self.store_id),
                       event=on_event, alarm=on_alarm, physical=False)
 
     # ------------------------------------------------------------------ snapshot import
