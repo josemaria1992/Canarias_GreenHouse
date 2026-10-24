@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 (2026-10-24)
+
+- Equipment: each item has an "Edit details" editor for its properties, analog scaling, alarm limits and twin
+  links (a pump driving a flow meter in the twin). Saving makes a new equipment version.
+
 ## 0.5.1 (2026-10-24): fixes found by CI on the 0.5.0 pull request
 
 - The Operation page script had a syntax error, so the page did not load (0.5.0 on the bench CM4 had it). Every

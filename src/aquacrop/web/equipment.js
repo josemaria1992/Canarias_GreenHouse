@@ -70,9 +70,26 @@
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Role", "Signal", "Channel", "State", "Check"].map(x => h("th", null, x)))),
         h("tbody", null, roles.map(role => roleRow(E, it, role, board)))),
       h("p", { class: "muted small" }, "Commanded state, coil readback and independent feedback are shown separately on the twin and bench pages; a missing feedback is UNKNOWN, never OFF."),
+      it.status === "ACTIVE" ? itemDetails(it) : null,
       it.status === "ACTIVE" && can("equipment_activate") ? h("button", { class: "small ghost", onclick: () => {
         const why = prompt(`Retire ${it.name}? Its history and records are kept. Reason:`); if (why) act("POST", `/api/equipment/items/${it.item_id}/retire`, { reason: why }, "retired");
       } }, "Retire") : null);
+  }
+
+  function itemDetails(it) {
+    // properties, analog scaling, alarm limits and twin links, as the item's JSON body (validated by the server)
+    const ta = h("textarea", { rows: 10, spellcheck: "false", "aria-label": `Details of ${it.name} (JSON)` });
+    ta.value = JSON.stringify(it.body, null, 2);
+    const name = h("input", { maxlength: 80, value: it.name, "aria-label": "Name" });
+    const save = () => {
+      let body; try { body = JSON.parse(ta.value); } catch (e) { toast("not valid JSON: " + e.message, true); return; }
+      act("POST", "/api/equipment/items", { item_id: it.item_id, name: name.value, type_id: it.type_id, type_version: it.type_version,
+        icon: it.icon, body, expected_version: it.version }, "saved as a new equipment version");
+    };
+    return h("details", null, h("summary", { class: "small" }, "Edit details (properties, scaling, alarm limits, twin links)"),
+      h("p", { class: "muted small" }, 'Examples: "properties": {"rated_flow_l_min": 20} · "scaling": {"flow": {"raw_min": 4, "raw_max": 20, "raw_unit": "mA", "eng_min": 0, "eng_max": 100, "unit": "L/min", "provenance": "DEMO"}} · "sim_links": {"flow_item": "flow-1"} (a pump drives that flow meter in the twin)'),
+      h("label", null, "Name ", name), ta,
+      h("button", { class: "small", disabled: !can("equipment_edit"), onclick: save }, "Save details"));
   }
 
   async function upgrade(it, to) {
