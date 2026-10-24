@@ -974,8 +974,10 @@ async function hardware() {
   await show(p, "board");
   const hb = await p.evaluate(() => ({ t: document.querySelector("#v-board").innerText, sw: [...document.querySelectorAll("#v-board .switch")].map(x => x.disabled) }));
   await shot(p, "hw-board");
-  check("HW I/O board read only", /REAL MODULES/.test(hb.t) && /Real modules, read only/.test(hb.t) && hb.sw.length === 16 && hb.sw.every(Boolean),
-    `${hb.sw.length} output switches, all disabled without a commissioning user and a test session`);
+  // 0.5.4: an administrator has the commissioning right, so the board offers a test session; until one is armed
+  // every output switch stays disabled
+  check("HW I/O board read only", /REAL MODULES/.test(hb.t) && /Start a test session/.test(hb.t) && hb.sw.length === 16 && hb.sw.every(Boolean),
+    `${hb.sw.length} output switches, all disabled until a test session is armed`);
   check("HW page errors", errs.length === 0, errs.join("; ") || "none");
   await b.close();
 }
