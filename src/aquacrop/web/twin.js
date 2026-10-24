@@ -49,12 +49,12 @@
   $("login-form").addEventListener("submit", async ev => {
     ev.preventDefault();
     const f = new FormData(ev.target);
-    const r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+    const r = await fetch("api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: f.get("username"), password: f.get("password") }) });
     if (!r.ok) { $("login-error").textContent = "login failed"; return; }
-    signedIn(await api("GET", "/api/auth/session"));
+    signedIn(await api("GET", "api/auth/session"));
   });
-  $("logout").addEventListener("click", async () => { await api("POST", "/api/auth/logout").catch(() => null); showLogin(); });
+  $("logout").addEventListener("click", async () => { await api("POST", "api/auth/logout").catch(() => null); showLogin(); });
 
   // ---------------------------------------------------------------- pieces
   const SIM_TZ = () => (S.v && S.v.timezone) || "Europe/Stockholm";
@@ -75,21 +75,21 @@
         h("strong", { class: "clock" }, simTime(v.sim_utc)), h("span", { class: "muted small" }, SIM_TZ()),
         v.running ? pill(`RUNNING ${v.effective_speed}× (asked ${v.speed}×)`, "ok") : pill("PAUSED"),
         h("label", null, "Speed ", speed),
-        h("button", { disabled: !run, onclick: () => act("POST", "/api/twin/control", { action: "run", speed: Number(speed.value) }) }, "Run"),
-        h("button", { disabled: !run, onclick: () => act("POST", "/api/twin/control", { action: "pause" }) }, "Pause"),
-        h("button", { disabled: !run, onclick: () => act("POST", "/api/twin/control", { action: "step", steps: 2 }) }, "Step 1 s"),
+        h("button", { disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "run", speed: Number(speed.value) }) }, "Run"),
+        h("button", { disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "pause" }) }, "Pause"),
+        h("button", { disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "step", steps: 2 }) }, "Step 1 s"),
         h("label", { class: "small" }, "Start at ", start),
-        h("button", { class: "ghost", disabled: !run, onclick: () => { if (confirm("Reset the twin? Its simulated state and clock start again; its history is kept.")) act("POST", "/api/twin/control", { action: "reset", start_local: start.value || null }, "twin reset"); } }, "Reset"),
-        h("button", { class: "ghost", disabled: !run, onclick: () => act("POST", "/api/twin/control", { action: "import" }, "copied from the real system") }, "Copy from the real system")),
-      h("p", { class: "muted small" }, `${v.label} Last copy from the real system: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
+        h("button", { class: "ghost", disabled: !run, onclick: () => { if (confirm("Reset the twin? Its simulated state and clock start again; its history is kept.")) act("POST", "api/twin/control", { action: "reset", start_local: start.value || null }, "twin reset"); } }, "Reset"),
+        h("button", { class: "ghost", disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "import" }, "imported from the real system") }, "Import from the real system")),
+      h("p", { class: "muted small" }, `${v.label} Last import from the real system: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
   }
   function modeCard(v) {
     const e = v.engine, ok = can("process_control");
     const kids = [h("div", { class: "row" }, h("h2", null, "Installation mode (twin)"),
       pill(e.mode, e.mode === "AUTO" ? "ok" : e.mode === "MANUAL" ? "warn" : "bad"),
       e.mode !== "RECOVERY" ? [
-        h("button", { class: e.mode === "AUTO" ? "cmd" : "", disabled: !ok || e.mode === "AUTO" || e.mode === "STOPPING", onclick: () => act("POST", "/api/twin/mode", { target: "AUTO" }, "AUTO") }, "AUTO"),
-        h("button", { class: e.mode !== "AUTO" ? "cmd" : "", disabled: !ok || e.mode !== "AUTO", onclick: () => act("POST", "/api/twin/mode", { target: "MANUAL" }, "stopping automatic operations") }, "MANUAL")] : null),
+        h("button", { class: e.mode === "AUTO" ? "cmd" : "", disabled: !ok || e.mode === "AUTO" || e.mode === "STOPPING", onclick: () => act("POST", "api/twin/mode", { target: "AUTO" }, "AUTO") }, "AUTO"),
+        h("button", { class: e.mode !== "AUTO" ? "cmd" : "", disabled: !ok || e.mode !== "AUTO", onclick: () => act("POST", "api/twin/mode", { target: "MANUAL" }, "stopping automatic operations") }, "MANUAL")] : null),
       h("p", { class: "muted small" }, "This is the twin's own selector. It never changes the real system's mode.")];
     if (e.mode === "STOPPING") kids.push(h("p", { class: "warn" }, "Stopping every automatic operation; MANUAL is reached only when each stop is verified."));
     if (e.mode === "RECOVERY" && v.checklist) {
@@ -97,7 +97,7 @@
         h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`))),
         ["AUTO", "MANUAL"].map(t => h("div", null, h("strong", null, `Approve into ${t}:`),
           h("ul", { class: "small" }, v.consequences[t].map(x => h("li", null, x))),
-          h("button", { disabled: !ok, onclick: () => { if (confirm(`Approve the restart into ${t}?\n\n` + v.consequences[t].join("\n"))) act("POST", "/api/twin/recovery/approve", { target: t }, `approved into ${t}`); } }, `Approve into ${t}`))),
+          h("button", { disabled: !ok, onclick: () => { if (confirm(`Approve the restart into ${t}?\n\n` + v.consequences[t].join("\n"))) act("POST", "api/twin/recovery/approve", { target: t }, `approved into ${t}`); } }, `Approve into ${t}`))),
         h("p", { class: "muted small" }, "Approving is your decision that the installation may operate again. It does not clear a fault: every check above must pass first.")));
     }
     return h("div", { class: "card" }, kids);
@@ -114,12 +114,12 @@
           h("table", { class: "compact small" }, h("tbody", null, it.roles.filter(r => r.direction === "INPUT").map(r => {
             const val = r.value == null ? (r.quality === "NO CHANNEL" ? "no channel" : "NOT MODELLED") : (typeof r.value === "boolean" ? (r.value ? "ON" : "OFF") : `${r.value}${r.unit ? " " + r.unit : ""}`);
             const inp = r.point && (it.behaviour.startsWith("MANUAL") || r.label === "Pressed") ? (typeof r.value === "boolean" || it.behaviour === "MANUAL_INPUT"
-              ? h("button", { class: "small", disabled: !run, onclick: () => act("POST", "/api/twin/input", { point: r.point, value: !(r.value === true) }) }, "toggle")
-              : (() => { const x = h("input", { type: "number", step: "any", class: "narrow-num", "aria-label": `Set ${r.label}` }); return [x, h("button", { class: "small", disabled: !run, onclick: () => act("POST", "/api/twin/input", { point: r.point, value: Number(x.value) }) }, "set")]; })()) : null;
+              ? h("button", { class: "small", disabled: !run, onclick: () => act("POST", "api/twin/input", { point: r.point, value: !(r.value === true) }) }, "toggle")
+              : (() => { const x = h("input", { type: "number", step: "any", class: "narrow-num", "aria-label": `Set ${r.label}` }); return [x, h("button", { class: "small", disabled: !run, onclick: () => act("POST", "api/twin/input", { point: r.point, value: Number(x.value) }) }, "set")]; })()) : null;
             return h("tr", null, h("td", null, r.label), h("td", null, val), h("td", { class: "muted" }, r.point || ""), h("td", null, inp));
           }))),
-          h("div", { class: "row small" }, faultSel, h("button", { class: "small ghost", disabled: !run, onclick: () => act("POST", "/api/twin/fault", { target: it.item_id, fault: faultSel.value || null }, "fault set") }, "Apply fault")));
-      })) : h("p", { class: "muted" }, "No equipment in the copy yet. Create equipment on the real dashboard, then press Copy from the real system."),
+          h("div", { class: "row small" }, faultSel, h("button", { class: "small ghost", disabled: !run, onclick: () => act("POST", "api/twin/fault", { target: it.item_id, fault: faultSel.value || null }, "fault set") }, "Apply fault")));
+      })) : h("p", { class: "muted" }, "No equipment in the copy yet. Create equipment on the real dashboard, then press Import from the real system."),
       h("p", { class: "muted small" }, "Lights: asked = the program's command; output = the virtual coil read back; feedback = the item's own input. UNKNOWN is never shown as OFF."));
   }
   function programsCard(v) {
@@ -137,14 +137,14 @@
             h("td", null, p.active ? pill("ACTIVE", "ok") : pill("inactive"), runs.length ? ` ${runs.filter(r => r.result === "DONE").length}/${runs.length} done` : ""),
             h("td", { class: "small" }, (p.next || []).join(", ")),
             h("td", null,
-              !p.active ? h("button", { class: "small", disabled: !edit, onclick: () => act("POST", "/api/twin/programs/activate", { program_id: p.program_id, version: p.version }, "active in the twin") }, "Activate in twin")
-                : h("button", { class: "small ghost", disabled: !edit, onclick: () => act("POST", "/api/twin/programs/deactivate", { program_id: p.program_id, version: p.version }) }, "Deactivate"),
-              p.active && t.type !== "CONTINUOUS" ? h("button", { class: "small", disabled: !run || v.engine.mode !== "MANUAL", title: "MANUAL mode only", onclick: () => act("POST", "/api/twin/run-now", { program_id: p.program_id }, "started") }, "Run now") : null,
+              !p.active ? h("button", { class: "small", disabled: !edit, onclick: () => act("POST", "api/twin/programs/activate", { program_id: p.program_id, version: p.version }, "active in the twin") }, "Activate in twin")
+                : h("button", { class: "small ghost", disabled: !edit, onclick: () => act("POST", "api/twin/programs/deactivate", { program_id: p.program_id, version: p.version }) }, "Deactivate"),
+              p.active && t.type !== "CONTINUOUS" ? h("button", { class: "small", disabled: !run || v.engine.mode !== "MANUAL", title: "MANUAL mode only", onclick: () => act("POST", "api/twin/run-now", { program_id: p.program_id }, "started") }, "Run now") : null,
               runs.some(r => r.result === "DONE") ? h("button", { class: "small", disabled: !pc, title: "Record this twin result for the same version on the real system", onclick: () => {
                 const failed = runs.some(r => r.result !== "DONE");
                 const note = failed ? prompt("Some runs did not end DONE. Why do you accept this version anyway?") : "";
                 if (failed && !note) return;
-                act("POST", "/api/twin/accept", { program_id: p.program_id, version: p.version, note: note || "" }, "accepted: the real system records this twin result");
+                act("POST", "api/twin/accept", { program_id: p.program_id, version: p.version, note: note || "" }, "accepted: the real system records this twin result");
               } }, "Accept twin result") : null));
         }))) : h("p", { class: "muted" }, "No programs in the copy yet."),
       h("p", { class: "muted small" }, "A program edited on the real system arrives as a new version. Accepting a result records a logic test for exactly that version; it is not physical verification."));
@@ -155,13 +155,13 @@
       e.conflicts.map(c => h("div", { class: "card bad" }, h("strong", null, `Conflict on ${c.item}`),
         h("p", null, `Program 1: ${c.running.program_id} v${c.running.version}: ${c.running.consequence}.`),
         h("p", null, `Program 2: ${c.waiting.program_id} v${c.waiting.version}: ${c.waiting.consequence}${c.waiting.window_end_utc ? " (" + simTime(c.waiting.window_end_utc) + ")" : ""}.`),
-        h("button", { disabled: !pc, onclick: () => act("POST", "/api/twin/conflict", { conflict_id: c.conflict_id, choice: "KEEP_FIRST" }) }, `Keep ${c.running.program_id}`),
-        h("button", { disabled: !pc, onclick: () => act("POST", "/api/twin/conflict", { conflict_id: c.conflict_id, choice: "SWITCH" }) }, `Stop it and run ${c.waiting.program_id}`))),
+        h("button", { disabled: !pc, onclick: () => act("POST", "api/twin/conflict", { conflict_id: c.conflict_id, choice: "KEEP_FIRST" }) }, `Keep ${c.running.program_id}`),
+        h("button", { disabled: !pc, onclick: () => act("POST", "api/twin/conflict", { conflict_id: c.conflict_id, choice: "SWITCH" }) }, `Stop it and run ${c.waiting.program_id}`))),
       e.ops.length ? h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Program", "Origin", "State", "Step", "Runtime", "Measured", ""].map(x => h("th", null, x)))),
         h("tbody", null, e.ops.map(o => h("tr", null, h("td", null, `${o.program_id} v${o.version}`), h("td", null, o.origin), h("td", null, pill(o.state, o.state === "STOP_UNVERIFIED" ? "bad" : "")),
           h("td", null, o.step), h("td", null, `${o.runtime_s} s (${o.remaining_s} s left)`),
           h("td", null, o.requested_L ? `${o.measured_L} of ${o.requested_L} L${o.uncertain_L ? ", " + o.uncertain_L + " L uncertain" : ""}` : (o.measured_L ? o.measured_L + " L" : "")),
-          h("td", null, o.state === "RUNNING" ? h("button", { class: "small danger", disabled: !run, onclick: () => act("POST", "/api/twin/stop", { op_id: o.op_id }) }, "Stop") : null)))))
+          h("td", null, o.state === "RUNNING" ? h("button", { class: "small danger", disabled: !run, onclick: () => act("POST", "api/twin/stop", { op_id: o.op_id }) }, "Stop") : null)))))
         : h("p", { class: "muted" }, "Nothing is running."));
   }
   function resultsCard(v) {
@@ -175,7 +175,7 @@
     if (S.busy) return;
     S.busy = true;
     try {
-      const v = await api("GET", "/api/twin");
+      const v = await api("GET", "api/twin");
       S.v = v;
       if (v.runtime_id !== S.rid) S.rid = v.runtime_id;
       const keep = document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#main");
@@ -185,5 +185,15 @@
     finally { S.busy = false; }
   }
   setInterval(() => { if (!$("app").classList.contains("hidden")) refresh(); }, 1000);
-  api("GET", "/api/auth/session").then(signedIn).catch(showLogin);
+  // opened from the real dashboard: its one-time ticket signs in as the same user (0.5.5)
+  const m = /^#t=([^&]+)/.exec(location.hash);
+  (async () => {
+    if (m) {
+      history.replaceState(null, "", location.pathname);
+      const r = await fetch("api/auth/ticket", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+        body: JSON.stringify({ ticket: decodeURIComponent(m[1]) }) });
+      if (!r.ok) $("login-error").textContent = (await r.json().catch(() => ({}))).detail || "sign-in from the real dashboard failed";
+    }
+    api("GET", "api/auth/session").then(signedIn).catch(showLogin);
+  })();
 })();

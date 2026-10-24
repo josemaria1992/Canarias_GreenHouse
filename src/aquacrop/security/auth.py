@@ -239,6 +239,15 @@ class Accounts:
         ph, role, comm, disabled, must = row[0]
         if not self._verify(ph, password) or disabled:
             raise AuthError(401, "invalid credentials")
+        return self.open_session(username, client)
+
+    def open_session(self, username: str, client: str) -> tuple[str, Principal]:
+        """A new session for a user already proven (password, or a live dashboard hand-off ticket)."""
+        row = self.h.query("SELECT role, commissioning, disabled, must_change_password FROM users WHERE username=?",
+                           (username,))
+        if not row or row[0][2]:
+            raise AuthError(401, "invalid credentials")
+        role, comm, _, must = row[0]
         token = secrets.token_urlsafe(32)
         sh = _h(token)
         now = datetime.now(timezone.utc)

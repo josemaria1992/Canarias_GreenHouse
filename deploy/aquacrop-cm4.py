@@ -475,18 +475,31 @@ Next, by hand:
 
 TWIN_SERVICE = "aquacrop-twin.service"
 TWIN_PORT = 8443
-CADDY_TWIN = """
-# The digital twin (written by aquacrop-cm4.py twin): its own service on 127.0.0.1:8001.
+# 0.5.5: the twin is a path of the live site (one address, one login hand-off); the old port only redirects.
+CADDY_TWIN = """# AquaCrop behind TLS (written by aquacrop-cm4.py twin). LAN and OpenVPN clients only:
+# the host firewall restricts port 443 to those networks (docs/security/remote-access.md).
+{hostname} {{
+    tls internal
+    redir /twin /twin/
+    handle_path /twin/* {{
+        reverse_proxy 127.0.0.1:8001
+    }}
+    handle {{
+        reverse_proxy 127.0.0.1:8000
+    }}
+}}
+
+# The twin's address before 0.5.5.
 {hostname}:{port} {{
     tls internal
-    reverse_proxy 127.0.0.1:8001
+    redir https://{hostname}/twin/
 }}
 """
 FEED_DROPIN = """# Written by aquacrop-cm4.py twin: the live service writes its snapshot for the twin and reads the twin's
 # evidence files. It still has no route to the twin's commands and the twin has none to the live ones.
 [Service]
 Environment=AQUACROP_FEED_DIR=/var/lib/aquacrop-feed
-Environment=AQUACROP_TWIN_URL=https://{hostname}:{port}/
+Environment=AQUACROP_TWIN_URL=https://{hostname}/twin/
 ReadWritePaths=/var/lib/aquacrop-feed
 """
 
@@ -499,7 +512,7 @@ def cmd_twin(a, host: Host) -> int:
     cur = current_release(host)
     if cur is None or not (cur / "deploy" / "aquacrop-twin.service").is_file():
         raise Fail("the current release has no twin service (0.5.0 or later is needed); upgrade first")
-    print(f"Digital twin at https://{name}:{TWIN_PORT}/ beside https://{name}/")
+    print(f"Digital twin at https://{name}/twin/ beside https://{name}/")
     host.run(["useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "--user-group",
               "aquacrop-twin"], system=True, check=False)
     host.run(["usermod", "-a", "-G", "aquacrop-twin", "aquacrop"], system=True)   # the live service reads evidence
@@ -510,26 +523,23 @@ def cmd_twin(a, host: Host) -> int:
     host.run(["chown", "aquacrop-twin:aquacrop-twin", "/var/lib/aquacrop-feed/evidence"], system=True)
     host.mkdir("/var/lib/aquacrop-twin", 0o700)
     host.run(["chown", "aquacrop-twin:aquacrop-twin", "/var/lib/aquacrop-twin"], system=True)
-    env = f"TWIN_ARGS=--allowed-host {name} --allowed-host 127.0.0.1 --allowed-origin https://{name}:{TWIN_PORT}\n"
+    env = f"TWIN_ARGS=--allowed-host {name} --allowed-host 127.0.0.1 --allowed-origin https://{name}\n"
     host.write_file("/etc/aquacrop/twin.env", env, 0o640)       # read by systemd, not by the twin
     host.install_file(cur / "deploy" / "aquacrop-twin.service", f"/etc/systemd/system/{TWIN_SERVICE}", 0o644)
     host.write_file(f"/etc/systemd/system/{SERVICE}.d/twin-feed.conf", FEED_DROPIN.format(hostname=name, port=TWIN_PORT),
                     0o644)
-    caddy = host.p("/etc/caddy/Caddyfile")
-    text = caddy.read_text(encoding="utf-8") if caddy.is_file() else ""
-    if f"{name}:{TWIN_PORT}" not in text:
-        host.write_file("/etc/caddy/Caddyfile", text + CADDY_TWIN.format(hostname=name, port=TWIN_PORT), 0o644)
+    host.write_file("/etc/caddy/Caddyfile", CADDY_TWIN.format(hostname=name, port=TWIN_PORT), 0o644)
     host.run(["systemctl", "daemon-reload"], system=True)
     host.run(["systemctl", "restart", SERVICE], system=True)
     if not health(host):
         raise Fail("the live service did not come back healthy after adding the twin feed")
     host.run(["systemctl", "enable", "--now", TWIN_SERVICE], system=True)
     host.run(["systemctl", "reload-or-restart", "caddy"], system=True)
-    record(host, f"twin installed at https://{name}:{TWIN_PORT}/")
+    record(host, f"twin installed at https://{name}/twin/")
     print(f"""
 Next, by hand:
-  1. Allow TCP {TWIN_PORT} from the greenhouse LAN and the OpenVPN network in the host firewall, like 443.
-  2. Open https://{name}:{TWIN_PORT}/ and sign in with your usual login (copied from the real system).
+  1. Open https://{name}/ and choose Digital Twin: it opens with your login (the old port {TWIN_PORT} only redirects).
+  2. Clients that bookmarked https://{name}:{TWIN_PORT}/ keep working while that port stays open.
   3. The twin starts in RECOVERY with its own selector; nothing it does reaches the real modules.""")
     return 0
 

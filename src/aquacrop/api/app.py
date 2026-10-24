@@ -817,6 +817,10 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
             return None
     app.state.publish_snapshot = publish
+    handoff_key = None
+    if feed_dir is not None:
+        with contextlib.suppress(OSError):
+            handoff_key = twin_feed.write_handoff_key(feed_dir)
     program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
 
     # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
@@ -833,6 +837,14 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"url": twin_url, "feed": feed_dir is not None,
                 "note": ("The digital twin is a separate service with its own database and virtual modules. "
                          "Opening or running it never affects the real system.")}
+
+    @app.post("/api/twin-link/ticket")
+    def twin_ticket(p: Principal = Depends(require(Perm.READ))):
+        """A one-time, 60-second ticket that opens the twin as this user without a second login (0.5.5)."""
+        if handoff_key is None or not twin_url:
+            raise HTTPException(409, "the twin is not configured on this controller")
+        hist.event("TWIN_HANDOFF", {}, actor=p.username)
+        return {"url": twin_url, "ticket": twin_feed.issue_ticket(handoff_key, p.username)}
 
     @app.post("/api/twin-link/publish")
     def twin_publish(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

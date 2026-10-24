@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.5 (2026-10-24): the twin inside the real dashboard (owner request)
+
+- The digital twin has moved to https://<controller>/twin/. Digital Twin in the real dashboard's menu opens it as
+  the same user, with no second login. The real dashboard gives the browser a one-time ticket that is valid for
+  60 seconds, signed with a key the live service writes to the feed directory at every start. The twin accepts
+  each ticket once and still checks that the user exists and is enabled in its copy of the accounts. The twin
+  keeps its own sessions, database and virtual modules.
+- The twin page has a "Real system" link back to the dashboard. Its old address (port 8443) now redirects to /twin/.
+- "Copy from the real system" is now called "Import from the real system".
+
 ## 0.5.4 (2026-10-24): users and roles (owner feedback)
 
 - An administrator has every right, commissioning included (owner decision; supersedes ADR-0017's rule that an

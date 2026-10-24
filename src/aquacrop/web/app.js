@@ -282,7 +282,6 @@
     const b = $("banner"); b.textContent = st.banner;
     b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
     const real = st.profile !== "SIMULATED";
-    document.querySelectorAll('#nav a[href="#twin"]').forEach(a => a.classList.toggle("hidden", real));
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
     // the developer I/O board is for the people who commission the modules: not for a viewer account
     $("nav-board").classList.toggle("hidden", !(can("sim_command") || can("process_control") || can("io_assign")));
@@ -864,11 +863,18 @@
   VIEWS.twin = async function () {
     if (isReal()) {                // 0.5.0: the equipment twin is its own service beside this one
       const L = await api("GET", "/api/twin-link");
+      const open = async () => {
+        try {
+          const t = await api("POST", "/api/twin-link/ticket");
+          location.assign(t.url + "#t=" + encodeURIComponent(t.ticket));
+        } catch (e) { msg.textContent = String(e.message || e); }
+      };
+      const msg = h("span", { class: "error" });
       return mount("v-twin", h("div", { class: "card" }, h("h2", null, "Digital twin"), h("p", null, L.note),
-        L.url ? h("p", null, h("a", { class: "button", href: L.url, target: "_blank", rel: "noopener" }, "Open the digital twin"))
+        L.url ? h("p", { class: "row" }, h("button", { onclick: open }, "Open the digital twin"), msg)
           : h("p", { class: "warn" }, "The twin service is not configured on this controller yet."),
         L.feed ? h("button", { class: "ghost", disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/twin-link/publish", undefined, "equipment and programs sent to the twin") }, "Send equipment and programs to the twin now") : null,
-        h("p", { class: "muted small" }, "The twin receives a copy every 30 seconds. Use the same login there.")));
+        h("p", { class: "muted small" }, "The twin opens with your login; it receives a copy of the equipment and programs every 30 seconds.")));
     }
     if (isInst()) return instTwin();
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;

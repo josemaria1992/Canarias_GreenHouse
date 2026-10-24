@@ -111,3 +111,34 @@ def test_twin_mode_and_faults_never_change_the_live_side(live_and_twin):
     assert app.state.svc.workers["rs485_a"].health()["state"] == "RUNNING"   # the live poller is untouched
     assert not [r for r in app.state.hist.query("SELECT kind FROM events WHERE kind LIKE 'TWIN_%'")
                 if r["kind"] != "TWIN_SNAPSHOT_PUBLISHED"]
+
+
+def test_the_real_dashboard_hands_its_login_to_the_twin_once(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    r = live.post("/api/twin-link/ticket", headers=hl)
+    assert r.status_code == 200 and r.json()["url"] == TWIN_ORIGIN + "/"
+    t = r.json()["ticket"]
+    twin.cookies.clear()
+    r = twin.post("/api/auth/ticket", json={"ticket": t}, headers={"Origin": TWIN_ORIGIN})
+    assert r.status_code == 200 and r.json()["username"] == "admin1"
+    assert twin.get("/api/auth/session").json()["username"] == "admin1"
+    twin.cookies.clear()
+    assert twin.post("/api/auth/ticket", json={"ticket": t}, headers={"Origin": TWIN_ORIGIN}).status_code == 401
+    forged = t[:-1] + ("0" if t[-1] != "0" else "1")
+    assert twin.post("/api/auth/ticket", json={"ticket": forged}, headers={"Origin": TWIN_ORIGIN}).status_code == 401
+    assert twin.post("/api/auth/ticket", json={"ticket": t}, headers={"Origin": "https://evil.example"}).status_code == 403
+
+
+def test_a_ticket_expires_after_a_minute(tmp_path):
+    from aquacrop.twin import feed
+    key = feed.write_handoff_key(tmp_path)
+    now = [1000.0]
+    chk = feed.TicketCheck(tmp_path, clock=lambda: now[0])
+    t = feed.issue_ticket(key, "x", now=1000.0)
+    now[0] = 1000.0 + feed.TICKET_S + 1
+    with pytest.raises(ValueError):
+        chk.username(t)
+    feed.write_handoff_key(tmp_path)                  # a live restart makes earlier tickets worthless
+    now[0] = 1000.0
+    with pytest.raises(ValueError):
+        chk.username(feed.issue_ticket(key, "x", now=1000.0))

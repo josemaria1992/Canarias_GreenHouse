@@ -48,6 +48,10 @@ class LoginIn(_B):
     password: str = Field(max_length=256)
 
 
+class TicketIn(_B):
+    ticket: str = Field(max_length=512)
+
+
 class ControlIn(_B):
     action: str = Field(pattern="^(run|pause|reset|import|step)$")
     speed: int | None = None
@@ -110,6 +114,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     accounts = Accounts(hist, load_or_create_secret(state_dir / "secret.key"),
                         idle_minutes=sec.session_idle_minutes, absolute_hours=sec.session_absolute_hours)
     limiter = RateLimiter()
+    tickets = feed.TicketCheck(feed_dir)
     svc = EquipmentTwinService(cfg, hist, session_id, feed_dir)
     svc.sync_users(accounts)
     loopback = sec.loopback_http_cookie_exemption and bind_host in ("127.0.0.1", "localhost", "::1")
@@ -155,7 +160,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         cl = request.headers.get("content-length")
         if cl and cl.isdigit() and int(cl) > sec.max_request_bytes:
             return JSONResponse({"detail": "request too large"}, status_code=413)
-        if path.startswith("/api/") and path not in ("/api/health", "/api/auth/login"):
+        if path.startswith("/api/") and path not in ("/api/health", "/api/auth/login", "/api/auth/ticket"):
             def deny(status, reason, user=None):
                 with contextlib.suppress(Exception):
                     hist.event("REQUEST_REJECTED", {"path": path, "status": status, "reason": reason}, actor=user)
@@ -234,6 +239,27 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         hist.event("LOGIN", {}, actor=p.username)
         return {"username": p.username, "role": p.role.value, "csrf_token": accounts.csrf_for(p.session_hash),
                 "runtime_id": svc.runtime_id}
+
+    @app.post("/api/auth/ticket")
+    def ticket_login(body: TicketIn, request: Request, response: Response):
+        """Sign-in handed over by the real dashboard: its one-time ticket instead of the password (0.5.5)."""
+        if not origin_ok(request):
+            raise HTTPException(403, "origin not allowed")
+        if not limiter.hit(f"login:{request.client.host if request.client else '-'}", sec.login_rate_per_minute):
+            raise HTTPException(429, "rate limit")
+        try:
+            user = tickets.username(body.ticket)
+        except (ValueError, KeyError):
+            raise HTTPException(401, "the hand-off from the real dashboard is not valid any more; open the twin again")
+        try:
+            token, p = accounts.open_session(user, request.client.host if request.client else "-")
+        except AuthError:
+            raise HTTPException(401, "your login has not reached the twin yet; try again in 30 seconds")
+        response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
+                            secure=request.url.scheme == "https" or not loopback, path="/",
+                            max_age=sec.session_absolute_hours * 3600)
+        hist.event("LOGIN", {"via": "handoff"}, actor=p.username)
+        return {"username": p.username, "role": p.role.value}
 
     @app.post("/api/auth/logout")
     def logout(response: Response, p: Principal = Depends(require(Perm.READ))):
