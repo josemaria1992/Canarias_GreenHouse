@@ -1,0 +1,297 @@
+"""The twin service (0.5.0): runs the user's equipment and programs on virtual modules, beside the live service.
+
+* Its configuration is made from the live snapshot with `profile: SIMULATED`, every bus turned `virtual` (a
+  SIMULATED configuration cannot name a serial port: config validation refuses it), safe-state off, its own
+  config_id and database. The process that serves it runs as a user without serial access (deployment).
+* Its runtime id is `TWIN:<session>`; every state-changing twin request must carry it (stale or wrong pages
+  are refused), and live requests carry `LIVE:<session>`.
+* Simulated time runs at the chosen speed with a fixed step. The loop is bounded: at most `MAX_STEPS_PER_S`
+  steps per wall second; when that bound limits the chosen speed, the view says so.
+* Results that a user accepts become evidence files for the live service (`feed.write_evidence`); nothing
+  else leaves the twin.
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from ..config.schema import InstallationConfig
+from ..control.commands import CommandService
+from ..domain.model import CommandOrigin, ControllerState, new_id
+from ..equipment.definitions import ItemBody, TypeBody
+from ..programs.definitions import digest as program_digest, parse
+from ..programs.engine import Clock, Engine, ItemView
+from ..programs.store import ProgramStore, SqlEngineStore
+from .equipment_twin import EquipmentTwin, SimClock
+from . import feed
+
+SPEEDS = (1, 10, 60, 600, 3600)
+DT_S = 0.5
+MAX_STEPS_PER_S = 400
+
+
+def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[str]) -> InstallationConfig:
+    d = dict(live)
+    d["profile"] = "SIMULATED"
+    d["config_id"] = f"{live['config_id']}-twin"
+    d["config_version"] = f"{live['config_version']}-twin"
+    d["label"] = "DIGITAL TWIN — simulated modules, no real outputs"
+    d["buses"] = [{"bus_id": b["bus_id"], "kind": "virtual", "poll_interval_s": b.get("poll_interval_s", 1.0)}
+                  for b in live["buses"]]
+    d["safe_state"] = {"outputs_off_on": []}
+    d["physical_mapping"] = []
+    d["drive_adapters"] = [a for a in live.get("drive_adapters", []) if a.get("kind") == "NOT_CONFIGURED"]
+    h = dict(live.get("historian", {}))
+    h["db_path"] = "aquacrop-twin.sqlite3"
+    d["historian"] = h
+    d["security"] = dict(live.get("security", {}), allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
+    d.pop("offsite_backup", None)
+    return InstallationConfig.model_validate(d)
+
+
+class TwinItems:
+    """Equipment as imported from the live snapshot; the twin's channels are the same names on virtual modules."""
+
+    def __init__(self):
+        self.types: dict[tuple[str, int], TypeBody] = {}
+        self.items: dict[str, dict] = {}
+        self.bindings: dict[str, dict[str, dict]] = {}
+        self._views: dict[str, ItemView] = {}
+
+    def load(self, snap: dict) -> None:
+        eq = snap["equipment"]
+        self.types = {(t["type_id"], t["version"]): TypeBody.model_validate(t["body"]) for t in eq["types"]}
+        self.items = {i["item_id"]: i for i in eq["items"] if i["status"] == "ACTIVE"}
+        self.bindings = {}
+        for b in snap.get("bindings", []):
+            self.bindings.setdefault(b["item_id"], {})[b["role"]] = b
+        self._views = {}
+        for iid, it in self.items.items():
+            tb = self.types.get((it["type_id"], it["type_version"]))
+            if tb is None:
+                continue
+            bs = self.bindings.get(iid, {})
+            self._views[iid] = ItemView(iid, it["name"], tb, ItemBody.model_validate(it["body"]),
+                                        {r: b["point"] for r, b in bs.items()},
+                                        {r: b["status"] == "VERIFIED" for r, b in bs.items()})
+
+    def views(self) -> dict[str, ItemView]:
+        return self._views
+
+
+class EquipmentTwinService:
+    kind = "twin"
+
+    def __init__(self, cfg: InstallationConfig, hist, session_id: str, feed_dir: Path, *, start_utc: datetime | None = None):
+        self.cfg, self.hist, self.session_id, self.feed_dir = cfg, hist, session_id, Path(feed_dir)
+        self.store_id = "TWIN"                      # activations, occurrences and mode persist across twin restarts
+        self.lock = threading.RLock()
+        self.items = TwinItems()
+        self.clock = SimClock(start_utc or datetime.now(timezone.utc).replace(microsecond=0))
+        self.twin = EquipmentTwin(cfg, self.clock, self.items.views)
+        self.commands = CommandService(cfg, self.twin.backend, hist, lambda c: None, lambda: ControllerState.AUTO)
+        self.programs = ProgramStore(hist)
+        self.store = SqlEngineStore(hist, self.store_id, session_id)
+        self.speed, self.running = 1, False
+        self.effective_speed = 0.0
+        self.snapshot_utc: str | None = None
+        self.run_id = new_id("twinrun")
+        self.results: list[dict] = []
+        self.engine = self._engine()
+
+    @property
+    def runtime_id(self) -> str:
+        """What every state-changing request must carry: this process and this twin run (a reset changes it)."""
+        return f"TWIN:{self.session_id}:{self.run_id}"
+
+    def _engine(self) -> Engine:
+        svc = self
+
+        class IO:
+            def sample(self, point):
+                return svc.twin.samples().get(point)
+
+            def command(self, point, desired, *, actor, reason, priority):
+                cmd = svc.commands.build(actor=actor, target=point, desired=desired, origin=CommandOrigin.CONTROLLER,
+                                         reason=f"[twin] {reason}", priority=priority)
+                return svc.commands.submit(cmd)
+
+            def module_online(self, uid):
+                return svc.twin.backend.health(uid).online
+
+        def on_alarm(kind, target, active, detail):
+            self.hist.event("TWIN_ALARM_" + ("RAISED" if active else "CLEARED"), {"rule": kind, "target": target} | detail,
+                            actor="system")
+
+        def on_event(kind, payload, actor):
+            self.hist.event(kind, payload | {"runtime": self.runtime_id, "sim_utc": self.clock.utc().isoformat()},
+                            actor=actor)
+            if kind == "PROGRAM_OP_ENDED":
+                self.results.append(payload | {"twin_run_id": self.run_id})
+                del self.results[:-500]
+        return Engine(self.store_id, self.cfg.site.timezone, IO(), Clock(self.clock.utc, self.clock.mono), self.store,
+                      resolve=self.items.views, programs=lambda: self.programs.active(self.store_id),
+                      event=on_event, alarm=on_alarm, physical=False)
+
+    # ------------------------------------------------------------------ snapshot import
+    def import_snapshot(self, actor: str) -> dict:
+        snap = feed.read_snapshot(self.feed_dir)
+        if snap is None:
+            raise ValueError("no snapshot from the real system yet; open the dashboard of the real system once")
+        with self.lock:
+            self.items.load(snap)
+            have = {(v["program_id"], v["version"]): v for v in self.programs.versions()}
+            imported = 0
+            for p in snap["programs"]:
+                key = (p["program_id"], p["version"])
+                if key in have and have[key]["digest"] == p["digest"]:
+                    continue
+                if key in have:
+                    continue                          # a local edit of the same version number stays local
+                row = (p["program_id"], p["version"], "VALIDATED" if p["status"] == "VALIDATED" else "DRAFT", p["name"],
+                       p["digest"], datetime.now(timezone.utc).isoformat(), "live-snapshot",
+                       datetime.now(timezone.utc).isoformat(), json.dumps(p["body"], sort_keys=True))
+                self.hist.submit(lambda c, row=row: c.execute(
+                    "INSERT INTO programs(program_id, version, status, name, digest, created_utc, created_by, updated_utc, "
+                    "json) VALUES(?,?,?,?,?,?,?,?,?)", row), wait=True)
+                imported += 1
+            self.snapshot_utc = snap["written_utc"]
+            self.hist.event("TWIN_SNAPSHOT_IMPORTED", {"written_utc": snap["written_utc"], "items": len(self.items.items),
+                                                       "programs_new": imported}, actor=actor)
+            return {"written_utc": snap["written_utc"], "items": len(self.items.items), "programs_new": imported}
+
+    def sync_users(self, accounts) -> int:
+        snap = feed.read_snapshot(self.feed_dir)
+        if snap is None:
+            return 0
+        n = 0
+        for u in snap.get("users", []):
+            row = (u["username"], u["password_hash"], u["role"], int(u["commissioning"]), int(u["disabled"]),
+                   datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+                   int(u["must_change_password"]))
+            self.hist.submit(lambda c, row=row: c.execute(
+                "INSERT INTO users(username, password_hash, role, commissioning, disabled, created_utc, "
+                "password_changed_utc, must_change_password) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE "
+                "SET password_hash=excluded.password_hash, role=excluded.role, commissioning=excluded.commissioning, "
+                "disabled=excluded.disabled, must_change_password=excluded.must_change_password", row), wait=True)
+            n += 1
+        live = {u["username"] for u in snap.get("users", [])}
+        for r in self.hist.query("SELECT username FROM users"):
+            if r["username"] not in live:
+                self.hist.submit(lambda c, n_=r["username"]: c.execute("UPDATE users SET disabled=1 WHERE username=?",
+                                                                       (n_,)), wait=True)
+        return n
+
+    # ------------------------------------------------------------------ control of the simulation
+    def set_running(self, actor: str, running: bool) -> None:
+        self.running = running
+        self.hist.event("TWIN_RUN" if running else "TWIN_PAUSE", {"speed": self.speed}, actor=actor)
+
+    def set_speed(self, actor: str, speed: int) -> None:
+        if speed not in SPEEDS:
+            raise ValueError(f"speed is one of {SPEEDS}")
+        self.speed = speed
+        self.hist.event("TWIN_SPEED", {"speed": speed}, actor=actor)
+
+    def reset(self, actor: str, start_utc: datetime | None = None) -> None:
+        with self.lock:
+            self.running = False
+            self.twin.reset()
+            self.clock.start_utc = start_utc or datetime.now(timezone.utc).replace(microsecond=0)
+            self.clock.sim_s = 0.0
+            self.run_id = new_id("twinrun")
+            self.engine = self._engine()
+            self.twin.step(0.0)
+            self.engine.start()
+            self.hist.event("TWIN_RESET", {"start_utc": self.clock.start_utc.isoformat(), "run_id": self.run_id},
+                            actor=actor)
+
+    def step(self, n: int) -> None:
+        with self.lock:
+            for _ in range(n):
+                self.twin.step(DT_S)
+                self.engine.tick()
+
+    def start(self) -> None:
+        with contextlib.suppress(ValueError):          # no snapshot yet: the twin starts empty
+            self.import_snapshot("system")
+        self.twin.step(0.0)
+        self.engine.start()
+
+    async def run_forever(self) -> None:
+        carry = 0.0
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(0.25)
+            now = time.monotonic()
+            wall = now - last
+            last = now
+            if not self.running:
+                self.effective_speed = 0.0
+                continue
+            want = self.speed * wall / DT_S + carry
+            n = int(want)
+            cap = int(MAX_STEPS_PER_S * wall)
+            carry = want - n if n <= cap else 0.0
+            n = min(n, cap)
+            t0 = time.monotonic()
+            await asyncio.to_thread(self.step, n)
+            self.effective_speed = n * DT_S / wall if wall > 0 else 0.0
+            if time.monotonic() - t0 > 0.2:
+                await asyncio.sleep(0.05)              # leave the event loop and the CPU to the dashboard
+
+    # ------------------------------------------------------------------ results and evidence
+    def accept(self, actor: str, program_id: str, version: int, note: str) -> dict:
+        v = self.programs.get(program_id, version)
+        runs = [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version]
+        passed = [r for r in runs if r.get("result") == "DONE"]
+        if not passed:
+            raise ValueError(f"no operation of {program_id} v{version} ended DONE in this twin run")
+        if any(r.get("result") in ("FAILED", "STOP_UNVERIFIED") for r in runs) and not note.strip():
+            raise ValueError("some runs of this version failed in the twin: say why you accept it anyway")
+        ev = {"kind": "AQUACROP_TWIN_EVIDENCE", "program_id": program_id, "version": version, "digest": v["digest"],
+              "passed": True, "accepted_by": actor, "accepted_utc": datetime.now(timezone.utc).isoformat(),
+              "twin_run_id": self.run_id, "runs": runs[-20:], "note": note,
+              "meaning": "logic test on virtual modules with DEMO dynamics; not physical verification"}
+        if v["digest"] != program_digest(parse(v["body"]).model_dump(mode="json")):
+            raise ValueError("this version's body does not match its digest")
+        path = feed.write_evidence(self.feed_dir, ev)
+        self.hist.event("TWIN_EVIDENCE_WRITTEN", {"program": f"{program_id}@{version}", "path": str(path)}, actor=actor)
+        return ev
+
+    def view(self) -> dict:
+        with self.lock:
+            e = self.engine.view()
+            items = []
+            for iid, it in self.items.views().items():
+                st = self.engine.item_state(iid)
+                ins = []
+                for r in it.type.roles:
+                    p = it.points.get(r.role)
+                    s = self.twin.samples().get(p) if p else None
+                    val = None
+                    if s is not None and s.value is not None:
+                        val = bool(s.value)
+                    elif s is not None and s.raw_value is not None:
+                        sc = it.body.scaling.get(r.role)
+                        val = round(sc.apply(float(s.raw_value) / 1000.0), 3) if sc else f"{s.raw_value} {s.raw_unit}"
+                    ins.append({"role": r.role, "label": r.label, "point": p, "direction": r.direction.value,
+                                "value": val, "quality": s.quality.value if s else "NO CHANNEL",
+                                "why": s.reason if s else "no channel", "unit": r.unit})
+                beh = (it.body.simulation or it.type.simulation)
+                items.append(st | {"icon": self.items.items[iid]["icon"], "type": self.items.items[iid]["type_id"],
+                                   "behaviour": beh.behavior.value, "roles": ins,
+                                   "fault": self.twin.s.faults.get(iid)})
+            return {"runtime_id": self.runtime_id, "run_id": self.run_id, "running": self.running, "speed": self.speed,
+                    "effective_speed": round(self.effective_speed, 1), "speeds": SPEEDS,
+                    "sim_utc": self.clock.utc().isoformat(), "sim_s": round(self.clock.sim_s, 1),
+                    "timezone": self.cfg.site.timezone, "snapshot_utc": self.snapshot_utc, "engine": e, "items": items,
+                    "results": self.results[-50:],
+                    "label": "DIGITAL TWIN: virtual modules and DEMO dynamics. A pass here is a logic test, not "
+                             "physical verification."}
+

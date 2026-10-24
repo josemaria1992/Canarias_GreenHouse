@@ -309,13 +309,23 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         task = asyncio.create_task(svc.run_forever()) if is_sim else None
         if not is_sim:
             svc.start()
+            if app.state.live_engine is not None:
+                app.state.live_engine.start()      # comes up in RECOVERY: nothing runs until approved
         watcher = asyncio.create_task(watch_edges())
+
+        async def publish_twin_feed():           # the twin reads this snapshot; it never writes back here
+            while True:
+                with contextlib.suppress(Exception):
+                    await run_in_threadpool(app.state.publish_snapshot)
+                await asyncio.sleep(30)
+        feeder = asyncio.create_task(publish_twin_feed())
         hist.event("PROCESS_STARTED", {"session_id": session_id, "config_id": cfg.config_id,
                                        "profile": cfg.profile.value, "version": __version__}, actor="system")
         try:
             yield
         finally:
             watcher.cancel()
+            feeder.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watcher
             if task is not None:
@@ -323,6 +333,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
             else:
+                if app.state.live_engine is not None:
+                    await run_in_threadpool(app.state.live_engine.stop)
                 await run_in_threadpool(svc.stop)   # releases ports; sends nothing
             # Shutdown issues no output commands; it only records the event and closes storage.
             hist.event("PROCESS_STOPPING", {"session_id": session_id}, actor="system")
@@ -760,6 +772,70 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             body, mt = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), "application/x-yaml"
         hist.event("IO_ASSIGNMENTS_EXPORTED", {"format": fmt, "counts": doc["counts"]}, actor=p.username)
         return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'})
+
+    # ------------------------------------------------------------------ equipment (0.5.0)
+    from ..equipment.store import EquipmentStore
+    from . import equipment as equipment_routes
+    equipment = EquipmentStore(hist, cfg, assignments)
+    app.state.equipment = equipment
+    equipment_routes.register(app, require, equipment, _samples, edges)
+
+    # ------------------------------------------------------------------ module commissioning and discovery (0.5.0)
+    from . import commissioning as commissioning_routes
+    wizard = None
+    if not is_sim:
+        import os
+        from ..commissioning.wizard import Wizard
+        wizard = Wizard(hist, cfg, state_dir=state_dir, lock_root=Path(os.environ.get("AQUACROP_LOCK_DIR", state_dir)),
+                        probe_destination=svc.probe)
+        wizard.startup()
+    app.state.wizard = wizard
+    commissioning_routes.register(app, require, wizard, None if is_sim else svc)
+
+    # ------------------------------------------------------------------ programs and the twin feed (0.5.0)
+    import os
+    from ..programs.store import ProgramStore
+    from ..twin import feed as twin_feed
+    from . import programs as program_routes
+    programs = ProgramStore(hist)
+    equipment.dependents = programs.dependents
+    app.state.programs = programs
+    feed_dir = Path(os.environ["AQUACROP_FEED_DIR"]) if os.environ.get("AQUACROP_FEED_DIR") else None
+    twin_url = os.environ.get("AQUACROP_TWIN_URL")
+
+    def publish():
+        if feed_dir is None:
+            return None
+        try:
+            return twin_feed.publish_snapshot(feed_dir, cfg=cfg, equipment=equipment, programs=programs, hist=hist,
+                                              software_version=__version__)
+        except OSError as e:
+            hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
+            return None
+    app.state.publish_snapshot = publish
+    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
+
+    # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
+    from . import operation as operation_routes
+    live_engine = None
+    if not is_sim and cfg.bench_tests.enabled:
+        from ..programs.live import LiveEngineHost
+        live_engine = LiveEngineHost(svc, hist, equipment, programs, session_id)
+    app.state.live_engine = live_engine
+    operation_routes.register(app, require, live_engine, programs, equipment, cfg)
+
+    @app.get("/api/twin-link")
+    def twin_link(p: Principal = Depends(require(Perm.READ))):
+        return {"url": twin_url, "feed": feed_dir is not None,
+                "note": ("The digital twin is a separate service with its own database and virtual modules. "
+                         "Opening or running it never affects the real system.")}
+
+    @app.post("/api/twin-link/publish")
+    def twin_publish(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        r = publish()
+        if r is None:
+            raise HTTPException(409, "no twin feed directory is configured on this controller")
+        return r
 
     @app.get("/api/plant")
     async def plant_view(p: Principal = Depends(require(Perm.READ))):

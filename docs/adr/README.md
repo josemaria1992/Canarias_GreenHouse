@@ -19,3 +19,4 @@
 | 0015 | The shared drive's run command over its Modbus interface | proposed |
 | [0016](0016-added-digital-io-modules.md) | Two additional SKU 26244 modules, 80-point inventory | owner-confirmed inventory; physical allocation pending |
 | [0017](0017-bench-bring-up-safe-state-and-io-board.md) | Bench bring-up: module setup, safe-state OFF, I/O board, assignment and check records | owner-accepted; not yet run on the hardware |
+| [0018](0018-equipment-programs-and-parallel-twin.md) | User-defined equipment, programs, the module wizard and a twin service beside the live one | proposed (0.5.0) |

@@ -862,7 +862,14 @@
   }
 
   VIEWS.twin = async function () {
-    if (isReal()) return mount("v-twin", h("div", { class: "card" }, "The digital twin is available in the simulation profile only."));
+    if (isReal()) {                // 0.5.0: the equipment twin is its own service beside this one
+      const L = await api("GET", "/api/twin-link");
+      return mount("v-twin", h("div", { class: "card" }, h("h2", null, "Digital twin"), h("p", null, L.note),
+        L.url ? h("p", null, h("a", { class: "button", href: L.url, target: "_blank", rel: "noopener" }, "Open the digital twin"))
+          : h("p", { class: "warn" }, "The twin service is not configured on this controller yet."),
+        L.feed ? h("button", { class: "ghost", disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/twin-link/publish", undefined, "equipment and programs sent to the twin") }, "Send equipment and programs to the twin now") : null,
+        h("p", { class: "muted small" }, "The twin receives a copy every 30 seconds. Use the same login there.")));
+    }
     if (isInst()) return instTwin();
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");

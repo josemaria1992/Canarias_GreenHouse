@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.5.2 (2026-10-24)
+
+- Equipment: each item has an "Edit details" editor for its properties, analog scaling, alarm limits and twin
+  links (a pump driving a flow meter in the twin). Saving makes a new equipment version.
+
+## 0.5.1 (2026-10-24): fixes found by CI on the 0.5.0 pull request
+
+- The Operation page script had a syntax error, so the page did not load (0.5.0 on the bench CM4 had it). Every
+  packaged browser script is now parsed by a test.
+- The CM4 installer's source no longer names the bench host in a message (installer policy test).
+
+## 0.5.0 (2026-10-24): equipment, programs, the module wizard and a digital twin beside the real dashboard
+
+For the owner's brief of 24 October 2026 and the owner's answers the same day (ADR-0018). Tested on the PC with
+the in-memory RS485 buses, virtual modules and a local browser check. **Owner-performed bench tests are NOT RUN**
+(docs/commissioning/bench-tests-0.5.md). Relay outputs, the drive, pumps, valves and dosing stay out of scope.
+
+### Equipment
+- Equipment types (versioned definitions with channel roles, typed properties, limits, permitted operations and
+  a simulation behaviour), built-in editable templates (pump, valve, level sensor, flow meter, button, test LED),
+  individual equipment with a built-in icon, properties, analog scaling and alarm limits.
+- Channel bindings per role, PROPOSED then VERIFIED with the I/O board's check plus your observation (or citing a
+  VERIFIED I/O assignment); one channel per role; electrical compatibility (relay contact vs transistor sink,
+  analog range) checked; a type upgrade or an item change sends affected channels back for verification.
+
+### Hardware
+- Hardware → Add module: prepares a new module on the controller's USB-to-RS485 adapter as a persisted
+  transaction (read, identity, address reservation, preview, write and verify, move, detect), never touching the
+  installation buses; an unclear write is UNCERTAIN with recovery steps; detection writes a configuration proposal.
+- Discovery: read-only, one address per poll inside each bus's worker, only when the poll has time to spare;
+  KNOWN, NEW, MISSING and CHANGED.
+
+### Programs and operation
+- Program editor: run now, weekly windows (overnight, several per day), measured volume, keep between limits,
+  sensor-triggered runs and ordered sequences with verified steps; immutable versions; validation; next windows.
+- Europe/Stockholm schedules with the owner's daylight-saving policy; missed windows are skipped, never replayed.
+- Installation-level AUTO/MANUAL per runtime, conflicts with an explicit choice, restart recovery with a checklist
+  and approval by an operator or administrator.
+
+### Digital twin
+- `aquacrop twin-serve` and `aquacrop-twin.service`: a second service with virtual buses only, no device nodes,
+  its own database and login cookie, capped CPU and memory; fed one way by a snapshot of the real system; the same
+  logins work; accepted twin results become evidence for exactly the same program version.
+
+### Physical bench tests
+- `bench_tests` in the configuration: programs may switch allowlisted IO 8CH outputs only, only inside an armed
+  bench lease, only for a version that passed in the twin; the lease's end stops them; the engine is checked again
+  under the bus lock before each frame. Without `bench_tests` the read-only profile writes exactly as before.
+
+### Storage
+- Schema 5 (equipment, bindings, programs, activations, occurrences, conflicts, mode, recovery, commissioning
+  transactions), migrated after the usual verified backup.
+
 ## 0.4.0 (2026-10-20): bench bring-up of the CM4 box and the six modules, the I/O board
 
 For the owner's hardware bring-up brief of 2026-10-20 and the owner's answers (ADR-0017). Tested on the in-memory
