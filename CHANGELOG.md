@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.3 (2026-10-25): the starter is all or nothing
+
+- "Create the installation's equipment" checks every name before creating anything. If an existing item already
+  has the name of a part, nothing is created, and the message names each clash ("Main pump 1 (mp1): the name is
+  used by main-pump-1") so it can be renamed or retired first. If any part is refused, the parts already made in
+  that press are taken back.
+
 ## 0.6.2 (2026-10-25): the installation starter (owner request)
 
 - New built-in equipment types: pressure transmitter, pH probe, EC probe and temperature transmitter (4-20 mA).

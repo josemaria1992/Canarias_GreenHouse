@@ -622,14 +622,27 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         active = {t["type_id"]: t["version"] for t in svc.snap["equipment"]["types"] if t["status"] == "ACTIVE"}
 
         def make():
-            have = {i["item_id"] for i in svc.changes.overlay(svc.snap)["equipment"]["items"] if i["status"] != "RETIRED"}
+            items = [i for i in svc.changes.overlay(svc.snap)["equipment"]["items"] if i["status"] != "RETIRED"]
+            have = {i["item_id"] for i in items}
+            todo = [part for part in st.parts() if part["item_id"] not in have]
+            # all or nothing: every name is checked before anything is created
+            taken = {i["name"].casefold(): i for i in items}
+            clashes = [f"{part['name']} ({part['item_id']}): the name is used by {taken[part['name'].casefold()]['item_id']}"
+                       for part in todo if part["name"].casefold() in taken]
+            if clashes:
+                raise ChangeRefused("nothing was created. Rename or retire these items first, then press again: "
+                                    + "; ".join(clashes))
+            before = json.loads(json.dumps(svc.changes.doc))
             made = []
-            for part in st.parts():
-                if part["item_id"] in have:
-                    continue
-                svc.changes.save_item(svc.snap, cfg, part["item_id"], part["name"], part["type_id"],
-                                      active[part["type_id"]], part["icon"], {})
-                made.append(part["item_id"])
+            try:
+                for part in todo:
+                    svc.changes.save_item(svc.snap, cfg, part["item_id"], part["name"], part["type_id"],
+                                          active[part["type_id"]], part["icon"], {})
+                    made.append(part["item_id"])
+            except ChangeRefused as e:
+                svc.changes.doc = before                     # one part failed: the others are taken back too
+                svc.changes.save()
+                raise ChangeRefused(f"nothing was created: {e}")
             return made, have | set(made)
         made, have = changed(make)
         lay, linked = st.link_layout(draft()[0], have)

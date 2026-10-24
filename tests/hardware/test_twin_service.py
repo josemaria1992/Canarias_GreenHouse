@@ -375,3 +375,16 @@ def test_the_starter_names_the_types_to_activate_first():
     from aquacrop.twin.starter import missing_types
     snap = {"equipment": {"types": [{"type_id": "pump", "status": "ACTIVE"}, {"type_id": "valve", "status": "DRAFT"}]}}
     assert missing_types(snap) == ["ec", "flow", "level", "ph", "pressure", "temperature", "valve"]
+
+
+def test_the_starter_creates_nothing_when_a_name_is_taken(live_and_twin):
+    twin = live_and_twin[3]
+    H = _twin_h(twin, "bench1")
+    lamp = next(t for t in twin.get("/api/twin/changes").json()["types"] if t["type_id"] == "test_lamp")
+    assert twin.post("/api/twin/equipment/save", json={"item_id": "demo", "name": "Main pump 1", "type_id": "test_lamp",
+                                                       "type_version": lamp["version"], "icon": "lamp", "body": {}},
+                     headers=H).status_code == 200
+    r = twin.post("/api/twin/starter", headers=H)
+    assert r.status_code == 409 and "Main pump 1 (mp1): the name is used by demo" in r.json()["detail"]
+    ids = {i["item_id"] for i in twin.get("/api/twin/changes").json()["items"]}
+    assert ids == {"p1", "demo"}                                                  # nothing half-made
