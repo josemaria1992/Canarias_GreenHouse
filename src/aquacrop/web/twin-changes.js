@@ -5,7 +5,8 @@
 "use strict";
 (function () {
   const T = window.AqTwin, { h, api, can } = T;
-  const C = { card: null, body: null, data: null, twin: null, msg: {}, open: null, last: 0, prog: null };
+  const C = { card: null, body: null, data: null, twin: null, msg: {}, open: null, last: 0, prog: null, progOpen: false,
+    eqEl: null, progEl: null, expEl: null };
   const ICONS = ["pump", "valve", "tank", "level", "flow", "pressure", "temperature", "button", "lamp", "fan", "heater", "motor", "sensor", "switch", "drop", "gauge", "plug", "generic"];
 
   function say(k, text, bad) { C.msg[k] = { text, bad }; draw(); }
@@ -14,20 +15,28 @@
     try { const r = await api("POST", path, body); C.msg[k] = { text: ok || "done" }; await load(); draw(); return r; }
     catch (e) { say(k, String(e.message || e), true); return null; }
   }
+  // the program editor is drawn apart: the equipment and export parts refresh every few seconds without touching it
+  function sayProg(text, bad) { C.msg.prog = { text, bad }; drawProg(); }
   async function load() { C.data = await api("GET", "api/twin/changes"); }
 
   function card() {
-    if (!C.card) { C.body = h("div"); C.card = h("div", { class: "card", id: "twin-changes" }, C.body); }
+    if (!C.card) {
+      C.eqEl = h("div"); C.progEl = h("div"); C.expEl = h("div");
+      C.body = h("div", null, C.eqEl, C.progEl, C.expEl);
+      C.card = h("div", { class: "card", id: "twin-changes" }, C.body);
+    }
     return C.card;
   }
   async function update(v) {
     C.twin = v;
     const ae = document.activeElement;
-    if (C.open || (ae && C.card && C.card.contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName))) return;
+    const first = !C.data;
+    if (C.open || (ae && (C.eqEl.contains(ae) || C.expEl.contains(ae)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName))) return;
     if (Date.now() - C.last < 3000) return;
     C.last = Date.now();
     try { await load(); } catch (e) { return; }
     draw();
+    if (first) drawProg();
   }
 
   // ---------------------------------------------------------------- equipment
@@ -52,10 +61,12 @@
   function channelSelect(i, role) {
     const cur = i.bindings[role.role] || "";
     const used = new Set(C.data.items.flatMap(x => Object.entries(x.bindings).filter(([r]) => !(x.item_id === i.item_id && r === role.role)).map(([, p]) => p)));
+    const fits = role.points || C.data.points;            // only the channels whose kind and interface suit the role
     return h("select", { "aria-label": `${i.name} ${role.label} channel`, disabled: !can("equipment_edit") || i.status === "RETIRED",
       onchange: ev => call("it-" + i.item_id, "api/twin/equipment/bind", { item_id: i.item_id, role: role.role, point: ev.target.value || null }, "channel changed in the twin") },
       h("option", { value: "" }, "— no channel —"),
-      C.data.points.filter(p => !used.has(p) || p === cur).map(p => h("option", { value: p, selected: p === cur }, p)));
+      fits.filter(p => !used.has(p) || p === cur).map(p => h("option", { value: p, selected: p === cur }, p)),
+      cur && !fits.includes(cur) ? h("option", { value: cur, selected: true }, `${cur} (does not suit)`) : null);
   }
   function equipmentTable() {
     const ed = can("equipment_edit");
@@ -92,14 +103,17 @@
     const name = h("input", { maxlength: 80, value: cur.name, placeholder: "Morning watering", "aria-label": "Program name" });
     const ta = h("textarea", { rows: 10, spellcheck: "false", "aria-label": "Program definition (JSON)" });
     ta.value = JSON.stringify(cur.body, null, 2);
-    pick.addEventListener("change", () => { const p = latest[pick.value]; C.prog = p ? { program_id: p.program_id, name: p.name, body: p.body } : null; draw(); });
+    pick.addEventListener("change", () => { const p = latest[pick.value]; C.prog = p ? { program_id: p.program_id, name: p.name, body: p.body } : null; drawProg(); });
     const save = async () => {
-      let body; try { body = JSON.parse(ta.value); } catch (e) { say("prog", "not valid JSON: " + e.message, true); return; }
-      const r = await call("prog", "api/twin/programs/draft", { program_id: id.value.trim(), name: name.value, body }, "saved in the twin");
-      if (r) { C.prog = { program_id: r.program_id, name: r.name, body: r.body };
-        say("prog", r.issues.length ? "saved; problems: " + r.issues.join("; ") : `saved as v${r.version} and validated: activate it under Programs and run it`, !!r.issues.length); }
+      let body; try { body = JSON.parse(ta.value); } catch (e) { sayProg("not valid JSON: " + e.message, true); return; }
+      let r;
+      try { r = await api("POST", "api/twin/programs/draft", { program_id: id.value.trim(), name: name.value, body }); }
+      catch (e) { sayProg(String(e.message || e), true); return; }
+      C.prog = { program_id: r.program_id, name: r.name, body: r.body };
+      sayProg(r.issues.length ? "saved; problems: " + r.issues.join("; ") : `saved as v${r.version} and validated: activate it under Programs and run it`, !!r.issues.length);
+      C.last = 0;                                        // the export part shows the new version at its next refresh
     };
-    return h("details", { class: "small", open: C.open === "prog" || null, ontoggle: ev => { C.open = ev.target.open ? "prog" : null; } },
+    return h("details", { class: "small", open: C.progOpen || null, ontoggle: ev => { C.progOpen = ev.target.open; } },
       h("summary", null, "Change or add a program"),
       h("div", { class: "row" }, h("label", null, "Edit ", pick), h("label", null, "Id ", id), h("label", null, "Name ", name)),
       ta, h("div", { class: "row" }, h("button", { class: "small", disabled: !ed, onclick: save }, "Save and validate in the twin"), msg("prog")),
@@ -129,9 +143,11 @@
 
   function draw() {
     if (!C.body || !C.data) return;
-    C.body.replaceChildren(h("h2", null, "Equipment and programs"),
+    C.eqEl.replaceChildren(h("h2", null, "Equipment and programs"),
       h("p", { class: "muted small" }, `Started from the real system's copy of ${C.data.snapshot_utc ? new Date(C.data.snapshot_utc).toLocaleString() : "—"}. Import from the real system again to start from its latest state; your changes here are kept.`),
-      equipmentTable(), programEditor(), exportBox());
+      equipmentTable());
+    C.expEl.replaceChildren(exportBox());
   }
+  function drawProg() { if (C.progEl && C.data) C.progEl.replaceChildren(programEditor()); }
   window.AqTwinChanges = { card, update };
 })();

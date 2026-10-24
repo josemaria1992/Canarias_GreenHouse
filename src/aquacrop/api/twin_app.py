@@ -34,6 +34,7 @@ from ..programs.schedule import upcoming
 from ..programs.store import ProgramRefused
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret
 from ..twin import feed
+from ..equipment.definitions import TypeBody, channel_issues
 from ..twin.changes import ChangeRefused, TwinChanges, preview as changes_preview, program_items, write_export
 from ..twin.equipment_service import EquipmentTwinService, twin_config
 from .app import safe_validation_response
@@ -538,11 +539,19 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results)
         else:
             pv = {"items": [], "bindings": [], "programs": [], "missing": [], "empty": True}
-        types = [{"type_id": t["type_id"], "version": t["version"], "name": t["name"], "status": t["status"],
-                  "default_icon": t["body"].get("default_icon", "generic"),
-                  "roles": [{"role": r["role"], "label": r["label"], "direction": r["direction"]}
-                            for r in t["body"]["roles"]]}
-                 for t in snap["equipment"]["types"] if t["status"] in ("ACTIVE", "SUPERSEDED")]
+        all_points = sorted(str(x) for x in cfg.all_points())
+
+        def fitting(role) -> list[str]:          # channels whose kind, direction and interface suit the role
+            return [pt for pt in all_points if not channel_issues(cfg, role, pt, None)]
+        types = []
+        for t in snap["equipment"]["types"]:
+            if t["status"] not in ("ACTIVE", "SUPERSEDED"):
+                continue
+            tb = TypeBody.model_validate(t["body"])
+            types.append({"type_id": t["type_id"], "version": t["version"], "name": t["name"], "status": t["status"],
+                          "default_icon": t["body"].get("default_icon", "generic"),
+                          "roles": [{"role": r.role, "label": r.label, "direction": r.direction.value,
+                                     "points": fitting(r)} for r in tb.roles]})
         binds: dict[str, dict] = {}
         for b in eff.get("bindings", []):
             binds.setdefault(b["item_id"], {})[b["role"]] = b["point"]
@@ -552,7 +561,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                     "changed": i["item_id"] in doc["items"] or i["item_id"] in doc["retire"]
                     or any(k.startswith(i["item_id"] + ".") for k in doc["bindings"])}
                  for i in eff["equipment"]["items"] if i["status"] != "RETIRED" or i["item_id"] in doc["retire"]]
-        return {"preview": pv, "types": types, "items": items, "points": sorted(str(x) for x in cfg.all_points()),
+        return {"preview": pv, "types": types, "items": items, "points": all_points,
                 "snapshot_utc": svc.snapshot_utc}
 
     @app.post("/api/twin/equipment/save")

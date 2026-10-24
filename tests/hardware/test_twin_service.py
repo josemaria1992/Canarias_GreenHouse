@@ -337,3 +337,13 @@ def test_an_export_is_refused_when_the_real_system_changed_meanwhile(live_and_tw
     assert pkg["conflicts"] and pkg["items"][0]["diff"][0]["field"] == "name"
     r = live.post("/api/twin-changes/approve", json={"digest": digest}, headers=login(live, "admin1", ORIGIN))
     assert r.status_code == 409 and "Import in the twin" in r.json()["detail"]
+
+
+def test_the_twin_offers_only_channels_that_suit_each_role(live_and_twin):
+    twin = live_and_twin[3]
+    login(twin, "bench1", TWIN_ORIGIN)
+    ch = twin.get("/api/twin/changes").json()
+    pump = next(t for t in ch["types"] if t["type_id"] == "pump")
+    start = next(r for r in pump["roles"] if r["role"] == "start")
+    assert start["points"] and all(".DO" in p for p in start["points"])          # an output role: outputs only
+    assert set(start["points"]) < set(ch["points"])

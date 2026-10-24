@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aquacrop-greenhouse"
-version = "0.6.0"
+version = "0.6.1"
 description = "AquaCrop greenhouse platform: desktop simulation, causal process twin, historian and browser UI; read-only Modbus acquisition and guarded bench commissioning."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

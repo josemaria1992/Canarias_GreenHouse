@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 (2026-10-25): twin page fixes from the owner walkthrough
+
+- The speed you choose stays chosen. While the twin runs, a new speed applies at once.
+- "For the real system" refreshes while the program editor is open. The editor is no longer redrawn under you.
+- Channel lists offer only the channels that suit the role: kind, direction and electrical interface.
+- No pop-ups: Reset and "Approve into AUTO/MANUAL" act on a second press ("Press again to …"). Accepting a twin
+  result with failed runs asks for the reason in a field beside the button.
+- The diagram card no longer shows a stray "null".
+
 ## 0.6.0 (2026-10-25): from the twin to the real system (owner request)
 
 - Digital twin, "Equipment and programs": add, change or retire equipment, assign channels, and save new

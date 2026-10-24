@@ -3,7 +3,7 @@
  * All text is inserted with textContent. */
 "use strict";
 (function () {
-  const S = { csrf: null, rid: null, perms: [], v: null, busy: false, open: {} };
+  const S = { csrf: null, rid: null, perms: [], v: null, busy: false, open: {}, speed: null, start: "", arm: null };
   const $ = id => document.getElementById(id);
   const icon = window.AqIcons.icon;
   function h(tag, attrs, ...kids) {
@@ -39,6 +39,15 @@
     try { const r = await api(method, path, body); if (ok) toast(ok); await refresh(); return r; }
     catch (e) { toast(String(e.message || e), true); return null; }
   }
+  /** A button that acts on the second press (owner preference: no pop-ups). The first press turns it into
+   * "Press again to …" for eight seconds. */
+  function twice(key, label, again, cls, disabled, fn) {
+    const armed = S.arm && S.arm.key === key && Date.now() < S.arm.until;
+    return h("button", { class: (cls || "") + (armed ? " danger" : ""), disabled, onclick: () => {
+      if (armed) { S.arm = null; fn(); }
+      else { S.arm = { key, until: Date.now() + 8000 }; refresh(); setTimeout(refresh, 8100); }
+    } }, armed ? again : label);
+  }
   function showLogin() { $("app").classList.add("hidden"); $("login-view").classList.remove("hidden"); }
   async function signedIn(s) {
     S.csrf = s.csrf_token; S.rid = s.runtime_id; S.perms = s.permissions || [];
@@ -70,8 +79,14 @@
   }
   function controls(v) {
     const run = can("sim_command");
-    const speed = h("select", { "aria-label": "Speed" }, v.speeds.map(s => h("option", { value: s, selected: s === v.speed }, `${s}×`)));
-    const start = h("input", { type: "datetime-local", "aria-label": "Scenario start (site time)" });
+    // the chosen speed and start time survive the redraw every second; while running, a new speed applies at once
+    const want = S.speed == null ? v.speed : S.speed;
+    const speed = h("select", { "aria-label": "Speed", onchange: ev => {
+      S.speed = Number(ev.target.value);
+      if (v.running) act("POST", "api/twin/control", { action: "run", speed: S.speed }, `speed ${S.speed}×`);
+    } }, v.speeds.map(s => h("option", { value: s, selected: s === want }, `${s}×`)));
+    const start = h("input", { type: "datetime-local", "aria-label": "Scenario start (site time)", value: S.start,
+      onchange: ev => { S.start = ev.target.value; } });
     return h("div", { class: "card" },
       h("div", { class: "row" },
         h("strong", { class: "clock" }, simTime(v.sim_utc)), h("span", { class: "muted small" }, SIM_TZ()),
@@ -81,7 +96,8 @@
         h("button", { disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "pause" }) }, "Pause"),
         h("button", { disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "step", steps: 2 }) }, "Step 1 s"),
         h("label", { class: "small" }, "Start at ", start),
-        h("button", { class: "ghost", disabled: !run, onclick: () => { if (confirm("Reset the twin? Its simulated state and clock start again; its history is kept.")) act("POST", "api/twin/control", { action: "reset", start_local: start.value || null }, "twin reset"); } }, "Reset"),
+        twice("reset", "Reset", "Press again to reset (history is kept)", "ghost", !run,
+          () => act("POST", "api/twin/control", { action: "reset", start_local: start.value || null }, "twin reset")),
         h("button", { class: "ghost", disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "import" }, "imported from the real system") }, "Import from the real system")),
       h("p", { class: "muted small" }, `${v.label} Last import from the real system: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
   }
@@ -99,7 +115,8 @@
         h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`))),
         ["AUTO", "MANUAL"].map(t => h("div", null, h("strong", null, `Approve into ${t}:`),
           h("ul", { class: "small" }, v.consequences[t].map(x => h("li", null, x))),
-          h("button", { disabled: !ok, onclick: () => { if (confirm(`Approve the restart into ${t}?\n\n` + v.consequences[t].join("\n"))) act("POST", "api/twin/recovery/approve", { target: t }, `approved into ${t}`); } }, `Approve into ${t}`))),
+          twice("approve-" + t, `Approve into ${t}`, `Press again to approve into ${t}`, "", !ok,
+            () => act("POST", "api/twin/recovery/approve", { target: t }, `approved into ${t}`)))),
         h("p", { class: "muted small" }, "Approving is your decision that the installation may operate again. It does not clear a fault: every check above must pass first.")));
     }
     return h("div", { class: "card" }, kids);
@@ -142,12 +159,14 @@
               !p.active ? h("button", { class: "small", disabled: !edit, onclick: () => act("POST", "api/twin/programs/activate", { program_id: p.program_id, version: p.version }, "active in the twin") }, "Activate in twin")
                 : h("button", { class: "small ghost", disabled: !edit, onclick: () => act("POST", "api/twin/programs/deactivate", { program_id: p.program_id, version: p.version }) }, "Deactivate"),
               p.active && t.type !== "CONTINUOUS" ? h("button", { class: "small", disabled: !run || v.engine.mode !== "MANUAL", title: "MANUAL mode only", onclick: () => act("POST", "api/twin/run-now", { program_id: p.program_id }, "started") }, "Run now") : null,
-              runs.some(r => r.result === "DONE") ? h("button", { class: "small", disabled: !pc, title: "Record this twin result for the same version on the real system", onclick: () => {
+              runs.some(r => r.result === "DONE") ? (() => {
                 const failed = runs.some(r => r.result !== "DONE");
-                const note = failed ? prompt("Some runs did not end DONE. Why do you accept this version anyway?") : "";
-                if (failed && !note) return;
-                act("POST", "api/twin/accept", { program_id: p.program_id, version: p.version, note: note || "" }, "accepted: the real system records this twin result");
-              } }, "Accept twin result") : null));
+                const note = failed ? h("input", { class: "small", maxlength: 500, placeholder: "why accept although some runs failed", "aria-label": "Reason" }) : null;
+                return [note, h("button", { class: "small", disabled: !pc, title: "Record this twin result for the same version on the real system", onclick: () => {
+                  if (failed && !note.value.trim()) { note.focus(); toast("Some runs did not end DONE: write why you accept it anyway", true); return; }
+                  act("POST", "api/twin/accept", { program_id: p.program_id, version: p.version, note: note ? note.value : "" }, "accepted: the real system records this twin result");
+                } }, "Accept twin result")];
+              })() : null));
         }))) : h("p", { class: "muted" }, "No programs in the copy yet."),
       h("p", { class: "muted small" }, "A program edited on the real system arrives as a new version. Accepting a result records a logic test for exactly that version; it is not physical verification."));
   }
@@ -180,14 +199,15 @@
       const v = await api("GET", "api/twin");
       S.v = v;
       if (v.runtime_id !== S.rid) S.rid = v.runtime_id;
-      const keep = document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#main");
-      if (keep) return;               // don't redraw under a field being typed in
-      // the diagram card stays in the page (never detached), so a drag in the editor is not cut off by a redraw
+      // the diagram and change cards stay in the page (never detached) and refresh themselves, so a drag or an
+      // open editor there is not cut off; the other parts are not redrawn under a field being used
       const D = window.AqTwinDiagram;
       const X = window.AqTwinChanges;
       if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), D.card(), h("div", { id: "t-rest" }), X.card());
-      $("t-top").replaceChildren(controls(v));
-      $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
+      const ae = document.activeElement;
+      const using = id => ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest("#" + id);
+      if (!using("t-top")) $("t-top").replaceChildren(controls(v));
+      if (!using("t-rest")) $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
       D.update(v);
       X.update(v);
     } catch (e) { /* shown by the next action */ }
