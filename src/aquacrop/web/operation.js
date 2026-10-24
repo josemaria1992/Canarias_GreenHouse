@@ -49,7 +49,7 @@
     const items = h("div", { class: "card" }, h("h3", null, "Equipment state"),
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Item", "Asked", "Output (readback)", "Feedback", "Used by"].map(x => h("th", null, x)))),
         h("tbody", null, Object.values(v.items).map(i => h("tr", null, h("td", null, i.name), h("td", null, i.commanded ? "ON" : "OFF"),
-          h("td", null, i.coil), h("td", null, i.feedback), h("td", null, i.owner || "")))))),
+          h("td", null, i.coil), h("td", null, i.feedback), h("td", null, i.owner || ""))))),
       h("p", { class: "muted small" }, "Output is the module's coil readback, not proof of the device. UNKNOWN is never shown as OFF."));
     const ops = h("div", { class: "card" }, h("h3", null, "Running"),
       v.ops.length ? h("table", { class: "compact" }, h("tbody", null, v.ops.map(o => h("tr", null, h("td", null, `${o.program_id} v${o.version}`), h("td", null, o.origin),

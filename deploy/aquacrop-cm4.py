@@ -495,7 +495,7 @@ def cmd_twin(a, host: Host) -> int:
     """Install the twin beside the live service: user, directories, unit, TLS site, live drop-in."""
     name = a.hostname.strip().lower()
     if not name or "/" in name or " " in name:
-        raise Fail("--hostname is the name in the Caddyfile, such as aquacrop-bench.local")
+        raise Fail("--hostname is the name in the Caddyfile, such as aquacrop.lan")
     cur = current_release(host)
     if cur is None or not (cur / "deploy" / "aquacrop-twin.service").is_file():
         raise Fail("the current release has no twin service (0.5.0 or later is needed); upgrade first")

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2026-10-24): fixes found by CI on the 0.5.0 pull request
+
+- The Operation page script had a syntax error, so the page did not load (0.5.0 on the bench CM4 had it). Every
+  packaged browser script is now parsed by a test.
+- The CM4 installer's source no longer names the bench host in a message (installer policy test).
+
 ## 0.5.0 (2026-10-24): equipment, programs, the module wizard and a digital twin beside the real dashboard
 
 For the owner's brief of 24 October 2026 and the owner's answers the same day (ADR-0018). Tested on the PC with
