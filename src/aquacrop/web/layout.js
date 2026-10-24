@@ -59,7 +59,8 @@
     svg.setAttribute("viewBox", `0 0 ${lay.width} ${lay.height}`);
     svg.setAttribute("class", "schematic diagram" + (opts.edit ? " editing" : ""));
     svg.setAttribute("role", "group");
-    svg.setAttribute("aria-label", `${lay.title}: tanks, pumps, valves and sensors with their state` + (opts.edit ? " (editing)" : ""));
+    svg.setAttribute("aria-label", `${lay.title}: tanks, pumps, valves and sensors with their state` +
+      (opts.edit ? " (editing)" : opts.readOnly ? " (read-only)" : ""));
     let parent = svg;
     function e(tag, a, txt) {
       const x = document.createElementNS(NS, tag);

@@ -919,7 +919,7 @@
     const say = (k, text, bad) => { st.msg[k] = { text, bad }; U.refresh(); };
     const msg = k => st.msg[k] ? h("span", { class: st.msg[k].bad ? "error small" : "muted small", role: "status" }, st.msg[k].text) : null;
     const send = async (k, path, body, ok) => { try { await api("POST", path, body); say(k, ok); } catch (e) { say(k, String(e.message || e), true); } };
-    const svg = A.render(lay, Lv.readings, { selected: st.sel, onSelect: (kind, id) => { st.sel = st.sel === id ? null : id; U.refresh(); } });
+    const svg = A.render(lay, Lv.readings, { readOnly: true, selected: st.sel, onSelect: (kind, id) => { st.sel = st.sel === id ? null : id; U.refresh(); } });
     const n = st.sel && lay.nodes.find(q => q.id === st.sel), r = n && n.item && Lv.readings[n.item];
     const s = n && ["pump", "valve", "box", "sector"].includes(n.kind) ? A.eqState(Lv.readings, n) : null;
     const sidePanel = h("div", { class: "card side-panel" }, n ? [h("h3", null, n.label || n.id), h("dl", { class: "kv" },

@@ -802,10 +802,10 @@ CASES["UAT-14"] = async (p, b) => {
   const users = [["tour-viewer", "viewer"], ["tour-operator", "operator"]];
   for (const [u, role] of users) {
     const c = p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Users and roles" }) }).first();
-    const inputs = c.locator(".row input");
-    await inputs.nth(0).fill(u);
-    await inputs.nth(1).fill("tour first password 1");
-    await c.locator(".row select").first().selectOption(role);
+    // 0.5.4: every user row has its own password field, so the new-user form is found by its labels
+    await c.getByLabel("New login name").fill(u);
+    await c.getByLabel("First password").fill("tour first password 1");
+    await c.getByLabel("Role of the new user").selectOption(role);
     await c.locator("button", { hasText: "Create user" }).click();
     await p.waitForTimeout(1000);
     await show(p, "settings");
