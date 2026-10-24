@@ -185,3 +185,17 @@ def test_export_and_import_create_drafts_only(sim):
     assert r.status_code == 200 and len(r.json()["types"]) == len(TEMPLATES)
     assert all(t["status"] == "DRAFT" for t in c.get("/api/equipment", headers=h).json()["types"]
                if t["type_id"].startswith("copy-"))
+
+
+def test_import_takes_the_current_version_of_each_type(sim):
+    app, c, _ = sim
+    h = login(c, "oper1")
+    body = TEMPLATES["test_lamp"]["body"]
+    old = dict(body, description="old")
+    new = dict(body, description="current")
+    doc = {"kind": "AQUACROP_EQUIPMENT_EXPORT",
+           "types": [{"type_id": "lampx", "version": 1, "status": "SUPERSEDED", "name": "Lamp", "body": old},
+                     {"type_id": "lampx", "version": 2, "status": "ACTIVE", "name": "Lamp", "body": new}]}
+    assert c.post("/api/equipment/import", json={"doc": doc}, headers=h).status_code == 200
+    t = next(t for t in c.get("/api/equipment", headers=h).json()["types"] if t["type_id"] == "lampx")
+    assert t["body"]["description"] == "current"

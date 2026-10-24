@@ -96,6 +96,11 @@ Expected, generated bench configuration: no FC06/FC0F/FC10 and no FC05 ON; FC05 
 stop and module return, one per output that read ON just before (none when all outputs are OFF),
 each followed by an FC01 read and matched by a `SAFE_STATE_OFF` event. To see one, switch an output ON
 in a test session, end the session, and confirm the OFF frame and event at LEASE_END.
+Expected, configuration with `bench_tests` enabled (0.5.0): as the generated bench configuration, plus
+FC05 ON only to `bench_tests.allowlist` outputs, only while a test session is armed and only when an
+active program is due, each matched by a `PROGRAM_OP_STARTED` event and followed by its OFF
+(`RELEASE_READINESS.md`, "The one exception"). An ON to any other output, or with no session armed, is a
+fault.
 
 ## CP-06 Drive Modbus interface (bench, motor disconnected)
 Only with the drive's manual at hand and the drive parameters of `docs/model/vfd_modbus.md` §4 set

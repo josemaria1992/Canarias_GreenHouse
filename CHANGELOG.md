@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.7 (2026-10-24): review fixes (Codex audit of 0.5.4)
+
+Outputs that could stay ON:
+- A running item's OFF uses the channels it had when it was switched ON: changing or clearing its binding while it
+  runs no longer leaves the original output ON with the operation reported DONE.
+- A sequence OFF step keeps the item in the stop path until its OFF is verified; a failed OFF no longer drops it.
+- After a bench test session ends, an OFF still owed goes out as a safe-state OFF, so retries reach the wire once the
+  bus answers again.
+- A gap between flow readings longer than the meter's freshness limit is uncertain volume, not delivered volume.
+
+Integrity:
+- A VALIDATED program version that fails revalidation becomes INVALID (immutable) and is deactivated everywhere; it
+  is never editable again. Only VALIDATED bodies run.
+- Equipment limits min_off_s, max_starts_per_hour and max_volume_L are enforced across runs and programs.
+- A volume needs a flow-rate meter in L/min; a keep-between sensor must be an analog measurement.
+- KEEP_BETWEEN stops when its weekly window closes.
+- The last-administrator check and the change it guards are one step (no race between two administrators).
+
+Twin:
+- Starts from a configuration with bench tests enabled; follows a live configuration change with a controlled reset;
+  refreshes untouched copies of live drafts; accepts evidence from the current run only; namespaces occurrences per
+  run, so a reset reruns the same windows.
+- A changed or removed live account ends that user's twin sessions.
+- Voltage inputs report mV; inputs must be real channels with finite values; a loop failure pauses the twin and
+  turns its health red. A NaN in any request body is refused with 422 instead of failing the server.
+
+Deployment and documents:
+- Upgrade and rollback move an installed twin with the live service, so both run the same release.
+- RELEASE_READINESS and CP-05 describe the one gated exception to "no automatic ON": scheduled bench tests.
 ## 0.5.6 (2026-10-24): the installation diagram in the twin (owner request)
 
 - The diagram is now data (a layout): symbols (tank, pump, valve, sensor, sector, box, text) with positions, and

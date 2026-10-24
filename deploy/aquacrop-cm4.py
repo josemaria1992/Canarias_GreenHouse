@@ -290,14 +290,14 @@ def validate_config(host: Host, py: Path, config: str) -> None:
     host.say(f"configuration {config} is valid")
 
 
-def health(host: Host, timeout_s: float = 90.0) -> bool:
+def health(host: Host, timeout_s: float = 90.0, url: str = HEALTH_URL) -> bool:
     if host.dry or host.staging:
-        host.say(f"{'would check' if host.dry else 'skipped in staging root:'} {HEALTH_URL}")
+        host.say(f"{'would check' if host.dry else 'skipped in staging root:'} {url}")
         return True
     end = time.monotonic() + timeout_s
     while time.monotonic() < end:
         try:
-            with urllib.request.urlopen(HEALTH_URL, timeout=3) as r:
+            with urllib.request.urlopen(url, timeout=3) as r:
                 body = json.load(r)
                 host.say(f"health: {json.dumps(body)}")
                 return bool(body.get("ok"))
@@ -387,12 +387,19 @@ def cmd_upgrade(a, host: Host) -> int:
         validate_config(host, dest / "venv" / "bin" / "python", config)
     for u in UNITS:
         host.install_file(rel.dir / "deploy" / u, f"/etc/systemd/system/{u}", 0o644)
+    twin = twin_installed(host)
+    if twin:
+        twin_units(host, dest)
     host.run(["systemctl", "daemon-reload"], system=True)
+    if twin:
+        host.run(["systemctl", "stop", TWIN_SERVICE], system=True)
     host.run(["systemctl", "stop", SERVICE], system=True)
     host.write_file("/opt/aquacrop/previous", old.name + "\n", 0o644)
     host.symlink(dest, "/opt/aquacrop/current")
     host.run(["systemctl", "start", SERVICE], system=True)
     record(host, f"upgrade {old.name} -> {rel.version}")
+    if twin:
+        twin_restart(host, dest)
     if not health(host):
         print(f"\nThe new release did not report healthy. Roll back with:\n  sudo python3 {Path(__file__).name} rollback\n"
               "If it already migrated the database, the old release refuses it: restore the pre-upgrade backup "
@@ -414,17 +421,24 @@ def cmd_rollback(a, host: Host) -> int:
     if not (dest / "venv" / "bin" / "python").exists():
         raise Fail(f"release {target} is not installed under {dest.parent}")
     print(f"Rolling back {cur.name} -> {target}")
+    twin = twin_installed(host)
+    if twin:
+        host.run(["systemctl", "stop", TWIN_SERVICE], system=True)
     host.run(["systemctl", "stop", SERVICE], system=True)
     # the target's own service units: the newer release may have changed a command line or a hardening
     # setting that the older one does not know (install_release keeps each release's deploy folder)
     for u in UNITS:
         if (dest / "deploy" / u).is_file():
             host.install_file(dest / "deploy" / u, f"/etc/systemd/system/{u}", 0o644)
+    if twin:
+        twin_units(host, dest)
     host.run(["systemctl", "daemon-reload"], system=True)
     host.write_file("/opt/aquacrop/previous", cur.name + "\n", 0o644)
     host.symlink(dest, "/opt/aquacrop/current")
     host.run(["systemctl", "start", SERVICE], system=True)
     record(host, f"rollback {cur.name} -> {target}")
+    if twin:
+        twin_restart(host, dest)
     if not health(host):
         print("The previous release did not report healthy. If the newer release migrated the database, the "
               "older one refuses to open it by design: restore the pre-upgrade backup with "
@@ -475,6 +489,28 @@ Next, by hand:
 
 TWIN_SERVICE = "aquacrop-twin.service"
 TWIN_PORT = 8443
+TWIN_HEALTH_URL = "http://127.0.0.1:8001/api/health"
+
+
+def twin_installed(host: Host) -> bool:
+    return host.p(f"/etc/systemd/system/{TWIN_SERVICE}").is_file()
+
+
+def twin_units(host: Host, dest: Path) -> None:
+    """The twin runs from /opt/aquacrop/current like the live service: it moves with every upgrade and rollback,
+    so the two never run different releases."""
+    if (dest / "deploy" / TWIN_SERVICE).is_file():
+        host.install_file(dest / "deploy" / TWIN_SERVICE, f"/etc/systemd/system/{TWIN_SERVICE}", 0o644)
+
+
+def twin_restart(host: Host, dest: Path) -> None:
+    if not (dest / "deploy" / TWIN_SERVICE).is_file():
+        host.run(["systemctl", "disable", TWIN_SERVICE], system=True, check=False)
+        host.say(f"{dest.name} has no digital twin: the twin stays stopped and disabled")
+        return
+    host.run(["systemctl", "start", TWIN_SERVICE], system=True)
+    if not health(host, url=TWIN_HEALTH_URL):
+        host.say(f"the digital twin did not report healthy on {dest.name}: see systemctl status {TWIN_SERVICE}")
 # 0.5.5: the twin is a path of the live site (one address, one login hand-off); the old port only redirects.
 CADDY_TWIN = """# AquaCrop behind TLS (written by aquacrop-cm4.py twin). LAN and OpenVPN clients only:
 # the host firewall restricts port 443 to those networks (docs/security/remote-access.md).

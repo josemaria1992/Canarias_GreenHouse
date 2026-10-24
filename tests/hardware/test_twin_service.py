@@ -202,3 +202,52 @@ def test_layout_is_edited_in_the_twin_and_accepted_on_the_real_system(live_and_t
     assert live.post("/api/layout/restore", json={"digest": lv["previous"]}, headers=hb).status_code == 200
     assert live.get("/api/layout").json()["meta"]["source"] == "restored"
     assert len(bus.write_frames()) == frames_before     # the diagram never writes to the real modules
+
+
+# ---- review findings (2026-10-24)
+
+def test_a_live_password_change_ends_the_users_twin_sessions(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    login(twin, "view1", TWIN_ORIGIN)
+    assert twin.get("/api/auth/session").status_code == 200
+    app.state.accounts.reset_password("view1", "a brand new password 99")
+    assert live.post("/api/twin-link/publish", headers=hl).status_code == 200
+    twin_app.state.svc.sync_users(twin_app.state.accounts)
+    assert twin.get("/api/auth/session").status_code == 401
+
+
+def test_evidence_comes_only_from_the_current_twin_run_and_a_reset_reruns_the_same_windows(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    svc = twin_app.state.svc
+    h = login(twin, "bench1", TWIN_ORIGIN)
+    H = h | {"X-Runtime-Id": twin.get("/api/auth/session").json()["runtime_id"]}
+    twin.post("/api/twin/programs/activate", json={"program_id": "fill", "version": 1}, headers=H)
+    twin.post("/api/twin/control", json={"action": "step", "steps": 2}, headers=H)
+    twin.post("/api/twin/recovery/approve", json={"target": "MANUAL"}, headers=H)
+    twin.post("/api/twin/run-now", json={"program_id": "fill"}, headers=H)
+    twin.post("/api/twin/control", json={"action": "step", "steps": 60}, headers=H)
+    assert svc.results[-1]["result"] == "DONE"
+    svc.reset("bench1")
+    with pytest.raises(ValueError, match="ended DONE in this twin run"):
+        svc.accept("bench1", "fill", 1, "")
+    assert svc.store.prefix.startswith(svc.run_id)          # occurrences are namespaced per run
+
+
+def test_twin_inputs_must_be_real_channels_with_finite_values(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    h = login(twin, "admin1", TWIN_ORIGIN)
+    H = h | {"X-Runtime-Id": twin.get("/api/auth/session").json()["runtime_id"]}
+    assert twin.post("/api/twin/input", content='{"point": "analog_A.AI1", "value": NaN}',
+                     headers=H | {"Content-Type": "application/json"}).status_code == 422
+    with pytest.raises(ValueError, match="finite"):
+        twin_app.state.svc.twin.set_input("analog_A.AI1", float("inf"))
+    with pytest.raises(ValueError, match="not a channel"):
+        twin_app.state.svc.twin.set_input("nowhere.AI1", 1.0)
+
+
+def test_the_twin_starts_from_a_configuration_with_bench_tests_enabled(fake_bus):
+    from aquacrop.twin.equipment_service import twin_config
+    cfg = fake_bus[0]
+    live = cfg.model_dump(mode="json", exclude_none=True) | {"bench_tests": {"enabled": True}}
+    twin = twin_config(live, allowed_hosts=["127.0.0.1"], allowed_origins=[TWIN_ORIGIN])
+    assert twin.profile.value == "SIMULATED" and not twin.bench_tests.enabled

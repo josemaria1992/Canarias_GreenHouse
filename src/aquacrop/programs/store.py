@@ -2,7 +2,8 @@
 (occurrences, conflicts, installation mode, recovery), in the runtime's own database (schema 5).
 
 Lifecycle of a program version: DRAFT (editable) -> VALIDATED (immutable; validation recorded) -> activated per
-runtime. A twin activation needs only validation. A live activation needs the same version's (same digest)
+runtime. A VALIDATED version that fails a later revalidation becomes INVALID (still immutable) and is deactivated
+everywhere. A twin activation needs only validation. A live activation needs the same version's (same digest)
 simulation evidence: a twin run that passed, recorded against it. Editing a VALIDATED version creates the next
 DRAFT. Running operations keep the version they started with. Importing makes drafts only.
 """
@@ -67,8 +68,11 @@ class MemoryEngineStore:
 
 
 class SqlEngineStore:
-    def __init__(self, hist, runtime_id: str, process_session_id: str):
+    def __init__(self, hist, runtime_id: str, process_session_id: str, *, key_prefix: str | None = None):
+        """`key_prefix` namespaces occurrence keys (the twin: one namespace per simulation run, so a reset to the
+        same scenario date runs its windows again, while a restart within a run still deduplicates)."""
         self.h, self.rt, self.sess = hist, runtime_id, process_session_id
+        self.prefix = f"{key_prefix}:" if key_prefix else ""
 
     def mode_load(self):
         rows = self.h.query("SELECT mode, phase, actor, utc, reason FROM installation_mode WHERE runtime_id=? "
@@ -81,6 +85,7 @@ class SqlEngineStore:
                                           " VALUES(?,?,?,?,?,?,?)", row), wait=True)
 
     def occurrence_claim(self, key, program_id, version, scheduled_utc, state, doc):
+        key = self.prefix + key
         row = (key, self.rt, program_id, version, scheduled_utc.isoformat() if scheduled_utc else None, state, _now(),
                json.dumps(doc, default=str))
 
@@ -91,6 +96,9 @@ class SqlEngineStore:
         return bool(self.h.submit(tx, wait=True))
 
     def occurrence_update(self, key, state, *, outcome=None, doc=None):
+        self._update(self.prefix + key, state, outcome=outcome, doc=doc)
+
+    def _update(self, key, state, *, outcome=None, doc=None):
         now = _now()
 
         def tx(c):
@@ -109,8 +117,8 @@ class SqlEngineStore:
         rows = self.h.query("SELECT occurrence_key FROM occurrences WHERE runtime_id=? AND state IN "
                             "('RUNNING','STARTING','STOPPING','WAITING_CONFLICT')", (self.rt,))
         keys = [r["occurrence_key"] for r in rows]
-        for k in keys:
-            self.occurrence_update(k, "INTERRUPTED", outcome="controller restarted: not resumed")
+        for k in keys:                                # stored keys, already namespaced
+            self._update(k, "INTERRUPTED", outcome="controller restarted: not resumed")
         return keys
 
     def conflict_open(self, cid, doc):
@@ -182,18 +190,36 @@ class ProgramStore:
             return self.get(program_id, version)
 
     def mark_validated(self, actor: str, program_id: str, version: int, issues: list[str], context: dict) -> dict:
+        """A DRAFT with issues stays DRAFT. A version that was VALIDATED is immutable: with issues it becomes INVALID
+        (never editable again; a fix is the next version) and every activation of it ends, so no runtime keeps
+        running a body that no longer validates."""
         with self._lock:
             v = self.get(program_id, version)
-            if v["status"] not in ("DRAFT", "VALIDATED"):
+            if v["status"] not in ("DRAFT", "VALIDATED", "INVALID"):
                 raise ProgramRefused(f"{program_id} v{version} is {v['status']}")
             doc = {"utc": _now(), "actor": actor, "issues": issues, "context": context, "digest": v["digest"]}
-            status = "VALIDATED" if not issues else "DRAFT"
+            status = "VALIDATED" if not issues else ("DRAFT" if v["status"] == "DRAFT" else "INVALID")
             self.h.submit(lambda c: c.execute("UPDATE programs SET status=?, validation_json=?, updated_utc=? WHERE "
                                               "program_id=? AND version=?",
                                               (status, json.dumps(doc), _now(), program_id, version)), wait=True)
             self.h.event("PROGRAM_VALIDATED" if not issues else "PROGRAM_VALIDATION_FAILED",
                          {"program": f"{program_id}@{version}", "issues": issues}, actor=actor)
+            if status == "INVALID":
+                self._deactivate_everywhere(actor, program_id, version, "no longer validates: " + "; ".join(issues[:3]))
             return self.get(program_id, version)
+
+    def _deactivate_everywhere(self, actor: str, program_id: str, version: int, why: str) -> None:
+        rows = self.h.query("SELECT a.runtime_id, a.version, a.action FROM program_activations a JOIN "
+                            "(SELECT runtime_id, max(seq) AS seq FROM program_activations WHERE program_id=? "
+                            "GROUP BY runtime_id) m ON a.seq=m.seq", (program_id,))
+        for r in rows:
+            if r["action"] == "ACTIVATED" and r["version"] == version:
+                row = (r["runtime_id"], program_id, version, "DEACTIVATED", actor, _now(), json.dumps({"why": why}))
+                self.h.submit(lambda c, row=row: c.execute(
+                    "INSERT INTO program_activations(runtime_id, program_id, version, action, actor, utc, json) "
+                    "VALUES(?,?,?,?,?,?,?)", row), wait=True)
+                self.h.event("PROGRAM_DEACTIVATED", {"program": program_id, "runtime": r["runtime_id"], "why": why},
+                             actor=actor)
 
     def record_simulation(self, program_id: str, version: int, evidence: dict) -> dict:
         v = self.get(program_id, version)
@@ -212,8 +238,12 @@ class ProgramStore:
                             "GROUP BY program_id) m ON a.seq=m.seq", (runtime_id,))
         out = {}
         for r in rows:
-            if r["action"] == "ACTIVATED":
-                out[r["program_id"]] = (r["version"], parse(self.get(r["program_id"], r["version"])["body"]))
+            if r["action"] != "ACTIVATED":
+                continue
+            v = self.get(r["program_id"], r["version"])
+            if v["status"] != "VALIDATED":           # only an immutable, validated body ever runs
+                continue
+            out[r["program_id"]] = (r["version"], parse(v["body"]))
         return out
 
     def activate(self, actor: str, runtime_id: str, program_id: str, version: int, *, require_simulation: bool,

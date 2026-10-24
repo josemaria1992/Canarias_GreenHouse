@@ -42,6 +42,13 @@ class LiveEngineHost:
 
             def command(self, point, desired, *, actor, reason, priority):
                 lease = host.svc.gate.active()
+                bus = host.svc.cfg.device(point.split(".", 1)[0]).bus_id
+                if lease is None and not desired:
+                    # the lease has ended but an operation still owes an OFF: it goes out as a safe-state command
+                    # (OFF only, digital outputs only, audited), so a retry reaches the wire once the bus recovers
+                    cmd = host.svc.safe_commands.build(actor=actor, target=point, desired=False,
+                                                       origin=CommandOrigin.SAFE_STATE, reason=f"{reason} (lease ended)")
+                    return host.svc.workers[bus].submit(cmd, lambda: host.svc.safe_commands.submit(cmd)).result(timeout=40)
                 cmd = host.svc.commands.build(actor=actor, target=point, desired=desired,
                                               origin=CommandOrigin.PROGRAM_BENCH, reason=reason, priority=priority,
                                               lease_id=lease.lease_id if lease else None)
@@ -50,7 +57,6 @@ class LiveEngineHost:
                     rec.advance(Outcome.REJECTED, "no armed bench test session")
                     host.svc.commands._audit_rejected(rec)
                     return rec
-                bus = host.svc.cfg.device(point.split(".", 1)[0]).bus_id
                 return host.svc.workers[bus].submit(cmd, lambda: host.svc.commands.submit(cmd)).result(timeout=40)
 
             def module_online(self, uid):

@@ -232,6 +232,10 @@ def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int]
         for need, what in ((_runtime(p), "the program's runtime"),):
             if cap is not None and need is not None and need > cap:
                 out.append(f"{it['name']}: {what} {need:g} s is above the type's maximum {cap:g} s")
+    a = p.action
+    meters = ({(a.meter, a.meter_role)} if a.type == "DELIVER_VOLUME" else
+              {(s.meter, s.meter_role) for s in a.steps if s.do == "DELIVER"} if a.type == "SEQUENCE" else set())
+    analog_sensors = {(a.sensor, a.sensor_role)} if a.type == "KEEP_BETWEEN" else set()
     for iid, role in sensors(p):
         it, tb = item(iid)
         if it is None:
@@ -242,6 +246,14 @@ def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int]
             continue
         if r.direction.value != "INPUT":
             out.append(f"{it['name']} {r.label} is not an input")
+        if (iid, role) in meters:                    # a volume integrates litres per minute: nothing else will do
+            sc = ItemBody.model_validate(it["body"]).scaling.get(role)
+            unit = (sc.unit if sc else r.unit) or ""
+            if r.purpose != Purpose.MEASUREMENT or unit.replace(" ", "").lower() != "l/min":
+                out.append(f"{it['name']} {r.label} is not a flow-rate measurement in L/min "
+                           f"({unit or 'no unit'}): it cannot measure a volume")
+        elif (iid, role) in analog_sensors and r.purpose != Purpose.MEASUREMENT:
+            out.append(f"{it['name']} {r.label} is not an analog measurement")
         if physical:
             b = bindings.get(iid, {}).get(role)
             if not b or b["status"] != "VERIFIED":

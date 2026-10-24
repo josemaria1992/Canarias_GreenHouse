@@ -330,3 +330,140 @@ def test_not_modelled_equipment_has_no_value():
     assert s.value is None and "no simulated behaviour" in s.reason
     r.run(0.5)
     assert r.e.item_state("x")["feedback"] == "UNKNOWN"
+
+
+# ---- review findings (2026-10-24)
+
+def test_a_binding_changed_while_running_still_switches_the_original_output_off():
+    r = Rig({"led1": lamp()}, {"p": (1, prog({"type": "MANUAL"}, {"type": "RUN_FOR", "item": "led1", "duration_s": 60}))})
+    r.e.approve_recovery("vicente", "MANUAL")
+    op = r.e.run_now("bench", "p")
+    r.run(2)
+    assert r.twin.s.coils["digital_A.DO1"]
+    r._items = {"led1": lamp(do="digital_A.DO5")}            # the binding is replaced while it runs
+    r.run(1)
+    r.e.stop_op("vicente", op["op_id"])
+    r.run(2)
+    assert not r.twin.s.coils["digital_A.DO1"] and not r.e.ops
+    r2 = Rig({"led1": lamp()}, {"p": (1, prog({"type": "MANUAL"}, {"type": "RUN_FOR", "item": "led1", "duration_s": 60}))})
+    r2.e.approve_recovery("vicente", "MANUAL")
+    op = r2.e.run_now("bench", "p")
+    r2.run(2)
+    r2._items = {}
+    r2.e.stop_op("vicente", op["op_id"])
+    r2.run(2)
+    assert not r2.twin.s.coils["digital_A.DO1"] and r2.e.finished[-1]["result"] == "STOPPED_BY_USER"
+
+
+def test_a_failed_sequence_off_keeps_the_item_in_the_stop_path():
+    items = {"pump": view("pump", "pump", {"start": "digital_A.DO2", "running": "digital_A.DI2"})}
+    steps = [{"do": "ON", "item": "pump", "verify_role": "running", "timeout_s": 5},
+             {"do": "WAIT", "seconds": 2},
+             {"do": "OFF", "item": "pump", "verify_role": "running", "timeout_s": 3}]
+    r = Rig(items, {"p": (1, prog({"type": "MANUAL"}, {"type": "SEQUENCE", "steps": steps, "max_runtime_s": 300}))})
+    r.e.approve_recovery("vicente", "MANUAL")
+    r.e.run_now("bench", "p")
+    r.run(3)
+    r.twin.set_fault("pump", "STUCK_ON")
+    r.run(20)
+    assert r.e.ops and next(iter(r.e.ops.values())).state == "STOP_UNVERIFIED"
+    assert r.e.arbiter.owner.get("pump")                      # still owned: nothing else may take it
+    r.twin.set_fault("pump", None)
+    r.run(15)
+    assert not r.e.ops and not r.twin.s.coils["digital_A.DO2"] and r.e.finished[-1]["result"] == "FAILED"
+
+
+def test_a_gap_between_flow_readings_is_uncertain_not_delivered():
+    items = {"pump": view("pump", "pump", {"start": "digital_A.DO2"}, {"sim_links": {"flow_item": "fm"}}),
+             "fm": view("fm", "flow", {"flow": "analog_A.AI1"}, {"scaling": FLOW_SCALING})}
+    p = prog({"type": "MANUAL"}, {"type": "DELIVER_VOLUME", "item": "pump", "meter": "fm", "target_L": 50,
+                                   "max_runtime_s": 600})
+    r = Rig(items, {"p": (1, p)})
+    r.e.approve_recovery("vicente", "MANUAL")
+    r.e.run_now("bench", "p")
+    r.run(4)
+    r.run(40, dt=20)                                          # readings 20 s apart, each one fresh
+    f = r.e.finished[-1]
+    assert f["result"] == "FAILED" and f["uncertain_L"] > 0 and "between flow readings" in f["reason"]
+
+
+def test_equipment_limits_are_enforced_across_runs():
+    lim = {"max_runtime_s": 600, "min_off_s": 30, "max_starts_per_hour": 2}
+    r = Rig({"led1": view("led1", "test_lamp", {"on": "digital_A.DO1"}, limits=lim)},
+            {"p": (1, prog({"type": "MANUAL"}, {"type": "RUN_FOR", "item": "led1", "duration_s": 2}))})
+    r.e.approve_recovery("vicente", "MANUAL")
+    r.e.run_now("bench", "p")
+    r.run(4)
+    with pytest.raises(Refused, match="must stay OFF"):
+        r.e.run_now("bench", "p")
+    r.run(31)
+    r.e.run_now("bench", "p")
+    r.run(35)
+    with pytest.raises(Refused, match="started 2 times this hour"):
+        r.e.run_now("bench", "p")
+    items = {"pump": view("pump", "pump", {"start": "digital_A.DO2"}, {"sim_links": {"flow_item": "fm"}},
+                          limits={"max_runtime_s": 600, "max_volume_L": 3}),
+             "fm": view("fm", "flow", {"flow": "analog_A.AI1"}, {"scaling": FLOW_SCALING})}
+    r = Rig(items, {"p": (1, prog({"type": "MANUAL"}, {"type": "DELIVER_VOLUME", "item": "pump", "meter": "fm",
+                                                         "target_L": 5, "max_runtime_s": 120}))})
+    r.e.approve_recovery("vicente", "MANUAL")
+    with pytest.raises(Refused, match="maximum volume 3 L"):
+        r.e.run_now("bench", "p")
+
+
+def test_keep_between_stops_when_its_window_closes():
+    items = {"pump": view("pump", "pump", {"start": "digital_A.DO2"}),
+             "lv": view("lv", "level", {"level": "analog_A.AI2"}, {"scaling": LEVEL_SCALING})}
+    p = prog({"type": "CONTINUOUS", "entries": [{"days": ["MON"], "start": "05:01", "end": "05:03"}]},
+             {"type": "KEEP_BETWEEN", "item": "pump", "sensor": "lv", "sensor_role": "level", "direction": "RAISE",
+              "low": 100, "high": 200, "debounce_s": 2, "max_run_s": 1800, "min_off_s": 5})
+    r = Rig(items, {"p": (1, p)})
+    r.twin.set_input("analog_A.AI2", 50)
+    r.run(0.5)
+    r.e.approve_recovery("vicente", "AUTO")
+    r.run(70)
+    assert r.e.ops
+    r.run(120)
+    assert not r.e.ops and r.e.finished[-1]["reason"] == "window ended"
+
+
+def test_a_voltage_sensor_reads_in_millivolts_and_is_usable():
+    volt = {"level": {"raw_min": 0, "raw_max": 5, "raw_unit": "V", "eng_min": 0, "eng_max": 500, "unit": "cm",
+                      "provenance": "DEMO"}}
+    r = Rig({"lv": view("lv", "level", {"level": "analog_A.AI2"}, {"scaling": volt})}, {})
+    r.twin.set_input("analog_A.AI2", 250)
+    r.run(0.5)
+    assert r.twin.samples()["analog_A.AI2"].raw_unit == "mV"
+    assert abs(r.e._analog(r.e.items()["lv"], "level") - 250) < 1
+
+
+def test_after_the_lease_ends_a_program_off_goes_out_as_a_safe_state_command():
+    from concurrent.futures import Future
+    from types import SimpleNamespace as NS
+
+    from aquacrop.domain.model import Priority
+    from aquacrop.programs.live import LiveEngineHost
+    sent = []
+
+    def submit(cmd, fn):
+        f = Future()
+        f.set_result(fn())
+        return f
+
+    class Cmds:
+        def __init__(self, name):
+            self.name = name
+
+        def build(self, **kw):
+            return NS(**kw)
+
+        def submit(self, cmd):
+            sent.append((self.name, cmd.origin, cmd.desired))
+            return NS(outcome=None)
+    svc = NS(gate=NS(active=lambda: None, program_guard=None, on_end=None),
+             cfg=NS(device=lambda uid: NS(bus_id="rs485_a"), site=NS(timezone="Europe/Stockholm")),
+             commands=Cmds("bench"), safe_commands=Cmds("safe"), workers={"rs485_a": NS(submit=submit)},
+             samples={})
+    host = LiveEngineHost(svc, NS(event=lambda *a, **k: None), None, NS(active=lambda rt: {}), "s1")
+    host.engine.io.command("digital_A.DO1", False, actor="program", reason="stop", priority=Priority.STOP)
+    assert sent == [("safe", CommandOrigin.SAFE_STATE, False)]

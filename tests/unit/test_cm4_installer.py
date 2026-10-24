@@ -131,3 +131,26 @@ def test_the_installer_never_formats_partitions_or_touches_boot_config():
     for word in ("mkfs", "parted", "fdisk", "wipefs", "sfdisk", "dd if=", "config.txt\"", "/boot/firmware"):
         assert word not in src, word
     assert "HYDRO_BENCH_WRITES" not in src and "bench" not in src.lower().replace("no bench", "")
+
+
+def test_upgrade_and_rollback_move_an_installed_twin_with_the_live_service(cm4, tmp_path, capsys):
+    stage = tmp_path / "root"
+    r1, r2 = release(tmp_path, "9.9.0"), release(tmp_path, "9.9.1")
+    for r, v in ((r1, "9.9.0"), (r2, "9.9.1")):
+        twin = r / "deploy" / "aquacrop-twin.service"
+        twin.write_bytes(twin.read_bytes() + f"# release {v}\n".encode())
+        (r / "MANIFEST.sha256").write_text("".join(
+            f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(r).as_posix()}\n"
+            for p in sorted(p for p in r.rglob("*") if p.is_file() and p.name != "MANIFEST.sha256")))
+    args = ["--root", str(stage), "--allow-arch"]
+    assert cm4.main(args + ["install", "--release", str(r1)]) == 0
+    units = stage / "etc" / "systemd" / "system"
+    shutil.copy2(r1 / "deploy" / "aquacrop-twin.service", units / "aquacrop-twin.service")   # `twin` was run
+    capsys.readouterr()
+    assert cm4.main(args + ["upgrade", "--release", str(r2)]) == 0
+    assert (units / "aquacrop-twin.service").read_text().endswith("# release 9.9.1\n")
+    out = capsys.readouterr().out
+    assert out.index("systemctl stop aquacrop-twin.service") < out.index("systemctl stop aquacrop-greenhouse.service")
+    assert "systemctl start aquacrop-twin.service" in out
+    assert cm4.main(["--root", str(stage), "rollback"]) == 0
+    assert (units / "aquacrop-twin.service").read_text().endswith("# release 9.9.0\n")

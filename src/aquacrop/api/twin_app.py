@@ -24,6 +24,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from fastapi.exceptions import RequestValidationError
+
 from .. import __version__, layout
 from ..domain.model import new_id
 from ..historian.writer import Historian
@@ -33,6 +35,7 @@ from ..programs.store import ProgramRefused
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret
 from ..twin import feed
 from ..twin.equipment_service import EquipmentTwinService, twin_config
+from .app import safe_validation_response
 
 COOKIE = "aquacrop_twin_session"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
@@ -41,7 +44,7 @@ USER_SYNC_S = 30.0
 
 
 class _B(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class LoginIn(_B):
@@ -159,6 +162,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                   openapi_url=None)
     app.state.hist, app.state.svc, app.state.accounts, app.state.cfg = hist, svc, accounts, cfg
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=sec.allowed_hosts)
+    app.add_exception_handler(RequestValidationError, lambda request, exc: safe_validation_response(exc))
 
     def origin_ok(request: Request) -> bool:
         o = request.headers.get("origin")
@@ -287,6 +291,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.get("/api/health")
     def health():
+        if svc.loop_error:
+            return JSONResponse({"ok": False, "runtime": "TWIN", "error": "simulation loop failed; it is paused"},
+                                status_code=503)
         return {"ok": True, "runtime": "TWIN"}
 
     # ------------------------------------------------------------------ the twin
@@ -345,7 +352,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/input")
     def set_input(body: InputIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
-        svc.twin.set_input(body.point, body.value)
+        refused(svc.twin.set_input, body.point, body.value)
         hist.event("TWIN_INPUT", {"point": body.point, "value": body.value}, actor=p.username)
         return {"ok": True}
 

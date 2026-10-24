@@ -202,3 +202,22 @@ def test_analog_module_needs_its_variant_and_range(rig):
     wz.identify("bench1", tx, name="analog_C", sku="25821", label="analog_C", ai_variant="A", ai_range="4-20mA")
     wz.reserve("bench1", tx, 7)
     assert wz.commit("bench1", tx, confirm=True)["state"] == "PREPARED" and m.modes == [3] * 8 and m.address == 7
+
+
+def test_a_mode_only_change_at_an_unchanged_address_can_be_rechecked(rig):
+    wz, usb, inst, port, _, _, _ = rig
+    new = usb.add("digital_io", 7)
+    new.modes[4] = 2
+    tx = prepare(wz, port, address=7)
+    orig = usb.respond
+
+    def lossy(frame):          # the module applies the mode change, then stops answering
+        out = orig(frame)
+        if frame[1] == 0x06 and frame[2:4] == b"\x10\x04":
+            new.fault = "timeout"
+        return out
+    usb.respond = lossy
+    v = wz.commit("bench1", tx, confirm=True)
+    assert v["state"] == "UNCERTAIN"
+    new.fault = None
+    assert wz.recheck("bench1", tx)["state"] == "PREPARED"

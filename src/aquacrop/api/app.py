@@ -21,7 +21,6 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -250,6 +249,13 @@ class QuarantineReviewIn(Body):
     reason: str = Field(min_length=3, max_length=500)
 
 
+def safe_validation_response(exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's 422 echoes the rejected input, which cannot be encoded when it is NaN or infinite (the server would
+    fail instead of refusing): answer with where and why only."""
+    return JSONResponse({"detail": [{k: e[k] for k in ("type", "loc", "msg") if k in e} for e in exc.errors()]},
+                        status_code=422)
+
+
 def _escape_csv(v):
     """Prevent spreadsheet formula injection in textual fields."""
     if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
@@ -382,7 +388,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         if request.url.path == "/api/recipes/draft":
             from ..control.recipes import field_errors
             return JSONResponse({"detail": _draft_problems(field_errors(exc.errors()))}, status_code=422)
-        return await request_validation_exception_handler(request, exc)
+        return safe_validation_response(exc)
 
     def _draft_problems(fields: list[dict]) -> dict:
         return {"message": f"{len(fields)} setting(s) need changing; each is shown beside its field", "fields": fields}
@@ -1528,6 +1534,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             d["users"] = accounts.list_users()
         return d
 
+    users_lock = threading.Lock()                # handlers run in a thread pool; one process owns the accounts
+
     @app.post("/api/users")
     def create_user(body: UserIn, p: Principal = Depends(require(Perm.USER_ADMIN))):
         try:
@@ -1545,17 +1553,18 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def update_user(username: str, body: UserUpdateIn, p: Principal = Depends(require(Perm.USER_ADMIN))):
         if username == p.username and (body.disabled or (body.role and body.role != Role.ADMIN)):
             raise HTTPException(409, "cannot demote or disable yourself")
-        cur = [u for u in accounts.list_users() if u["username"] == username]
-        if not cur:
-            raise HTTPException(404, "unknown user")
-        if cur[0]["role"] == "admin" and (body.disabled or (body.role and body.role != Role.ADMIN)) \
-                and not _enabled_admins(exclude=username):
-            raise HTTPException(409, "the last administrator cannot be demoted or disabled")
-        if body.role is not None or body.commissioning is not None:
-            accounts.set_role(username, body.role or Role(cur[0]["role"]),
-                              cur[0]["commissioning"] if body.commissioning is None else body.commissioning)
-        if body.disabled is not None:
-            accounts.set_disabled(username, body.disabled)
+        with users_lock:                         # the last-administrator check and the change are one step
+            cur = [u for u in accounts.list_users() if u["username"] == username]
+            if not cur:
+                raise HTTPException(404, "unknown user")
+            if cur[0]["role"] == "admin" and (body.disabled or (body.role and body.role != Role.ADMIN)) \
+                    and not _enabled_admins(exclude=username):
+                raise HTTPException(409, "the last administrator cannot be demoted or disabled")
+            if body.role is not None or body.commissioning is not None:
+                accounts.set_role(username, body.role or Role(cur[0]["role"]),
+                                  cur[0]["commissioning"] if body.commissioning is None else body.commissioning)
+            if body.disabled is not None:
+                accounts.set_disabled(username, body.disabled)
         if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username and \
                 (body.disabled or body.commissioning is False or body.role is not None):
             svc.revoke(f"user changed by {p.username}", p.username)
@@ -1589,16 +1598,17 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.delete("/api/users/{username}")
     def delete_user(username: str, p: Principal = Depends(require(Perm.USER_ADMIN))):
-        cur = [u for u in accounts.list_users() if u["username"] == username]
-        if not cur:
-            raise HTTPException(404, "unknown user")
-        if username == p.username:
-            raise HTTPException(409, "you cannot delete yourself")
-        if cur[0]["role"] == "admin" and not _enabled_admins(exclude=username):
-            raise HTTPException(409, "the last administrator cannot be deleted")
-        if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
-            svc.revoke(f"user deleted by {p.username}", p.username)
-        accounts.delete_user(username)
+        with users_lock:
+            cur = [u for u in accounts.list_users() if u["username"] == username]
+            if not cur:
+                raise HTTPException(404, "unknown user")
+            if username == p.username:
+                raise HTTPException(409, "you cannot delete yourself")
+            if cur[0]["role"] == "admin" and not _enabled_admins(exclude=username):
+                raise HTTPException(409, "the last administrator cannot be deleted")
+            if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
+                svc.revoke(f"user deleted by {p.username}", p.username)
+            accounts.delete_user(username)
         hist.event("USER_DELETED", {"username": username}, actor=p.username)
         return {"ok": True}
 

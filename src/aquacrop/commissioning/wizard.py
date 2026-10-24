@@ -396,12 +396,14 @@ class Wizard:
                 after = hw.identify(bus, plan["new_address"]) if at_new is not None else None
             finally:
                 bus.close()
-            if at_new == plan["new_address"] and at_old is None:
+            same = plan["current_address"] == plan["new_address"]    # a mode-only change: both reads hit one module
+            if at_new == plan["new_address"] and (at_old is None or same):
                 modes_ok = after and after.get("modes") is not None and all(
                     after["modes"][r - hw.MODE_REGISTER_START] == v for r, v in plan["mode_writes"])
                 if modes_ok:
                     t["doc"]["result"] = (t["doc"].get("result") or {}) | {"after": after, "rechecked": True}
-                    return self._save(t, "PREPARED", actor, "RECHECKED", found="new address only")
+                    return self._save(t, "PREPARED", actor, "RECHECKED",
+                                      found="planned modes at its address" if same else "new address only")
                 return self._save(t, "UNCERTAIN", actor, "RECHECKED", found="new address, modes not as planned")
             if at_old is not None and at_new is None and plan["current_address"] != plan["new_address"]:
                 return self._release_and(t, "FAILED", actor, "RECHECKED", found="old address only: nothing applied")

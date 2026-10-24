@@ -94,7 +94,9 @@ class Op:
     state: str = "RUNNING"                 # RUNNING | STOPPING | DONE | FAILED | STOP_UNVERIFIED
     step: int = 0
     step_since: float = 0.0
-    on: list[str] = field(default_factory=list)      # item ids switched ON, in order
+    on: list[str] = field(default_factory=list)      # item ids switched ON, in order, until verified OFF
+    held: dict[str, ItemView] = field(default_factory=dict)   # item -> its channels when it was switched ON
+    off_sent: set[str] = field(default_factory=set)  # sequence OFF sent, not yet verified (still in `on`)
     measured_L: float = 0.0
     uncertain_L: float = 0.0
     requested_L: float | None = None
@@ -142,6 +144,7 @@ class Engine:
         self.auto_since_utc: datetime | None = None
         self._cond: dict[str, dict] = {}         # program -> condition state (since, armed, last_end)
         self._keep: dict[str, dict] = {}
+        self._usage: dict[str, dict] = {}        # item -> {"off": mono of its last verified OFF, "starts": [mono]}
         self._lock = threading.RLock()
         self._items: dict[str, ItemView] = {}
         self.last_tick_utc: datetime | None = None
@@ -561,8 +564,12 @@ class Engine:
 
     def _keep_between(self, pid, ver, body, now_utc) -> None:
         a, t = body.action, body.trigger
-        if t.entries and not sc.due(f"{pid}@{ver}", [e.model_dump() for e in t.entries], self.tz, now_utc):
-            return
+        window_end = None
+        if t.entries:
+            open_ = sc.due(f"{pid}@{ver}", [e.model_dump() for e in t.entries], self.tz, now_utc)
+            if not open_:
+                return
+            window_end = max(w.end_utc for w in open_)
         st = self._keep.setdefault(pid, {"since": None, "last_end": None, "n": 0})
         running = next((o for o in self.ops.values() if o.program_id == pid), None)
         if running:
@@ -579,12 +586,14 @@ class Engine:
             return
         if st["last_end"] is not None and mono - st["last_end"] < a.min_off_s:
             return
+        if a.item in self._items and self._limit_refusal(body, [a.item]) is not None:
+            return                                   # the equipment's own limits hold it off: asked again later
         st["since"] = st["since"] or mono
         if mono - st["since"] >= a.debounce_s:
             st["n"] += 1
             st["since"] = None
             key = f"{pid}@{ver}:keep:{now_utc.strftime('%Y%m%dT%H%M%S')}"
-            self._request(pid, ver, body, key, now_utc, None)
+            self._request(pid, ver, body, key, now_utc, window_end)
 
     # ------------------------------------------------------------------ operations
     def _start(self, pid, ver, body: ProgramBody, *, origin, actor, key, window_end, duration_s=None,
@@ -603,6 +612,10 @@ class Engine:
                 if key:
                     self.store.occurrence_update(key, "FAILED", outcome=why)
                 raise Refused(why)
+        if (why := self._limit_refusal(body, need)) is not None:
+            if key:
+                self.store.occurrence_update(key, "FAILED", outcome=why)
+            raise Refused(why)
         busy = self.arbiter.acquire(f"op:{pid}", need)
         if busy:
             if key:
@@ -636,8 +649,42 @@ class Engine:
                 return op
         return op
 
+    @staticmethod
+    def _volume_cap(views) -> float | None:
+        caps = [v.type.limits.max_volume_L for v in views if v.type.limits.max_volume_L]
+        return min(caps) if caps else None
+
+    def _limit_refusal(self, body: ProgramBody, need) -> str | None:
+        """The equipment type's limits, per item and across every operation and manual run of this runtime."""
+        mono = self.clock.mono()
+        for iid in need:
+            lim = self._items[iid].type.limits
+            use = self._usage.get(iid, {})
+            if lim.min_off_s and use.get("off") is not None and mono - use["off"] < lim.min_off_s:
+                return (f"{self._items[iid].name} must stay OFF for {lim.min_off_s:g} s between runs "
+                        f"({mono - use['off']:.0f} s so far)")
+            if lim.max_starts_per_hour:
+                recent = [t for t in use.get("starts", []) if mono - t < 3600]
+                if len(recent) >= lim.max_starts_per_hour:
+                    return f"{self._items[iid].name} has started {len(recent)} times this hour (limit {lim.max_starts_per_hour})"
+        cap = self._volume_cap(self._items[i] for i in need)
+        a = body.action
+        asked = (a.target_L if a.type == "DELIVER_VOLUME" else
+                 sum(s.target_L for s in a.steps if s.do == "DELIVER") if a.type == "SEQUENCE" else 0.0)
+        if cap is not None and asked > cap:
+            return f"{asked:g} L is above the equipment's maximum volume {cap:g} L"
+        return None
+
+    def _held(self, op: Op, iid: str) -> ItemView | None:
+        """The channels an item had when this operation switched it ON: a binding changed or cleared while it runs
+        must not redirect or drop the OFF that the original output still needs."""
+        return op.held.get(iid) or self._items.get(iid)
+
     def _switch_on(self, op: Op, iid: str) -> bool:
         it = self._items[iid]
+        op.held[iid] = it
+        use = self._usage.setdefault(iid, {"off": None, "starts": []})
+        use["starts"] = [t for t in use["starts"] if self.clock.mono() - t < 3600] + [self.clock.mono()]
         rec = self.io.command(it.command_point, True, actor=op.actor if op.origin == "MANUAL" else "program",
                               reason=f"program {op.program_id}@{op.version} op {op.op_id}", priority=Priority.NORMAL)
         if rec.outcome in OK:
@@ -659,7 +706,7 @@ class Engine:
         op.stopping_items = list(reversed(op.on))
         self.event("PROGRAM_OP_STOPPING", {"op_id": op.op_id, "why": why, "result": result}, "system")
         for iid in op.stopping_items:
-            it = self._items.get(iid)
+            it = self._held(op, iid)
             if it and it.command_point:
                 self.io.command(it.command_point, False, actor="program", reason=f"stop {op.op_id}: {why}",
                                 priority=Priority.STOP)
@@ -668,8 +715,9 @@ class Engine:
     def _advance_stop(self, op: Op) -> None:
         pending = []
         for iid in op.stopping_items:
-            it = self._items.get(iid)
+            it = self._held(op, iid)
             if it is None or it.command_point is None:
+                pending.append((iid, None, None))    # nothing to read it by: never assumed OFF
                 continue
             coil = self._digital(it.command_point)
             fb = it.feedback_role
@@ -683,17 +731,21 @@ class Engine:
         if now - op.stop_since > STOP_VERIFY_S:
             if op.state != "STOP_UNVERIFIED":
                 op.state = "STOP_UNVERIFIED"
-                detail = [f"{self._items[i].name}: output {'UNKNOWN' if c is None else 'ON' if c else 'OFF'}, "
+                detail = [f"{getattr(self._held(op, i), 'name', i)}: output {'UNKNOWN' if c is None else 'ON' if c else 'OFF'}, "
                           f"feedback {'UNKNOWN' if f is None else 'ON' if f else 'OFF'}" for i, c, f in pending]
                 self.alarm("PROGRAM_STOP_UNVERIFIED", op.program_id, True, {"op_id": op.op_id, "items": detail})
                 self.event("PROGRAM_STOP_UNVERIFIED", {"op_id": op.op_id, "items": detail}, "system")
             if now - (op.last_off_retry or op.stop_since) >= STOP_VERIFY_S:
                 op.last_off_retry = now
                 for iid, *_ in pending:              # OFF again while the stop is unverified; never an ON
-                    self.io.command(self._items[iid].command_point, False, actor="program",
-                                    reason=f"stop {op.op_id}: not verified, OFF again", priority=Priority.STOP)
+                    it = self._held(op, iid)
+                    if it and it.command_point:
+                        self.io.command(it.command_point, False, actor="program",
+                                        reason=f"stop {op.op_id}: not verified, OFF again", priority=Priority.STOP)
 
     def _end(self, op: Op) -> None:
+        for iid in op.held:                          # verified OFF now: the min-off clock starts
+            self._usage.setdefault(iid, {"off": None, "starts": []})["off"] = self.clock.mono()
         self.arbiter.release(op.op_id)
         self.ops.pop(op.op_id, None)
         if op.state == "STOP_UNVERIFIED":
@@ -723,11 +775,11 @@ class Engine:
                 self._begin_stop(op, "maximum runtime reached", result="RUNTIME_GUARD")
             return
         a = op.body.action
-        if op.window_end_utc is not None and a.type == "RUN_FOR" and self.clock.utc() >= op.window_end_utc:
+        if op.window_end_utc is not None and a.type in ("RUN_FOR", "KEEP_BETWEEN") and self.clock.utc() >= op.window_end_utc:
             self._begin_stop(op, "window ended", result="DONE")
             return
         for iid in list(op.on):                      # running equipment must keep reporting ON where it can
-            if not self._feedback_ok(op, iid):
+            if iid not in op.off_sent and not self._feedback_ok(op, iid):
                 return
         if a.type == "DELIVER_VOLUME":
             self._deliver(op, a.meter, a.meter_role, a.target_L, a.no_flow_timeout_s, a.min_flow_L_min,
@@ -743,7 +795,7 @@ class Engine:
             self._sequence(op)
 
     def _feedback_ok(self, op: Op, iid: str) -> bool:
-        it = self._items[iid]
+        it = self._held(op, iid)
         fb = it.feedback_role
         if fb is None:
             return True
@@ -777,7 +829,12 @@ class Engine:
         t = s.acquired_utc
         if op.last_rate is not None and t > op.last_rate[0]:
             dt = (t - op.last_rate[0]).total_seconds()
-            op.measured_L += max(0.0, (op.last_rate[1] + rate) / 2.0) * dt / 60.0
+            litres = max(0.0, (op.last_rate[1] + rate) / 2.0) * dt / 60.0
+            if dt > it.body.stale_after_s:           # readings missed in between: that volume was not measured
+                op.uncertain_L += litres
+                self._fail(op, f"{meter}: {dt:.0f} s between flow readings; {op.uncertain_L:.2f} L not measured")
+                return False
+            op.measured_L += litres
         if op.last_rate is None or t > op.last_rate[0]:
             op.last_rate = (t, rate)
         if rate >= min_flow:
@@ -787,6 +844,11 @@ class Engine:
             return False
         if op.measured_L - op.step_base_L >= target:
             finish()
+            return False
+        cap = self._volume_cap(op.held.values())
+        if cap is not None and op.measured_L >= cap:
+            self.alarm("PROGRAM_RUNTIME_GUARD", op.program_id, True, {"op_id": op.op_id})
+            self._begin_stop(op, f"equipment maximum volume {cap:g} L reached", result="RUNTIME_GUARD")
             return False
         return True
 
@@ -808,19 +870,23 @@ class Engine:
                                            f"within {s.timeout_s:g} s ({'UNKNOWN' if v is None else 'OFF'})")
                         return
             elif s.do == "OFF":
-                if s.item in op.on:
-                    it = self._items[s.item]
+                it = self._held(op, s.item)
+                if s.item in op.on and s.item not in op.off_sent:
                     self.io.command(it.command_point, False, actor="program", reason=f"sequence {op.op_id}",
                                     priority=Priority.STOP)
-                    op.on.remove(s.item)
+                    op.off_sent.add(s.item)        # stays in `on` (the stop path's duty) until verified OFF
                     op.step_since = mono
-                it = self._items[s.item]
-                coil = self._digital(it.command_point)
-                fbv = self._role_value(it, s.verify_role) if s.verify_role else False
+                coil = self._digital(it.command_point) if it else None
+                fbv = self._role_value(it, s.verify_role) if (it and s.verify_role) else False
                 if coil is not False or fbv is not False:
                     if mono - op.step_since > s.timeout_s:
-                        self._fail(op, f"step {op.step + 1}: {it.name} not verified OFF")
+                        self._fail(op, f"step {op.step + 1}: {getattr(it, 'name', s.item)} not verified OFF")
                     return
+                if s.item in op.on:
+                    op.on.remove(s.item)
+                op.off_sent.discard(s.item)
+                if op.held.pop(s.item, None) is not None:
+                    self._usage.setdefault(s.item, {"off": None, "starts": []})["off"] = mono
             elif s.do in ("WAIT", "RUN"):
                 if mono - op.step_since < s.seconds:
                     return

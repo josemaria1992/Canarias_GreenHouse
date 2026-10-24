@@ -17,6 +17,7 @@ process has no serial port and no route to the live command service.
 """
 from __future__ import annotations
 
+import math
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -111,6 +112,18 @@ class EquipmentTwin:
 
     # ------------------------------------------------------------------ user inputs and faults
     def set_input(self, point: str, value) -> None:
+        """A user-set input: a digital input takes true/false, an analog input a finite number; nothing else."""
+        try:
+            pid = PointId.parse(point)
+            self.cfg.device(pid.device_uid)
+        except (ValueError, KeyError) as e:
+            raise ValueError(f"{point} is not a channel of this installation") from e
+        if pid.kind == PointKind.DI and not (value is None or isinstance(value, bool)):
+            raise ValueError("a digital input is true or false")
+        if pid.kind == PointKind.AI and value is not None and (isinstance(value, bool) or not math.isfinite(value)):
+            raise ValueError("an analog input is a finite number")
+        if pid.kind not in (PointKind.DI, PointKind.AI):
+            raise ValueError("only inputs can be set by hand; outputs follow commands")
         with self.lock:
             self.s.manual[point] = value
 
@@ -199,6 +212,9 @@ class EquipmentTwin:
                         values[p] = None
             self.s.seq += 1
             now = self.clock.utc()
+            # the module reports µA in a current mode and mV in a voltage mode: follow the channel's scaling
+            units = {it.points[role]: ("mV" if sc.raw_unit == "V" else "uA")
+                     for it in items.values() for role, sc in it.body.scaling.items() if role in it.points}
             out = {}
             for d in self.cfg.devices:
                 offline = self.s.faults.get(d.device_uid) == "MODULE_OFFLINE"
@@ -216,7 +232,9 @@ class EquipmentTwin:
                             raw = values.get(pid)
                             if raw is None and pid not in values:
                                 raw = self.s.manual.get(pid)
-                            out[pid] = self._sample(pid, now, None if raw is None else round(raw), "uA",
+                            if raw is not None and not math.isfinite(raw):
+                                raw = None                    # never a NaN or infinite reading
+                            out[pid] = self._sample(pid, now, None if raw is None else round(raw), units.get(pid, "uA"),
                                                     None, offline or raw is None)
             self._samples = out
 

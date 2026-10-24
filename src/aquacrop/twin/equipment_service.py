@@ -47,6 +47,7 @@ def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[s
     d["buses"] = [{"bus_id": b["bus_id"], "kind": "virtual", "poll_interval_s": b.get("poll_interval_s", 1.0)}
                   for b in live["buses"]]
     d["safe_state"] = {"outputs_off_on": []}
+    d.pop("bench_tests", None)                    # physical bench tests are for the real installation only
     d["physical_mapping"] = []
     d["drive_adapters"] = [a for a in live.get("drive_adapters", []) if a.get("kind") == "NOT_CONFIGURED"]
     h = dict(live.get("historian", {}))
@@ -99,13 +100,14 @@ class EquipmentTwinService:
         self.twin = EquipmentTwin(cfg, self.clock, self.items.views)
         self.commands = CommandService(cfg, self.twin.backend, hist, lambda c: None, lambda: ControllerState.AUTO)
         self.programs = ProgramStore(hist)
-        self.store = SqlEngineStore(hist, self.store_id, session_id)
         self.speed, self.running = 1, False
         self.effective_speed = 0.0
         self.snapshot_utc: str | None = None
         self.run_id = new_id("twinrun")
+        self.store = SqlEngineStore(hist, self.store_id, session_id, key_prefix=self.run_id)
         self.results: list[dict] = []
         self.frames: deque[dict] = deque(maxlen=FRAMES)
+        self.loop_error: str | None = None
         self.engine = self._engine()
 
     @property
@@ -149,6 +151,10 @@ class EquipmentTwinService:
             raise ValueError("no snapshot from the real system yet; open the dashboard of the real system once")
         with self.lock:
             self.items.load(snap)
+            rebuilt = False
+            if f"{snap['config_version']}-twin" != self.cfg.config_version:
+                self._rebuild(snap["config"], actor)  # modules changed on the real system: a controlled reset
+                rebuilt = True
             have = {(v["program_id"], v["version"]): v for v in self.programs.versions()}
             imported = 0
             for p in snap["programs"]:
@@ -156,23 +162,51 @@ class EquipmentTwinService:
                 if key in have and have[key]["digest"] == p["digest"]:
                     continue
                 if key in have:
-                    continue                          # a local edit of the same version number stays local
-                row = (p["program_id"], p["version"], "VALIDATED" if p["status"] == "VALIDATED" else "DRAFT", p["name"],
-                       p["digest"], datetime.now(timezone.utc).isoformat(), "live-snapshot",
-                       datetime.now(timezone.utc).isoformat(), json.dumps(p["body"], sort_keys=True))
+                    mine = have[key]
+                    untouched = (mine["created_by"] == "live-snapshot" and mine["status"] == "DRAFT"
+                                 and mine["updated_utc"] == mine["created_utc"])
+                    if not untouched:
+                        continue                      # a local edit of the same version number stays local
+                    self._refresh_draft(p)            # the real system corrected its draft: follow it
+                    imported += 1
+                    continue
+                now = datetime.now(timezone.utc).isoformat()
+                row = (p["program_id"], p["version"], p["status"] if p["status"] in ("VALIDATED", "INVALID") else "DRAFT",
+                       p["name"], p["digest"], now, "live-snapshot", now, json.dumps(p["body"], sort_keys=True))
                 self.hist.submit(lambda c, row=row: c.execute(
                     "INSERT INTO programs(program_id, version, status, name, digest, created_utc, created_by, updated_utc, "
                     "json) VALUES(?,?,?,?,?,?,?,?,?)", row), wait=True)
                 imported += 1
             self.snapshot_utc = snap["written_utc"]
             self.hist.event("TWIN_SNAPSHOT_IMPORTED", {"written_utc": snap["written_utc"], "items": len(self.items.items),
-                                                       "programs_new": imported}, actor=actor)
-            return {"written_utc": snap["written_utc"], "items": len(self.items.items), "programs_new": imported}
+                                                       "programs_new": imported, "config_rebuilt": rebuilt}, actor=actor)
+            return {"written_utc": snap["written_utc"], "items": len(self.items.items), "programs_new": imported,
+                    "config_rebuilt": rebuilt}
+
+    def _refresh_draft(self, p: dict) -> None:
+        """Replace an untouched copy of a live draft with its corrected body; its twin results no longer count."""
+        row = (p["name"], p["digest"], json.dumps(p["body"], sort_keys=True), p["program_id"], p["version"])
+        self.hist.submit(lambda c: c.execute(
+            "UPDATE programs SET name=?, digest=?, json=?, validation_json=NULL, simulation_json=NULL "
+            "WHERE program_id=? AND version=? AND status='DRAFT'", row), wait=True)
+        self.results = [r for r in self.results
+                        if not (r.get("program_id") == p["program_id"] and r.get("version") == p["version"])]
+
+    def _rebuild(self, live_config: dict, actor: str) -> None:
+        sec = self.cfg.security
+        self.cfg = twin_config(live_config, allowed_hosts=list(sec.allowed_hosts), allowed_origins=list(sec.allowed_origins))
+        self.twin = EquipmentTwin(self.cfg, self.clock, self.items.views)
+        self.commands = CommandService(self.cfg, self.twin.backend, self.hist, lambda c: None, lambda: ControllerState.AUTO)
+        self.reset(actor, self.clock.start_utc)
 
     def sync_users(self, accounts) -> int:
+        """One-way copy of the live accounts. A changed password, role, commissioning flag or a disabled or removed
+        account ends that user's twin sessions; a removed account stays disabled here."""
         snap = feed.read_snapshot(self.feed_dir)
         if snap is None:
             return 0
+        before = {r["username"]: dict(r) for r in self.hist.query(
+            "SELECT username, password_hash, role, commissioning, disabled FROM users")}
         n = 0
         for u in snap.get("users", []):
             row = (u["username"], u["password_hash"], u["role"], int(u["commissioning"]), int(u["disabled"]),
@@ -183,12 +217,17 @@ class EquipmentTwinService:
                 "password_changed_utc, must_change_password) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE "
                 "SET password_hash=excluded.password_hash, role=excluded.role, commissioning=excluded.commissioning, "
                 "disabled=excluded.disabled, must_change_password=excluded.must_change_password", row), wait=True)
+            old = before.get(u["username"])
+            if old is not None and ((old["password_hash"], old["role"], int(old["commissioning"])) !=
+                                    (u["password_hash"], u["role"], int(u["commissioning"])) or u["disabled"]):
+                accounts.revoke_user_sessions(u["username"], "account changed on the real system")
             n += 1
         live = {u["username"] for u in snap.get("users", [])}
-        for r in self.hist.query("SELECT username FROM users"):
-            if r["username"] not in live:
-                self.hist.submit(lambda c, n_=r["username"]: c.execute("UPDATE users SET disabled=1 WHERE username=?",
-                                                                       (n_,)), wait=True)
+        for name in before:
+            if name not in live:
+                self.hist.submit(lambda c, n_=name: c.execute("UPDATE users SET disabled=1 WHERE username=?",
+                                                              (n_,)), wait=True)
+                accounts.revoke_user_sessions(name, "account removed on the real system")
         return n
 
     # ------------------------------------------------------------------ control of the simulation
@@ -209,6 +248,7 @@ class EquipmentTwinService:
             self.clock.start_utc = start_utc or datetime.now(timezone.utc).replace(microsecond=0)
             self.clock.sim_s = 0.0
             self.run_id = new_id("twinrun")
+            self.store = SqlEngineStore(self.hist, self.store_id, self.session_id, key_prefix=self.run_id)
             self.engine = self._engine()
             self.twin.step(0.0)
             self.engine.start()
@@ -264,7 +304,14 @@ class EquipmentTwinService:
             carry = want - n if n <= cap else 0.0
             n = min(n, cap)
             t0 = time.monotonic()
-            await asyncio.to_thread(self.step, n)
+            try:
+                await asyncio.to_thread(self.step, n)
+                self.loop_error = None
+            except Exception as e:                     # supervised: paused, reported by health, never silent
+                self.loop_error = repr(e)
+                self.running = False
+                self.hist.event("TWIN_LOOP_ERROR", {"error": repr(e)}, actor="system")
+                continue
             self.effective_speed = n * DT_S / wall if wall > 0 else 0.0
             if time.monotonic() - t0 > 0.2:
                 await asyncio.sleep(0.05)              # leave the event loop and the CPU to the dashboard
@@ -272,7 +319,8 @@ class EquipmentTwinService:
     # ------------------------------------------------------------------ results and evidence
     def accept(self, actor: str, program_id: str, version: int, note: str) -> dict:
         v = self.programs.get(program_id, version)
-        runs = [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version]
+        runs = [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version
+                and r.get("twin_run_id") == self.run_id]       # evidence from this run only, never an earlier one
         passed = [r for r in runs if r.get("result") == "DONE"]
         if not passed:
             raise ValueError(f"no operation of {program_id} v{version} ended DONE in this twin run")

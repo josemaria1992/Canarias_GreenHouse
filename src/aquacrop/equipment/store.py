@@ -397,15 +397,24 @@ class EquipmentStore:
         if doc.get("kind") != "AQUACROP_EQUIPMENT_EXPORT":
             raise EquipmentRefused("not an AquaCrop equipment export")
         made = {"types": [], "skipped_items": []}
+        # one version per type: the ACTIVE one, else its DRAFT, else the newest SUPERSEDED (exports list them oldest
+        # first, and only one draft per type can be made here)
+        rank = {"ACTIVE": 2, "DRAFT": 1, "SUPERSEDED": 0}
+        chosen: dict[str, dict] = {}
         for t in doc.get("types", []):
-            if t.get("status") in ("ACTIVE", "SUPERSEDED", "DRAFT"):
-                try:
-                    has_draft = any(x["type_id"] == t["type_id"] and x["status"] == "DRAFT" for x in self.types())
-                    if not has_draft:
-                        self.save_type_draft(actor, t["type_id"], t["name"], t["body"])
-                        made["types"].append(t["type_id"])
-                except EquipmentRefused as e:
-                    raise EquipmentRefused(f"type {t.get('type_id')}: {e}")
+            if t.get("status") not in rank:
+                continue
+            have = chosen.get(t.get("type_id"))
+            if have is None or (rank[t["status"]], t.get("version", 0)) > (rank[have["status"]], have.get("version", 0)):
+                chosen[t.get("type_id")] = t
+        for t in chosen.values():
+            try:
+                has_draft = any(x["type_id"] == t["type_id"] and x["status"] == "DRAFT" for x in self.types())
+                if not has_draft:
+                    self.save_type_draft(actor, t["type_id"], t["name"], t["body"])
+                    made["types"].append(t["type_id"])
+            except EquipmentRefused as e:
+                raise EquipmentRefused(f"type {t.get('type_id')}: {e}")
         made["skipped_items"] = [i.get("item_id") for i in doc.get("items", [])]
         made["note"] = ("Items are listed, not created: activate the imported types, then create the items so their "
                         "channels are chosen and verified on this installation.")
