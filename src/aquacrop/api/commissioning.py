@@ -22,6 +22,7 @@ class _B(BaseModel):
 class OpenIn(_B):
     adapter: str = Field(max_length=200)
     bus_id: str = Field(max_length=48)
+    read: bool = True          # Start reads the module at once (owner, 2026-10-24: no typed confirmation)
 
 
 class ReadIn(_B):
@@ -85,7 +86,13 @@ def register(app, require, wizard, svc) -> None:
 
     @app.post("/api/commissioning/open")
     async def tx_open(body: OpenIn, p: Principal = Depends(require(Perm.MODULE_SETUP))):
-        return await step(need().open, p.username, body.adapter, body.bus_id)
+        v = await step(need().open, p.username, body.adapter, body.bus_id)
+        if not body.read:
+            return v
+        # Pressing Start is the user's statement that only the new module is wired to the adapter (owner decision
+        # 2026-10-24). The server still refuses when more or fewer than one module answers.
+        return await step(need().read, p.username, v["tx_id"], only_new_module=CONFIRM_PHRASE,
+                          confirmed_how="the Start button: the user wired only the new module to the adapter")
 
     @app.post("/api/commissioning/{tx_id}/read")
     async def tx_read(tx_id: str, body: ReadIn, p: Principal = Depends(require(Perm.MODULE_SETUP))):

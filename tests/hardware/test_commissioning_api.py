@@ -42,7 +42,10 @@ def test_the_wizard_needs_the_commissioning_flag_and_writes_only_on_the_adapter(
     assert c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).status_code == 403
     c.post("/api/auth/logout", headers=h)
     h = login(c, "bench1")
-    tx = c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).json()["tx_id"]
+    v = c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).json()
+    tx = v["tx_id"]
+    assert v["state"] == "READ"                              # Start reads the module at once (owner, 2026-10-24)
+    assert c.get(f"/api/commissioning/{tx}/suggest", headers=h).json()["address"] == 7   # before naming it
     assert c.post(f"/api/commissioning/{tx}/read", json={"confirmation": CONFIRM_PHRASE}, headers=h).json()["state"] == "READ"
     assert c.post(f"/api/commissioning/{tx}/identity", json={"name": "digital_C", "sku": "26244", "label": "digital_C"},
                   headers=h).json()["state"] == "IDENTIFIED"

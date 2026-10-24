@@ -298,3 +298,6 @@ textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; b
 .card.bad { border-color: var(--bad, #c33); }
 .twin-page main { max-width: 100%; overflow-x: hidden; }
 .eq-card table { width: 100%; table-layout: fixed; word-break: break-word; }
+.inline-msg { font-size: 0.9em; margin-left: 8px; }
+.inline-msg.ok { color: var(--ok, #2a8); }
+.inline-msg.bad { color: var(--bad, #c33); }

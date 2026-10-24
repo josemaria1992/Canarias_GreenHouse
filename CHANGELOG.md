@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3 (2026-10-24): a simpler Add module wizard (owner feedback)
+
+- Start opens the adapter and reads the module at once. No confirmation phrase is typed: pressing Start is the
+  user's statement that only the new module is wired to the adapter, and the record says so. The server still
+  refuses when more or fewer than one module answers.
+- One Configuration panel: name, SKU (analog version and range for an AI 8CH) and address, with Suggest and
+  Reserve beside each other. Suggest works before the module is named.
+- Every result and refusal is shown next to the button that caused it, not as a pop-up. Discovery's Scan too.
+- The page starts with the owner's six steps for adding a module.
+
 ## 0.5.2 (2026-10-24)
 
 - Equipment: each item has an "Edit details" editor for its properties, analog scaling, alarm limits and twin

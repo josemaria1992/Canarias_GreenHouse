@@ -218,7 +218,8 @@ class Wizard:
             raise WizardRefused(f"this module is {t['state']}; that step is not possible now")
         return t
 
-    def read(self, actor: str, tx_id: str, *, only_new_module: str, last: int | None = None) -> dict:
+    def read(self, actor: str, tx_id: str, *, only_new_module: str, last: int | None = None,
+             confirmed_how: str = "typed confirmation") -> dict:
         if only_new_module.strip() != CONFIRM_PHRASE:
             raise WizardRefused(f"type exactly: {CONFIRM_PHRASE}")
         last = last or self.scan_last
@@ -234,7 +235,8 @@ class Wizard:
             finally:
                 bus.close()
             t["doc"]["found"] = found
-            t["doc"]["scan"] = {"range": [1, last], "writes_sent": sent, "confirmation": CONFIRM_PHRASE}
+            t["doc"]["scan"] = {"range": [1, last], "writes_sent": sent, "confirmation": CONFIRM_PHRASE,
+                                "confirmed_how": confirmed_how}
             if len(found) != 1:
                 why = ("no module answers on the adapter: check its supply, A/B/GND wiring and that it is at 9600 baud"
                        if not found else f"{len(found)} modules answer (addresses "
@@ -249,7 +251,7 @@ class Wizard:
                  ai_range: str | None = None) -> dict:
         import re
         with self._lock:
-            t = self._tx(tx_id, "READ", "IDENTIFIED")
+            t = self._tx(tx_id, "READ", "IDENTIFIED", "RESERVED")      # a changed identity drops the reservation
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_\-]{0,47}", name or ""):
                 raise WizardRefused("the name starts with a letter and uses letters, digits, _ or - (e.g. digital_C)")
             if any(d.device_uid == name for d in self.cfg.devices):
@@ -286,7 +288,7 @@ class Wizard:
         return taken
 
     def suggest(self, tx_id: str, *, probe_limit: int = 5) -> dict:
-        t = self._tx(tx_id, "IDENTIFIED", "RESERVED")
+        t = self._tx(tx_id, "READ", "IDENTIFIED", "RESERVED")
         taken = self._taken(t["bus_id"], tx_id)
         probed = []
         for a in range(FIRST_SUGGESTED, 248):
