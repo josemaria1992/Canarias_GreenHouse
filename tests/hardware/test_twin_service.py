@@ -347,3 +347,31 @@ def test_the_twin_offers_only_channels_that_suit_each_role(live_and_twin):
     start = next(r for r in pump["roles"] if r["role"] == "start")
     assert start["points"] and all(".DO" in p for p in start["points"])          # an output role: outputs only
     assert set(start["points"]) < set(ch["points"])
+
+
+def test_the_starter_creates_the_installation_and_links_the_drawing(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    H = _twin_h(twin, "bench1")
+    r = twin.post("/api/twin/starter", headers=H)
+    assert r.status_code == 200, r.text
+    from aquacrop.twin.starter import parts
+    assert len(r.json()["created"]) == len(parts()) and r.json()["links"] > 40
+    d = twin.get("/api/twin/diagram").json()
+    nodes = {n["id"]: n for n in d["layout"]["nodes"]}
+    assert nodes["mp1"]["item"] == "mp1" and nodes["tank-main"]["item"] == "lvl-main" and nodes["tank-main"]["role"] == "level"
+    assert nodes["sector-1"]["item"] == "v-s1" and d["issues"] == []
+    pipes = {p["id"]: p for p in d["layout"]["pipes"]}
+    assert pipes["s1"]["item"] == "v-s1" and pipes["s1"]["flow_item"] == "flow-s1"
+    assert (pipes["s1"]["from_node"], pipes["s1"]["to_node"]) == ("v-s1", "sector-1")       # ends attached
+    assert (pipes["to-mp1"]["from_node"], pipes["to-mp1"]["to_node"]) == ("tank-main", "mp1")
+    assert any(i["item_id"] == "mp1" for i in twin.get("/api/twin").json()["items"])      # the twin runs it
+    again = twin.post("/api/twin/starter", headers=H).json()
+    assert again["created"] == [] and again["skipped"] == len(parts())
+    pv = twin.get("/api/twin/changes").json()["preview"]
+    assert len([i for i in pv["items"] if i["op"] == "create"]) == len(parts())
+
+
+def test_the_starter_names_the_types_to_activate_first():
+    from aquacrop.twin.starter import missing_types
+    snap = {"equipment": {"types": [{"type_id": "pump", "status": "ACTIVE"}, {"type_id": "valve", "status": "DRAFT"}]}}
+    assert missing_types(snap) == ["ec", "flow", "level", "ph", "pressure", "temperature", "valve"]

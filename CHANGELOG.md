@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.2 (2026-10-25): the installation starter (owner request)
+
+- New built-in equipment types: pressure transmitter, pH probe, EC probe and temperature transmitter (4-20 mA).
+- Digital twin, Equipment and programs: "Create the installation's equipment" creates every part of the
+  standard installation in one step: 33 parts, namely
+  - the fill and outlet valves, levels, dosing pumps and flow meters of fertiliser A, fertiliser B and acid;
+  - the main tank's fill valve, fill flow, level, pH, EC and temperature;
+  - both main pumps, both sector valves with their flow and pressure;
+  - the drainage tank's level, both return pumps and the return flow.
+- The starter links every symbol and pipe of the drawing to those parts. No channel is assigned: you choose
+  channels afterwards and verify them at the bench. Parts that already exist are left alone, so the button can
+  be pressed again. Everything reaches the real system only through the usual export and layout proposal.
+- Tanks have "Full at (sensor reading)": the reading that means a full tank. Level sensors read in cm, not
+  litres.
+- The starter needs the eight types active on the real system. Otherwise it names the ones to activate.
+- Pipes connect to symbols by drawing (owner request: as intuitive as possible). In the layout editor:
+  - Press Pipe, click the symbol where it starts, click each corner, then click the symbol where it ends; that
+    finishes the pipe.
+  - Dragging a pipe's end onto a pump, valve, tank or sensor attaches it (a dot shows the joint). Moving a symbol
+    moves the pipe ends attached to it.
+  - Attaching fills the pipe's links by itself: a pump or valve makes water move while it runs or is open, and a
+    flow meter shows water only while it measures flow. Links set by hand are kept, and detaching drops only the
+    links that came from that symbol.
+  - The starter attaches the standard pipes the same way.
+
 ## 0.6.1 (2026-10-25): twin page fixes from the owner walkthrough
 
 - The speed you choose stays chosen. While the twin runs, a new speed applies at once.

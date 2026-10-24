@@ -70,7 +70,14 @@
   }
   function equipmentTable() {
     const ed = can("equipment_edit");
-    return h("div", null, h("h3", null, "Equipment"),
+    const starter = h("div", { class: "row" },
+      h("button", { class: C.data.items.length < 5 ? "" : "ghost", disabled: !ed,
+        onclick: () => call("starter", "api/twin/starter", undefined, "").then(r => { if (r) say("starter",
+          `${r.created.length} part(s) created${r.skipped ? `, ${r.skipped} already there` : ""}; ${r.links} symbol(s) and pipe(s) linked in the drawing. Assign channels below, then try it and send it to the real system.`); }) },
+        "Create the installation's equipment"),
+      h("span", { class: "muted small" }, "Every pump, valve and sensor of the standard drawing, linked to its symbols and pipes. Parts that exist stay as they are."),
+      msg("starter"));
+    return h("div", null, h("h3", null, "Equipment"), starter,
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Equipment", "Type", "Channels", "", ""].map(x => h("th", null, x)))),
         h("tbody", null, C.data.items.map(i => {
           const t = typeOf(i), retired = i.status === "RETIRED";

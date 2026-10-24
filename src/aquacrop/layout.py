@@ -48,6 +48,7 @@ class Node(_B):
     dir: Literal["right", "left", "down", "up"] = "right"
     vertical: bool = False
     capacity_L: float | None = Field(default=None, gt=0, le=1e7)
+    full_at: float | None = Field(default=None, gt=0, le=1e6)  # tank: the sensor reading that means full (0.6.2)
     planned: bool = False                                   # drawn, but the equipment does not exist yet
 
 
@@ -57,6 +58,8 @@ class Pipe(_B):
     item: str | None = Field(default=None, max_length=48)        # water moves while this item runs or is open
     flow_item: str | None = Field(default=None, max_length=48)   # a flow meter on this route
     flow_role: str | None = Field(default=None, max_length=48)
+    from_node: str | None = Field(default=None, max_length=48)   # the symbol its first end is attached to (0.6.2)
+    to_node: str | None = Field(default=None, max_length=48)     # the symbol its last end is attached to
 
 
 class Layout(_B):

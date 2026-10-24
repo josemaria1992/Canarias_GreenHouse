@@ -400,6 +400,29 @@ TEMPLATES: dict[str, dict] = {
         "roles": [_role("flow", "Flow rate", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"],
                         unit="L/min")],
         "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+    # 0.6.2: the installation's other transmitters (owner request: the starter creates every part)
+    "pressure": {"name": "Pressure transmitter", "body": {
+        "category": "Pressure sensors", "default_icon": "pressure",
+        "description": "A 4-20 mA pressure transmitter (a sector's line pressure).",
+        "roles": [_role("pressure", "Pressure", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"],
+                        unit="bar")],
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+    "ph": {"name": "pH probe", "body": {
+        "category": "Water quality", "default_icon": "drop",
+        "description": "A pH transmitter on a 4-20 mA input.",
+        "roles": [_role("ph", "pH", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"], unit="pH")],
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+    "ec": {"name": "EC probe", "body": {
+        "category": "Water quality", "default_icon": "gauge",
+        "description": "An electrical conductivity transmitter on a 4-20 mA input.",
+        "roles": [_role("ec", "EC", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"], unit="mS/cm")],
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+    "temperature": {"name": "Temperature transmitter", "body": {
+        "category": "Water quality", "default_icon": "temperature",
+        "description": "A water temperature transmitter on a 4-20 mA input.",
+        "roles": [_role("temperature", "Temperature", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"],
+                        unit="°C")],
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
     "button": {"name": "Button", "body": {
         "category": "Buttons", "default_icon": "button", "description": "A push button or switch on a digital input.",
         "roles": [_role("pressed", "Pressed", "INPUT", "DIGITAL", "STATE")],

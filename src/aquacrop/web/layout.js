@@ -101,7 +101,8 @@
         "aria-pressed": sel === id ? "true" : "false", "data-id": id, "data-kind": kind });
       const prev = parent; parent = g; draw(); parent = prev;
       const pick = () => opts.onSelect && opts.onSelect(kind, id);
-      if (opts.edit) g.addEventListener("pick", pick); else g.addEventListener("click", pick);
+      if (opts.drawing) g.addEventListener("click", ev => { ev.stopPropagation(); const p = toSvg(ev); opts.onCanvas(Math.round(p.x), Math.round(p.y)); });
+      else if (opts.edit) g.addEventListener("pick", pick); else g.addEventListener("click", pick);
       g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
       return g;
     }
@@ -113,8 +114,12 @@
       const g = hot("pipe", p.id, `pipe ${p.id}${st === "flow" ? ", water moving" : ""}`, () => {
         e("path", { d, class: "pipe-hit" });
         e("path", { d, class: "pipe" + (st ? " " + st : "") + (sel === p.id ? " hl" : ""), "marker-end": st === "flow" ? `url(#${uid}-arrow)` : null, "data-route": st || "idle" });
+        if (opts.edit) {                                   // an attached end shows a dot
+          if (p.from_node) e("circle", { cx: p.points[0][0], cy: p.points[0][1], r: 4, class: "joint" });
+          if (p.to_node) { const q = p.points[p.points.length - 1]; e("circle", { cx: q[0], cy: q[1], r: 4, class: "joint" }); }
+        }
       });
-      if (opts.edit) {
+      if (opts.edit && !opts.drawing) {
         g.addEventListener("click", () => opts.onSelect && opts.onSelect("pipe", p.id));
         if (sel === p.id) p.points.forEach((q, i) => {
           const hnd = e("circle", { cx: q[0], cy: q[1], r: 7, class: "handle", "data-point": i });
@@ -133,7 +138,9 @@
         g = hot("node", n.id, `${n.label}: ${r.txt}`, () => {
           e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-bg" });
           if (r.ok && typeof r.v === "number") {
-            const f = Math.max(0, Math.min(1, r.unit === "%" ? r.v / 100 : n.capacity_L ? r.v / n.capacity_L : 0));
+            // the reading that means full: set on the tank, else 100 % for a percentage, else the capacity in litres
+            const full = n.full_at || (r.unit === "%" ? 100 : r.unit === "L" ? n.capacity_L : null);
+            const f = full ? Math.max(0, Math.min(1, r.v / full)) : 0;
             e("rect", { x: x + 2, y: y + 2 + (hh - 4) * (1 - f), width: w - 4, height: (hh - 4) * f, class: "water" });
           } else e("rect", { x: x + 3, y: y + 3, width: w - 6, height: hh - 6, class: "unknown" });
           e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-wall hl" + (n.planned ? " planned" : "") });
@@ -179,7 +186,7 @@
             sector ? (n.item ? (s.st === "on" ? "being watered" : s.word) : "not linked") : s.word);
         });
       }
-      if (opts.edit) draggable(g, (dx, dy) => opts.onMove && opts.onMove(n.id, x + dx, y + dy));
+      if (opts.edit && !opts.drawing) draggable(g, (dx, dy) => opts.onMove && opts.onMove(n.id, x + dx, y + dy));
     }
     return svg;
   }

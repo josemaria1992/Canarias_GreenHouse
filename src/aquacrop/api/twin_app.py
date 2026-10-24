@@ -607,6 +607,36 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             issues = str(e).split("; ")
         return refused(svc.programs.get, v["program_id"], v["version"]) | {"issues": issues}
 
+    @app.post("/api/twin/starter")
+    def starter(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Every part of the standard installation as equipment, with the drawing linked to it (0.6.2)."""
+        from ..equipment.definitions import TEMPLATES
+        from ..twin import starter as st
+        if svc.snap is None:
+            raise HTTPException(409, "no snapshot from the real system yet")
+        missing = st.missing_types(svc.snap)
+        if missing:
+            names = ", ".join(TEMPLATES[t]["name"] for t in missing)
+            raise HTTPException(409, f"activate these equipment types on the real system first (Equipment types: "
+                                     f"Add built-in templates, then Activate each): {names}")
+        active = {t["type_id"]: t["version"] for t in svc.snap["equipment"]["types"] if t["status"] == "ACTIVE"}
+
+        def make():
+            have = {i["item_id"] for i in svc.changes.overlay(svc.snap)["equipment"]["items"] if i["status"] != "RETIRED"}
+            made = []
+            for part in st.parts():
+                if part["item_id"] in have:
+                    continue
+                svc.changes.save_item(svc.snap, cfg, part["item_id"], part["name"], part["type_id"],
+                                      active[part["type_id"]], part["icon"], {})
+                made.append(part["item_id"])
+            return made, have | set(made)
+        made, have = changed(make)
+        lay, linked = st.link_layout(draft()[0], have)
+        save_draft(lay)
+        hist.event("TWIN_STARTER", {"items": made, "links": linked}, actor=p.username)
+        return {"created": made, "skipped": len(st.parts()) - len(made), "links": linked}
+
     @app.post("/api/twin/export")
     def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         if svc.snap is None:

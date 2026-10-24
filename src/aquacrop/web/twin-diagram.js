@@ -9,6 +9,48 @@
     sel: null, pipeDraft: null, msg: {}, dragging: false, lastFetch: 0, diagEl: null };
   const KINDS = [["tank", "Tank"], ["pump", "Pump"], ["valve", "Valve"], ["sensor", "Sensor"], ["sector", "Sector"], ["box", "Box"], ["label", "Text"]];
   const clone = o => JSON.parse(JSON.stringify(o));
+  const SNAP = 24;                                        // a pipe end this close to a symbol attaches to it
+  const BOXES = ["tank", "sector", "box"];
+  /** The symbol a pipe end dropped at (x, y) attaches to, and the point on it: a pump, valve or sensor at its
+   * centre, a tank, sector or box on the nearest point of its edge. */
+  function snapAt(x, y) {
+    let best = null;
+    for (const n of D.edit.nodes) {
+      if (n.kind === "label") continue;
+      let px = n.x, py = n.y;
+      if (BOXES.includes(n.kind)) {
+        const w = n.w || 100, hh = n.h || 100;
+        px = Math.max(n.x, Math.min(n.x + w, x)); py = Math.max(n.y, Math.min(n.y + hh, y));
+        if (px > n.x && px < n.x + w && py > n.y && py < n.y + hh) {     // inside: go to the nearest edge
+          const d = [[px - n.x, n.x, py], [n.x + w - px, n.x + w, py], [py - n.y, px, n.y], [n.y + hh - py, px, n.y + hh]].sort((a, b) => a[0] - b[0])[0];
+          px = d[1]; py = d[2];
+        }
+      }
+      const dist = Math.hypot(px - x, py - y);
+      if (dist <= SNAP && (!best || dist < best.dist)) best = { node: n, x: Math.round(px), y: Math.round(py), dist };
+    }
+    return best;
+  }
+  /** Attach one end of a pipe to a symbol, and fill the links that follow from it: a pump or valve moves the
+   * water through the pipe, a flow meter (sensor F) measures it. Links set by hand are kept. */
+  function attach(pipe, end, node) {
+    const key = end === "from" ? "from_node" : "to_node", old = pipe[key] && D.edit.nodes.find(n => n.id === pipe[key]);
+    if (old && old !== node) {                              // detach: drop only the links that came from it
+      if (old.item && pipe.item === old.item) pipe.item = null;
+      if (old.item && pipe.flow_item === old.item) { pipe.flow_item = null; pipe.flow_role = null; }
+    }
+    pipe[key] = node ? node.id : null;
+    if (!node || !node.item) return;
+    if ((node.kind === "pump" || node.kind === "valve") && !pipe.item) pipe.item = node.item;
+    if (node.kind === "sensor" && node.tag === "F" && !pipe.flow_item) { pipe.flow_item = node.item; pipe.flow_role = node.role || null; }
+  }
+  function placeEnd(pipe, i, x, y) {
+    const last = pipe.points.length - 1, end = i === 0 ? "from" : i === last ? "to" : null;
+    const s = end ? snapAt(x, y) : null;
+    pipe.points[i] = s ? [s.x, s.y] : [x, y];
+    if (end) attach(pipe, end, s ? s.node : null);
+    return s;
+  }
   const simTime = iso => new Date(iso).toLocaleString("sv-SE", { timeZone: T.tz(), hour: "2-digit", minute: "2-digit", second: "2-digit", day: "2-digit", month: "2-digit" });
 
   function say(key, text, bad) { D.msg[key] = { text, bad }; draw(); }
@@ -59,11 +101,27 @@
     const svg = L.render(lay, R, {
       edit: editing, selected: D.sel && D.sel.id,
       onSelect: (kind, id) => { D.sel = { kind, id }; draw(); },
-      onMove: (id, x, y) => { const n = D.edit.nodes.find(q => q.id === id); n.x = x; n.y = y; D.sel = { kind: "node", id }; D.dirty = true; draw(); },
-      onPoint: (pid, i, x, y) => { D.edit.pipes.find(q => q.id === pid).points[i] = [x, y]; D.dirty = true; draw(); },
+      drawing: editing && !!D.pipeDraft,
+      onMove: (id, x, y) => {
+        const n = D.edit.nodes.find(q => q.id === id), dx = x - n.x, dy = y - n.y;
+        n.x = x; n.y = y;
+        for (const p of D.edit.pipes) {                       // attached pipe ends move with the symbol
+          if (p.from_node === id) p.points[0] = [p.points[0][0] + dx, p.points[0][1] + dy];
+          if (p.to_node === id) { const k = p.points.length - 1; p.points[k] = [p.points[k][0] + dx, p.points[k][1] + dy]; }
+        }
+        D.sel = { kind: "node", id }; D.dirty = true; draw();
+      },
+      onPoint: (pid, i, x, y) => { placeEnd(D.edit.pipes.find(q => q.id === pid), i, x, y); D.dirty = true; draw(); },
       onCanvas: (x, y) => {
-        if (D.pipeDraft) { D.pipeDraft.points.push([x, y]); if (D.pipeDraft.points.length === 2) D.edit.pipes.push(D.pipeDraft); D.dirty = true; draw(); }
-        else if (D.sel) { D.sel = null; draw(); }
+        if (D.pipeDraft) {
+          const pd = D.pipeDraft;
+          pd.points.push([x, y]);
+          if (pd.points.length === 2) D.edit.pipes.push(pd);
+          const s = placeEnd(pd, pd.points.length - 1, x, y);
+          if (pd.points.length === 1 && s) attach(pd, "from", s.node);
+          if (pd.points.length > 1 && s) { finishPipe(); return; }   // ending on a symbol finishes the pipe
+          D.dirty = true; draw();
+        } else if (D.sel) { D.sel = null; draw(); }
       } });
     const wrap = h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, svg), side(R, lay));
     D.body.replaceChildren(...[
@@ -137,6 +195,12 @@
   // ---------------------------------------------------------------- the editor
   function startEdit() { D.edit = clone(D.data.layout); D.dirty = false; D.sel = null; D.pipeDraft = null; stop(); D.at = null; draw(); }
   function leaveEdit() { D.edit = null; D.dirty = false; D.sel = null; D.pipeDraft = null; D.msg = {}; D.lastFetch = 0; draw(); }
+  function finishPipe() {
+    const pd = D.pipeDraft;
+    if (pd.points.length < 2) D.edit.pipes = D.edit.pipes.filter(p => p !== pd);
+    else D.sel = { kind: "pipe", id: pd.id };
+    D.pipeDraft = null; D.dirty = true; draw();
+  }
   function newId(prefix, list) { let i = 1; while (list.some(q => q.id === `${prefix}-${i}`)) i++; return `${prefix}-${i}`; }
   function add(kind) {
     const n = { id: newId(kind, D.edit.nodes), kind, x: 60, y: 60, label: kind === "label" ? "Text" : KINDS.find(k => k[0] === kind)[1], sub: "",
@@ -148,9 +212,11 @@
     const ed = can("equipment_edit");
     return h("div", { class: "edit-bar" },
       h("div", { class: "row" }, h("span", { class: "small" }, "Add:"), KINDS.map(([k, w]) => h("button", { class: "small ghost", onclick: () => add(k) }, w)),
-        D.pipeDraft ? h("button", { class: "small", onclick: () => { if (D.pipeDraft.points.length < 2) D.edit.pipes = D.edit.pipes.filter(p => p !== D.pipeDraft); D.sel = { kind: "pipe", id: D.pipeDraft.id }; D.pipeDraft = null; draw(); } }, "Finish pipe")
-          : h("button", { class: "small ghost", onclick: () => { D.pipeDraft = { id: newId("pipe", D.edit.pipes), points: [], item: null, flow_item: null, flow_role: null }; D.sel = null; draw(); } }, "Pipe"),
-        D.pipeDraft ? h("span", { class: "small warn" }, `Click on the grid for each corner of the pipe (${D.pipeDraft.points.length} so far), then Finish pipe.`) : null),
+        D.pipeDraft ? h("button", { class: "small", onclick: finishPipe }, "Finish pipe")
+          : h("button", { class: "small ghost", onclick: () => { D.pipeDraft = { id: newId("pipe", D.edit.pipes), points: [], item: null, flow_item: null, flow_role: null, from_node: null, to_node: null }; D.sel = null; draw(); } }, "Pipe"),
+        D.pipeDraft ? h("span", { class: "small warn" }, D.pipeDraft.points.length === 0
+          ? "Click the pump, valve, tank or sensor where the pipe starts (or a free spot)."
+          : `Click each corner; click the symbol where it ends to finish (${D.pipeDraft.points.length} point${D.pipeDraft.points.length === 1 ? "" : "s"} so far).`) : null),
       h("div", { class: "row" },
         h("button", { disabled: !ed || !D.dirty, onclick: save }, "Save in the twin"),
         h("button", { class: "ghost", onclick: () => { if (D.dirty && D.msg.leave == null) { say("leave", "Unsaved changes: press Close again to drop them.", true); return; } leaveEdit(); } }, "Close editor"),
@@ -190,7 +256,7 @@
       linked ? h("label", { class: "small field" }, h("input", { type: "checkbox", checked: n.planned, disabled: !!n.item, onchange: ev => { n.planned = ev.target.checked; D.dirty = true; draw(); } }), " Planned (not installed yet)") : null,
       n.kind === "pump" ? field("Direction", h("select", { onchange: ev => { n.dir = ev.target.value; D.dirty = true; draw(); } }, ["right", "left", "down", "up"].map(d => h("option", { selected: n.dir === d }, d)))) : null,
       n.kind === "valve" ? h("label", { class: "small field" }, h("input", { type: "checkbox", checked: n.vertical, onchange: ev => { n.vertical = ev.target.checked; D.dirty = true; draw(); } }), " Vertical") : null,
-      n.kind === "tank" ? field("Capacity (L)", numIn(n, "capacity_L")) : null,
+      n.kind === "tank" ? [field("Capacity (L)", numIn(n, "capacity_L")), field("Full at (sensor reading)", numIn(n, "full_at"))] : null,
       h("div", { class: "row" }, field("x", numIn(n, "x")), field("y", numIn(n, "y")), sized ? [field("width", numIn(n, "w")), field("height", numIn(n, "h"))] : null),
       h("div", { class: "row" },
         h("button", { class: "small ghost", onclick: () => { const c = clone(n); c.id = newId(n.kind, D.edit.nodes); c.x += 20; c.y += 20; D.edit.nodes.push(c); D.sel = { kind: "node", id: c.id }; D.dirty = true; draw(); } }, "Duplicate"),
@@ -198,7 +264,10 @@
       h("p", { class: "muted small" }, "Removing a symbol changes the drawing only. Equipment itself is created and retired on the Equipment page."));
   }
   function pipeForm(p) {
+    const nm = id => { const n = id && D.edit.nodes.find(q => q.id === id); return n ? (n.label || n.id) : "nothing (free end)"; };
     return h("div", { class: "card side-panel" }, h("h3", null, `Pipe ${p.id}`),
+      h("p", { class: "small" }, `From ${nm(p.from_node)} to ${nm(p.to_node)}.`),
+      h("p", { class: "muted small" }, "Drag an end onto a pump, valve, tank or sensor to attach it; the links below fill in by themselves."),
       field("Water moves while this runs or is open", itemSelect(p, "item")),
       field("Flow meter on this pipe", itemSelect(p, "flow_item", () => { p.flow_role = null; })),
       field("Its flow input", roleSelect(p, "flow_item", "flow_role")),

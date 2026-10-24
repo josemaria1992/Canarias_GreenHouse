@@ -330,3 +330,4 @@ button.link { background: none; border: none; color: var(--accent); padding: 0; 
 .side-panel .field input:not([type=checkbox]), .side-panel .field select { width: 100%; }
 .side-panel .row .field input { width: 80px; }
 .selected-card { border-color: var(--focus); }
+.diagram .joint { fill: var(--focus); stroke: var(--bg); stroke-width: 1.5; pointer-events: none; }
