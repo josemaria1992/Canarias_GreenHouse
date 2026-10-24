@@ -4,7 +4,7 @@ The two runtimes share no database, no process and no command path. They exchang
 directory both can reach (`/var/lib/aquacrop-feed` on the controller), each with one writer:
 
 * `live-snapshot.json`, written by the live service only: the configuration, the equipment types, items and
-  channel bindings, the program versions, and the login accounts (names, roles and password hashes, so every
+  channel bindings, the program versions, the accepted installation diagram (0.5.6), and the login accounts (names, roles and password hashes, so every
   user can sign in to the twin with the same password). The twin reads it; importing it never changes the live
   system. Bindings arrive as records; the twin's channels are virtual.
 * `twin-handoff.key`, written by the live service only (new at every live start): the key of the one-time
@@ -44,7 +44,8 @@ def _atomic(path: Path, doc: dict) -> None:
     os.replace(tmp, path)
 
 
-def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software_version: str) -> dict:
+def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software_version: str,
+                     layout: dict | None = None) -> dict:
     users = [dict(r) for r in hist.query("SELECT username, password_hash, role, commissioning, disabled, "
                                          "must_change_password FROM users")]
     doc = {"kind": KIND, "software_version": software_version, "written_utc": datetime.now(timezone.utc).isoformat(),
@@ -54,7 +55,7 @@ def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software
                         for v in equipment.bindings().values()],
            "programs": [{k: v[k] for k in ("program_id", "version", "status", "name", "digest", "body")}
                         for v in programs.versions()],
-           "users": users}
+           "users": users, "layout": layout}
     _atomic(Path(feed_dir) / SNAPSHOT, doc)
     hist.event("TWIN_SNAPSHOT_PUBLISHED", {"config_version": cfg.config_version, "items": len(doc["equipment"]["items"]),
                                            "programs": len(doc["programs"]), "users": len(users)}, actor="system")

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -23,7 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .. import __version__
+from .. import __version__, layout
 from ..domain.model import new_id
 from ..historian.writer import Historian
 from ..programs.engine import Refused
@@ -50,6 +51,18 @@ class LoginIn(_B):
 
 class TicketIn(_B):
     ticket: str = Field(max_length=512)
+
+
+class LayoutIn(_B):
+    layout: dict
+
+
+class LayoutStartIn(_B):
+    source: str = Field(pattern="^(live|default)$")
+
+
+class SendLayoutIn(_B):
+    note: str = Field(default="", max_length=500)
 
 
 class ControlIn(_B):
@@ -388,6 +401,75 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     @app.post("/api/twin/accept")
     def accept(body: AcceptIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
         return refused(svc.accept, p.username, body.program_id, body.version, body.note)
+
+    # ------------------------------------------------------------------ the diagram (0.5.6)
+    draft_path = state_dir / "layout-draft.json"
+
+    def live_layout() -> tuple[layout.Layout, str]:
+        snap = feed.read_snapshot(feed_dir) or {}
+        with contextlib.suppress(Exception):
+            if snap.get("layout"):
+                return layout.parse(snap["layout"]), "the real system's layout"
+        return layout.default_layout(), "the standard drawing"
+
+    def draft() -> tuple[layout.Layout, str]:
+        with contextlib.suppress(OSError, ValueError):
+            return layout.parse(json.loads(draft_path.read_text(encoding="utf-8"))), "the twin's draft"
+        return live_layout()
+
+    def save_draft(lay: layout.Layout) -> None:
+        tmp = draft_path.with_name(draft_path.name + ".tmp")
+        tmp.write_text(json.dumps(layout.canonical(lay), indent=1), encoding="utf-8")
+        tmp.replace(draft_path)
+
+    @app.get("/api/twin/diagram")
+    def diagram(p: Principal = Depends(require(Perm.READ))):
+        lay, src = draft()
+        live, _ = live_layout()
+        items = []
+        for iid, it in svc.items.items.items():
+            v = svc.items.views().get(iid)
+            items.append({"item_id": iid, "name": it["name"], "type": it["type_id"], "icon": it["icon"],
+                          "inputs": [{"role": r.role, "label": r.label, "unit": r.unit} for r in v.type.roles
+                                     if r.direction.value == "INPUT"] if v else []})
+        return {"layout": layout.canonical(lay), "source": src, "digest": layout.digest(lay),
+                "live_digest": layout.digest(live), "changes": layout.summary(live, lay),
+                "issues": layout.issues(lay, svc.items.items), "items": items, "readings": svc.readings()}
+
+    @app.get("/api/twin/frames")
+    def frames(after: float = -1.0, p: Principal = Depends(require(Perm.READ))):
+        with svc.lock:
+            return [f for f in svc.frames if f["sim_s"] > after and f["run_id"] == svc.run_id]
+
+    @app.put("/api/twin/layout")
+    def put_layout(body: LayoutIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        try:
+            lay = layout.parse(body.layout)
+        except ValueError as e:
+            raise HTTPException(422, f"the layout is not valid: {e}")
+        save_draft(lay)
+        hist.event("TWIN_LAYOUT_SAVED", {"digest": layout.digest(lay), "symbols": len(lay.nodes)}, actor=p.username)
+        return {"digest": layout.digest(lay), "issues": layout.issues(lay, svc.items.items)}
+
+    @app.post("/api/twin/layout/start-from")
+    def start_from(body: LayoutStartIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        lay = live_layout()[0] if body.source == "live" else layout.default_layout()
+        save_draft(lay)
+        hist.event("TWIN_LAYOUT_RESET", {"source": body.source}, actor=p.username)
+        return {"digest": layout.digest(lay)}
+
+    @app.post("/api/twin/layout/send")
+    def send_layout(body: SendLayoutIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        lay, _ = draft()
+        live, _ = live_layout()
+        if layout.digest(lay) == layout.digest(live):
+            raise HTTPException(409, "the twin's layout is the same as the real system's: nothing to send")
+        try:
+            r = layout.write_proposal(feed_dir, lay, by=p.username, note=body.note, twin_run=svc.run_id)
+        except OSError as e:
+            raise HTTPException(409, f"could not write the proposal: {e}")
+        hist.event("TWIN_LAYOUT_SENT", {"digest": r["digest"]}, actor=p.username)
+        return r
 
     @app.get("/api/twin/events")
     def events(p: Principal = Depends(require(Perm.READ))):

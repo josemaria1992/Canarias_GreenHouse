@@ -59,6 +59,11 @@ class Body(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class LayoutChoiceIn(Body):
+    digest: str = Field(pattern="^[0-9a-f]{64}$")
+    note: str = Field(default="", max_length=500)
+
+
 class LoginIn(Body):
     username: str = Field(max_length=32)
     password: str = Field(max_length=256)
@@ -812,11 +817,14 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             return None
         try:
             return twin_feed.publish_snapshot(feed_dir, cfg=cfg, equipment=equipment, programs=programs, hist=hist,
-                                              software_version=__version__)
+                                              software_version=__version__,
+                                              layout=layout_mod.canonical(layouts.current()[0]))
         except OSError as e:
             hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
             return None
     app.state.publish_snapshot = publish
+    from .. import layout as layout_mod
+    layouts = layout_mod.LiveLayouts(state_dir / "layout")
     handoff_key = None
     if feed_dir is not None:
         with contextlib.suppress(OSError):
@@ -845,6 +853,74 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             raise HTTPException(409, "the twin is not configured on this controller")
         hist.event("TWIN_HANDOFF", {}, actor=p.username)
         return {"url": twin_url, "ticket": twin_feed.issue_ticket(handoff_key, p.username)}
+
+    # ------------------------------------------------------------------ the installation diagram (0.5.6)
+    def can_accept_layout(p: Principal) -> bool:
+        # owner decision 2026-10-24: administrators, and operators with commissioning
+        return p.can(Perm.EQUIPMENT_EDIT) and p.has_commissioning
+
+    def live_readings() -> dict:
+        from ..equipment.definitions import ItemBody, TypeBody
+        from ..programs.engine import ItemView
+        types = {(t["type_id"], t["version"]): TypeBody.model_validate(t["body"]) for t in equipment.types()}
+        binds = equipment.bindings()
+        views = {}
+        for it in equipment.items(include_retired=False):
+            tb = types.get((it["type_id"], it["type_version"]))
+            if tb is None:
+                continue
+            mine = {r: b for (iid, r), b in binds.items() if iid == it["item_id"]}
+            views[it["item_id"]] = ItemView(it["item_id"], it["name"], tb, ItemBody.model_validate(it["body"]),
+                                            {r: b["point"] for r, b in mine.items()},
+                                            {r: b["status"] == "VERIFIED" for r, b in mine.items()})
+        eng = app.state.live_engine
+        cmd = {}
+        if eng is not None:
+            with contextlib.suppress(Exception):
+                cmd = {iid: eng.engine.item_state(iid).get("commanded", False) for iid in views}
+        return layout_mod.item_readings(views, dict(_samples()), commanded=cmd)
+
+    @app.get("/api/layout")
+    def layout_view(p: Principal = Depends(require(Perm.READ))):
+        lay, meta = layouts.current()
+        items = {i["item_id"]: i for i in equipment.items(include_retired=False)}
+        props = []
+        if feed_dir is not None:
+            for r in layout_mod.read_proposals(feed_dir)[:10]:
+                if r["digest"] == meta.get("digest"):
+                    continue
+                new = layout_mod.parse(r["layout"])
+                props.append({k: r[k] for k in ("digest", "by", "note", "written_utc", "twin_run")}
+                             | {"changes": layout_mod.summary(lay, new), "issues": layout_mod.issues(new, items),
+                                "layout": r["layout"]})
+        prev = layouts.get(meta["previous"]) if meta.get("previous") else None
+        return {"layout": layout_mod.canonical(lay), "meta": meta, "readings": live_readings(),
+                "issues": layout_mod.issues(lay, items), "proposals": props, "can_accept": can_accept_layout(p),
+                "previous": meta.get("previous") if prev is not None else None}
+
+    def _layout_choice(p: Principal, lay, source: str, note: str) -> dict:
+        if not can_accept_layout(p):
+            raise HTTPException(403, "only administrators and operators with commissioning change the diagram")
+        r = layouts.accept(lay, p.username, source=source, note=note)
+        hist.event("LAYOUT_ACCEPTED", {"digest": r["digest"], "source": source, "previous": r["previous"], "note": note},
+                   actor=p.username)
+        publish()                                   # the twin sees the accepted layout at its next import
+        return r
+
+    @app.post("/api/layout/accept")
+    def layout_accept(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+        rec = next((r for r in (layout_mod.read_proposals(feed_dir) if feed_dir else []) if r["digest"] == body.digest), None)
+        if rec is None:
+            raise HTTPException(404, "no such proposal from the twin")
+        return _layout_choice(p, layout_mod.parse(rec["layout"]), f"twin run {rec.get('twin_run')} by {rec.get('by')}",
+                              body.note)
+
+    @app.post("/api/layout/restore")
+    def layout_restore(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+        lay = layouts.get(body.digest)
+        if lay is None:
+            raise HTTPException(404, "no accepted layout with this digest")
+        return _layout_choice(p, lay, "restored", body.note)
 
     @app.post("/api/twin-link/publish")
     def twin_publish(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

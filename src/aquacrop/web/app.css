@@ -314,3 +314,19 @@ textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; b
 .inline-msg.ok { color: var(--ok, #2a8); }
 .inline-msg.bad { color: var(--bad, #c33); }
 .role-text { border-left: 3px solid var(--line, #555); padding-left: 10px; margin-top: 8px; }
+/* 0.5.6 layout diagram: editor, timeline, planned symbols */
+.diagram .pipe-hit { stroke: transparent; stroke-width: 16; fill: none; pointer-events: stroke; }
+.diagram .pipe.hl { stroke: var(--focus); }
+.diagram .handle { fill: var(--focus); stroke: var(--bg); stroke-width: 2; cursor: grab; }
+.diagram .grid-line { fill: none; stroke: var(--line); stroke-width: .5; }
+.diagram.editing .hot { cursor: grab; }
+.diagram .planned, .diagram .eq.planned .body { stroke-dasharray: 6 4; opacity: .7; }
+.timeline-box { margin: 6px 0 10px; }
+.timeline { width: 100%; }
+.timeline-marks { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+button.link { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; cursor: pointer; min-height: 0; }
+.edit-bar { border: 1px dashed var(--line); padding: 6px 8px; margin: 6px 0 10px; }
+.side-panel .field { display: block; margin: 6px 0; }
+.side-panel .field input:not([type=checkbox]), .side-panel .field select { width: 100%; }
+.side-panel .row .field input { width: 80px; }
+.selected-card { border-color: var(--focus); }

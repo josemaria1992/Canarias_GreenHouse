@@ -142,3 +142,63 @@ def test_a_ticket_expires_after_a_minute(tmp_path):
     now[0] = 1000.0
     with pytest.raises(ValueError):
         chk.username(feed.issue_ticket(key, "x", now=1000.0))
+
+
+def test_the_default_layout_is_the_0_5_5_drawing_and_validates():
+    from aquacrop import layout
+    lay = layout.default_layout()
+    assert {"tank-main", "mp1", "mp2", "v-s1", "sector-2", "tank-sump"} <= {n.id for n in lay.nodes}
+    assert layout.digest(lay) == layout.digest(layout.parse(layout.canonical(lay)))
+    assert not any(layout.summary(lay, lay).values())
+    with pytest.raises(ValueError):
+        layout.parse(layout.canonical(lay) | {"nodes": [layout.canonical(lay)["nodes"][0]] * 2})
+
+
+def test_layout_is_edited_in_the_twin_and_accepted_on_the_real_system(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    frames_before = len(bus.write_frames())
+    h = login(twin, "bench1", TWIN_ORIGIN)
+    h["X-Runtime-Id"] = twin.get("/api/auth/session").json()["runtime_id"]
+    d = twin.get("/api/twin/diagram").json()
+    assert d["digest"] == d["live_digest"] and "p1" in d["readings"]
+    lay = d["layout"]
+    mp1 = next(n for n in lay["nodes"] if n["id"] == "mp1")
+    mp1.update(x=mp1["x"] + 40, item="p1")
+    lay["nodes"].append({"id": "new-valve", "kind": "valve", "x": 300, "y": 600, "label": "New valve", "planned": True})
+    r = twin.put("/api/twin/layout", json={"layout": lay}, headers=h)
+    assert r.status_code == 200 and r.json()["issues"] == []
+    bad = dict(lay, nodes=lay["nodes"] + [{"id": "x", "kind": "rocket", "x": 1, "y": 1}])
+    assert twin.put("/api/twin/layout", json={"layout": bad}, headers=h).status_code == 422
+    d = twin.get("/api/twin/diagram").json()
+    assert d["changes"]["added"] == ["New valve"] and d["changes"]["moved"] == ["Main pump 1"]
+    # the timeline records pictures of every item while the twin steps
+    twin.post("/api/twin/control", json={"action": "step", "steps": 4}, headers=h)
+    fr = twin.get("/api/twin/frames").json()
+    assert fr and "p1" in fr[-1]["items"] and twin.get(f"/api/twin/frames?after={fr[-1]['sim_s']}").json() == []
+    assert twin.post("/api/twin/layout/send", json={"note": "moved pump 1"}, headers=h).status_code == 200
+
+    lv = live.get("/api/layout").json()
+    assert lv["meta"]["source"] == "default" and len(lv["proposals"]) == 1
+    prop = lv["proposals"][0]
+    assert prop["note"] == "moved pump 1" and prop["changes"]["added"] == ["New valve"]
+    # only administrators and operators with commissioning accept
+    app.state.accounts.create_user("op1", "operator password 1", Role.OPERATOR)
+    PW["op1"] = "operator password 1"
+    for u in ("view1", "op1"):
+        hu = login(live, u, ORIGIN)
+        assert live.post("/api/layout/accept", json={"digest": prop["digest"]}, headers=hu).status_code == 403
+    hb = login(live, "bench1", ORIGIN)
+    r = live.post("/api/layout/accept", json={"digest": prop["digest"], "note": "ok"}, headers=hb)
+    assert r.status_code == 200, r.text
+    lv = live.get("/api/layout").json()
+    assert lv["meta"]["accepted_by"] == "bench1" and lv["proposals"] == [] and lv["previous"]
+    assert next(n for n in lv["layout"]["nodes"] if n["id"] == "mp1")["item"] == "p1"
+    assert "p1" in lv["readings"]
+    # the twin sees the accepted layout as the real system's
+    app.state.publish_snapshot()
+    d = twin.get("/api/twin/diagram").json()
+    assert d["digest"] == d["live_digest"]
+    # and the previous one can be restored
+    assert live.post("/api/layout/restore", json={"digest": lv["previous"]}, headers=hb).status_code == 200
+    assert live.get("/api/layout").json()["meta"]["source"] == "restored"
+    assert len(bus.write_frames()) == frames_before     # the diagram never writes to the real modules

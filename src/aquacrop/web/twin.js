@@ -56,6 +56,8 @@
   });
   $("logout").addEventListener("click", async () => { await api("POST", "api/auth/logout").catch(() => null); showLogin(); });
 
+  window.AqTwin = { h, api, can, tz: () => SIM_TZ() };
+
   // ---------------------------------------------------------------- pieces
   const SIM_TZ = () => (S.v && S.v.timezone) || "Europe/Stockholm";
   function simTime(iso) {
@@ -180,7 +182,9 @@
       if (v.runtime_id !== S.rid) S.rid = v.runtime_id;
       const keep = document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#main");
       if (keep) return;               // don't redraw under a field being typed in
-      $("main").replaceChildren(controls(v), modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
+      const D = window.AqTwinDiagram;
+      $("main").replaceChildren(controls(v), D.card(), modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
+      D.update(v);
     } catch (e) { /* shown by the next action */ }
     finally { S.busy = false; }
   }

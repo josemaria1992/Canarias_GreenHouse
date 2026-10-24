@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.6 (2026-10-24): the installation diagram in the twin (owner request)
+
+- The diagram is now data (a layout): symbols (tank, pump, valve, sensor, sector, box, text) with positions, and
+  pipes drawn as lines with corners. Each symbol can be linked to an equipment item, and a sensor or tank to one
+  of that item's inputs. The standard layout is the 0.5.5 Overview drawing, so nothing looks different until
+  someone changes it.
+- Digital twin, Installation diagram: the simulation is drawn live. Pumps and valves show Running/Open, Starting…,
+  Stopped/Closed, Fault or Not known from their item's feedback or output readback. Pipes show moving water
+  while their flow meter measures flow or their pump or valve runs. Selecting a symbol shows its item, its state
+  and every input.
+- A timeline under the diagram keeps the last 2,400 pictures of the twin run (four a second while it runs). You
+  can step back and forward, replay, or jump to the moments a program started or stopped. Replaying never
+  changes the simulation.
+- Edit layout (operators and administrators, in the twin only): drag symbols, add or remove symbols and pipes,
+  drag a pipe's corners, link symbols to equipment, mark a symbol as planned, then Save in the twin. You can
+  start again from the real system's layout or from the standard drawing. Removing a symbol changes the
+  drawing only: equipment is still created and retired on the Equipment page.
+- Send to the real system writes a proposal to the feed directory, with the list of what changed. On the real
+  dashboard's Overview, an administrator or an operator with commissioning can preview it and accept it. The
+  Overview then draws it read-only, with each symbol showing its linked item's readings. The previous layout
+  can be restored. A layout never changes equipment, channels or programs.
+
 ## 0.5.5 (2026-10-24): the twin inside the real dashboard (owner request)
 
 - The digital twin has moved to https://<controller>/twin/. Digital Twin in the real dashboard's menu opens it as

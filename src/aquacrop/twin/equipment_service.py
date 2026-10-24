@@ -17,9 +17,11 @@ import contextlib
 import json
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .. import layout
 from ..config.schema import InstallationConfig
 from ..control.commands import CommandService
 from ..domain.model import CommandOrigin, ControllerState, new_id
@@ -33,6 +35,7 @@ from . import feed
 SPEEDS = (1, 10, 60, 600, 3600)
 DT_S = 0.5
 MAX_STEPS_PER_S = 400
+FRAMES = 2400                     # timeline: ten minutes of wall time at four frames a second
 
 
 def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[str]) -> InstallationConfig:
@@ -102,6 +105,7 @@ class EquipmentTwinService:
         self.snapshot_utc: str | None = None
         self.run_id = new_id("twinrun")
         self.results: list[dict] = []
+        self.frames: deque[dict] = deque(maxlen=FRAMES)
         self.engine = self._engine()
 
     @property
@@ -208,6 +212,8 @@ class EquipmentTwinService:
             self.engine = self._engine()
             self.twin.step(0.0)
             self.engine.start()
+            self.frames.clear()
+            self._frame()
             self.hist.event("TWIN_RESET", {"start_utc": self.clock.start_utc.isoformat(), "run_id": self.run_id},
                             actor=actor)
 
@@ -216,12 +222,30 @@ class EquipmentTwinService:
             for _ in range(n):
                 self.twin.step(DT_S)
                 self.engine.tick()
+            if n:
+                self._frame()
+
+    # ------------------------------------------------------------------ the diagram and its timeline (0.5.6)
+    def readings(self) -> dict[str, dict]:
+        with self.lock:
+            views = self.items.views()
+            cmd = {iid: self.engine.item_state(iid).get("commanded", False) for iid in views}
+            return layout.item_readings(views, self.twin.samples(), commanded=cmd, faults=dict(self.twin.s.faults))
+
+    def _frame(self) -> None:
+        """One picture of every item for the timeline: recorded after each batch of steps (four a second while
+        running), so a faster simulation keeps proportionally more simulated time."""
+        ops = [{"program_id": o["program_id"], "version": o["version"], "step": o.get("step"), "state": o["state"]}
+               for o in self.engine.view()["ops"]]
+        self.frames.append({"sim_utc": self.clock.utc().isoformat(), "sim_s": round(self.clock.sim_s, 1),
+                            "run_id": self.run_id, "items": self.readings(), "ops": ops})
 
     def start(self) -> None:
         with contextlib.suppress(ValueError):          # no snapshot yet: the twin starts empty
             self.import_snapshot("system")
         self.twin.step(0.0)
         self.engine.start()
+        self._frame()
 
     async def run_forever(self) -> None:
         carry = 0.0
