@@ -66,7 +66,7 @@
         else if (D.sel) { D.sel = null; draw(); }
       } });
     const wrap = h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, svg), side(R, lay));
-    D.body.replaceChildren(
+    D.body.replaceChildren(...[
       h("div", { class: "row" }, h("h2", null, editing ? "Installation diagram — editing" : "Installation diagram"),
         editing ? h("span", { class: "pill warn" }, D.dirty ? "unsaved changes" : "editing") : (D.at != null ? h("span", { class: "pill warn" }, "REPLAY") : h("span", { class: "pill ok" }, "LIVE")),
         h("span", { class: "muted small" }, `Layout: ${D.data.source}.`)),
@@ -74,7 +74,7 @@
       wrap,
       editing ? null : L.legend(h),
       D.data.issues.length ? h("details", { class: "small" }, h("summary", null, `${D.data.issues.length} symbol(s) not matching the equipment`), h("ul", null, D.data.issues.map(x => h("li", null, x)))) : null,
-      editing ? null : layoutBar());
+      editing ? null : layoutBar()].filter(Boolean));   // replaceChildren would print a null
   }
 
   // ---------------------------------------------------------------- timeline

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 (2026-10-25): from the twin to the real system (owner request)
+
+- Digital twin, "Equipment and programs": add, change or retire equipment, assign channels, and save new
+  program versions in the twin. The twin runs the real system's copy with these changes applied, so it simulates
+  exactly what would be exported. Each change can be undone in the twin, and importing from the real system
+  again keeps them.
+- Send to the real system writes an export with every change, what it replaces on the real system, and the
+  proof: for every program version, the twin runs of exactly that body that ended DONE. A program without such
+  a run cannot be sent. Equipment that no program run used is marked "not exercised in the twin".
+- Real dashboard, Digital Twin page, "Changes from the twin": each export is shown field by field (now / from the
+  twin) for equipment and programs, with its channels, proof and conflicts. The Overview says when one is
+  waiting. An administrator or an operator with commissioning approves it. A note is required when some twin
+  runs did not end DONE. Approving applies it through the usual stores:
+  - equipment gets a new version;
+  - channels arrive as proposed, to be verified at the bench before a physical run;
+  - programs arrive as drafts with the twin proof recorded against them. Validating and activating them stays
+    the normal step.
+- Nothing is applied when the real system changed since the twin imported it: import in the twin and send again.
+  If one step fails, the steps already done are reversed.
+- Undo: the latest applied export can be undone while nothing it touched has changed since. Equipment gets its
+  previous version back (a retired item comes back with its channels as proposed), channels go back, and program
+  versions are retired. An active program version must be deactivated first. History is never deleted.
+
 ## 0.5.7 (2026-10-24): review fixes (Codex audit of 0.5.4)
 
 Outputs that could stay ON:

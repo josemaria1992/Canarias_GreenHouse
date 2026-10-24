@@ -860,6 +860,46 @@
     return svg;
   }
 
+  /** 0.6.0: equipment and programs exported from the twin, with their differences, proof and conflicts. An
+   * administrator or an operator with commissioning approves one; the latest approved one can be undone. */
+  async function twinChanges() {
+    const V = await api("GET", "/api/twin-changes");
+    const st = S.tc = S.tc || { msg: {} };
+    const say = (k, text, bad) => { st.msg[k] = { text, bad }; refresh(); };
+    const msg = k => st.msg[k] ? h("span", { class: st.msg[k].bad ? "error small" : "muted small", role: "status" }, st.msg[k].text) : null;
+    const send = async (k, path, body, ok) => { try { await api("POST", path, body); say(k, ok); } catch (e) { say(k, String(e.message || e), true); } };
+    const val = x => x == null ? "—" : typeof x === "object" ? JSON.stringify(x) : String(x);
+    const diffTable = d => d && d.length ? h("table", { class: "compact small" }, h("thead", null, h("tr", null, ["Field", "Now", "From the twin"].map(x => h("th", null, x)))),
+      h("tbody", null, d.map(r => h("tr", null, h("td", { class: "mono" }, r.field), h("td", null, val(r.before)), h("td", null, h("strong", null, val(r.after))))))) : null;
+    const opWord = { create: "New equipment", update: "Changed equipment", retire: "Retire equipment" };
+    const pend = V.pending.map(x => {
+      const note = h("input", { maxlength: 1000, placeholder: "note (needed when some twin runs failed)", "aria-label": "Approval note" });
+      return h("div", { class: "card" + (x.conflicts.length ? " bad" : "") },
+        h("h3", null, `From the twin, by ${x.by}, ${fmtTime(x.written_utc)}`), x.note ? h("p", null, x.note) : null,
+        x.conflicts.length ? h("div", { class: "warn" }, h("strong", null, "Cannot be applied: the real system changed since the twin imported it. Import in the twin and export again."),
+          h("ul", { class: "small" }, x.conflicts.map(c => h("li", null, c)))) : null,
+        x.items.map(i => h("div", null, h("strong", null, `${opWord[i.op]}: ${i.name} (${i.item_id})`), i.detail ? h("span", { class: "muted small" }, " " + i.detail) : null,
+          i.op !== "retire" ? h("div", { class: "small " + (i.exercised_by.length ? "muted" : "warn") }, i.exercised_by.length ? `Ran in the twin in ${i.exercised_by.join(", ")}` : "Not exercised by any program run in the twin") : null,
+          diffTable(i.diff))),
+        x.bindings.length ? h("div", null, h("strong", null, "Channels"), h("ul", { class: "small" }, x.bindings.map(b => h("li", null, `${b.item_id}.${b.role}: ${b.base_point || "no channel"} → ${b.point || "no channel"} (arrives as proposed; verify it at the bench)`)))) : null,
+        x.programs.map(p => h("div", null, h("strong", null, `Program ${p.name}: ${p.base_version ? "new version replacing v" + p.base_version : "new program"}`), " ",
+          p.passed ? pill(`TWIN PASSED (${p.runs.filter(r => r.result === "DONE").length} DONE${p.failed ? ", " + p.failed + " not DONE" : ""})`, p.failed ? "warn" : "ok") : pill("NO TWIN PROOF", "bad"),
+          diffTable(p.diff), !p.diff ? h("pre", { class: "small mono" }, JSON.stringify(p.body, null, 1)) : null)),
+        h("p", { class: "muted small" }, (x.meaning || "") + ". Programs arrive as drafts with this proof; validate and activate them on Programs and Operation as usual."),
+        V.can_approve ? h("div", { class: "row" }, note,
+          h("button", { disabled: x.conflicts.length > 0, onclick: () => send("ap-" + x.digest, "/api/twin-changes/approve", { digest: x.digest, note: note.value }, "applied") }, "Approve and apply"), msg("ap-" + x.digest))
+          : h("p", { class: "muted small" }, "An administrator, or an operator with commissioning, approves changes from the twin."));
+    });
+    const applied = V.applied.length ? h("details", { class: "card" }, h("summary", null, `Applied from the twin (${V.applied.length})`),
+      h("table", { class: "compact small" }, h("tbody", null, V.applied.map(a => h("tr", null, h("td", null, fmtTime(a.applied_utc)), h("td", null, `exported by ${a.by}, approved by ${a.approved_by}`),
+        h("td", null, a.summary), h("td", null, a.undone_utc ? `undone by ${a.undone_by}` : a.digest === V.undo_digest && V.can_approve
+          ? [h("button", { class: "small ghost", onclick: () => send("undo", "/api/twin-changes/undo", { digest: a.digest }, "undone") }, "Undo"), " ", msg("undo")] : ""))))))
+      : null;
+    return h("div", null, h("div", { class: "card" }, h("h2", null, "Changes from the twin"),
+      V.pending.length ? h("p", null, `${V.pending.length} waiting for approval.`) : h("p", { class: "muted" }, "Nothing waiting. Equipment and programs changed in the twin arrive here with their proof.")),
+      pend, applied);
+  }
+
   VIEWS.twin = async function () {
     if (isReal()) {                // 0.5.0: the equipment twin is its own service beside this one
       const L = await api("GET", "/api/twin-link");
@@ -874,7 +914,8 @@
         L.url ? h("p", { class: "row" }, h("button", { onclick: open }, "Open the digital twin"), msg)
           : h("p", { class: "warn" }, "The twin service is not configured on this controller yet."),
         L.feed ? h("button", { class: "ghost", disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/twin-link/publish", undefined, "equipment and programs sent to the twin") }, "Send equipment and programs to the twin now") : null,
-        h("p", { class: "muted small" }, "The twin opens with your login; it receives a copy of the equipment and programs every 30 seconds.")));
+        h("p", { class: "muted small" }, "The twin opens with your login; it receives a copy of the equipment and programs every 30 seconds.")),
+        await twinChanges());
     }
     if (isInst()) return instTwin();
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;

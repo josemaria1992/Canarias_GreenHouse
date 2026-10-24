@@ -103,6 +103,8 @@ class EquipmentTwinService:
         self.speed, self.running = 1, False
         self.effective_speed = 0.0
         self.snapshot_utc: str | None = None
+        self.snap: dict | None = None             # the last imported live snapshot, before the twin's changes
+        self.changes = None                       # TwinChanges (0.6.0), set by the app
         self.run_id = new_id("twinrun")
         self.store = SqlEngineStore(hist, self.store_id, session_id, key_prefix=self.run_id)
         self.results: list[dict] = []
@@ -150,7 +152,8 @@ class EquipmentTwinService:
         if snap is None:
             raise ValueError("no snapshot from the real system yet; open the dashboard of the real system once")
         with self.lock:
-            self.items.load(snap)
+            self.snap = snap
+            self.items.load(self.changes.overlay(snap) if self.changes is not None else snap)
             rebuilt = False
             if f"{snap['config_version']}-twin" != self.cfg.config_version:
                 self._rebuild(snap["config"], actor)  # modules changed on the real system: a controlled reset
@@ -264,6 +267,12 @@ class EquipmentTwinService:
                 self.engine.tick()
             if n:
                 self._frame()
+
+    def reload_items(self) -> None:
+        """After a change in the twin's change set: the twin runs the snapshot with the changes applied."""
+        with self.lock:
+            if self.snap is not None:
+                self.items.load(self.changes.overlay(self.snap) if self.changes is not None else self.snap)
 
     # ------------------------------------------------------------------ the diagram and its timeline (0.5.6)
     def readings(self) -> dict[str, dict]:

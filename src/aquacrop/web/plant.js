@@ -913,6 +913,7 @@
    * administrator, or an operator with commissioning, accepts one (or restores the previous layout). */
   async function hwDiagram() {
     const Lv = await api("GET", "/api/layout"), A = window.AqLayout;
+    const TC = await api("GET", "/api/twin-changes").catch(() => null);
     const st = S.lay = S.lay || { sel: null, preview: null, msg: {} };
     const prop = st.preview && Lv.proposals.find(x => x.digest === st.preview);
     const lay = prop ? prop.layout : Lv.layout;
@@ -945,6 +946,7 @@
     const m = Lv.meta;
     return h("div", { class: "card", id: "overview-layout" },
       h("div", { class: "row" }, h("h2", null, "Installation (read-only)"), prop ? h("span", { class: "pill warn" }, "PREVIEW of a proposal") : null),
+      TC && TC.pending.length ? h("p", { class: "warn" }, `${TC.pending.length} equipment and program change(s) from the twin wait for approval: `, h("a", { href: "#twin" }, "review them on the Digital Twin page")) : null,
       h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, svg), sidePanel),
       A.legend(h),
       h("p", { class: "muted small" }, m.source === "default" ? "Standard drawing. " : `Layout accepted by ${m.accepted_by} on ${fmtTime(m.accepted_utc)} (${m.source}). `,

@@ -251,3 +251,89 @@ def test_the_twin_starts_from_a_configuration_with_bench_tests_enabled(fake_bus)
     live = cfg.model_dump(mode="json", exclude_none=True) | {"bench_tests": {"enabled": True}}
     twin = twin_config(live, allowed_hosts=["127.0.0.1"], allowed_origins=[TWIN_ORIGIN])
     assert twin.profile.value == "SIMULATED" and not twin.bench_tests.enabled
+
+
+def _twin_h(twin, user):
+    h = login(twin, user, TWIN_ORIGIN)
+    return h | {"X-Runtime-Id": twin.get("/api/auth/session").json()["runtime_id"]}
+
+
+def test_equipment_and_programs_made_in_the_twin_are_exported_approved_and_undone(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    frames_before = len(bus.write_frames())
+    H = _twin_h(twin, "bench1")
+    ch = twin.get("/api/twin/changes").json()
+    pump_t = next(t for t in ch["types"] if t["type_id"] == "pump")
+    assert ch["preview"]["empty"]
+    # a new pump in the twin, on a free channel, and a program that runs it
+    r = twin.post("/api/twin/equipment/save", json={"item_id": "p2", "name": "Pump 2", "type_id": "pump",
+                                                    "type_version": pump_t["version"], "icon": "pump", "body": {}}, headers=H)
+    assert r.status_code == 200, r.text
+    assert twin.post("/api/twin/equipment/bind", json={"item_id": "p2", "role": "start", "point": "relay_A.DO1"},
+                     headers=H).status_code == 409                      # p1 already uses it
+    assert twin.post("/api/twin/equipment/bind", json={"item_id": "p2", "role": "start", "point": "relay_A.DO2"},
+                     headers=H).status_code == 200
+    assert "p2" in [i["item_id"] for i in twin.get("/api/twin").json()["items"]]
+    body = {"trigger": {"type": "MANUAL"}, "action": {"type": "RUN_FOR", "item": "p2", "duration_s": 10}}
+    r = twin.post("/api/twin/programs/draft", json={"program_id": "p2-test", "name": "Pump 2 test", "body": body}, headers=H)
+    assert r.status_code == 200 and r.json()["status"] == "VALIDATED", r.text
+    # no proof yet: the export is refused
+    r = twin.post("/api/twin/export", json={"note": ""}, headers=H)
+    assert r.status_code == 409 and "no run that ended DONE" in r.json()["detail"]
+    assert twin.post("/api/twin/programs/activate", json={"program_id": "p2-test", "version": 1}, headers=H).status_code == 200
+    twin.post("/api/twin/control", json={"action": "step", "steps": 2}, headers=H)
+    assert twin.post("/api/twin/recovery/approve", json={"target": "MANUAL"}, headers=H).status_code == 200
+    assert twin.post("/api/twin/run-now", json={"program_id": "p2-test"}, headers=H).status_code == 200
+    twin.post("/api/twin/control", json={"action": "step", "steps": 40}, headers=H)
+    pv = twin.get("/api/twin/changes").json()["preview"]
+    assert pv["missing"] == [] and pv["programs"][0]["passed"] and pv["items"][0]["exercised_by"] == ["p2-test v1"]
+    r = twin.post("/api/twin/export", json={"note": "second pump"}, headers=H)
+    assert r.status_code == 200, r.text
+    digest = r.json()["digest"]
+
+    # the real system lists it with its differences
+    v = live.get("/api/twin-changes", headers=hl).json()
+    pkg = v["pending"][0]
+    assert pkg["digest"] == digest and pkg["conflicts"] == [] and pkg["items"][0]["op"] == "create"
+    assert pkg["bindings"] == [{"item_id": "p2", "role": "start", "point": "relay_A.DO2", "base_point": None}]
+    app.state.accounts.create_user("op2", "operator password 2", Role.OPERATOR)
+    PW["op2"] = "operator password 2"
+    for u in ("view1", "op2"):
+        assert live.post("/api/twin-changes/approve", json={"digest": digest}, headers=login(live, u, ORIGIN)).status_code == 403
+    hb = login(live, "bench1", ORIGIN)
+    r = live.post("/api/twin-changes/approve", json={"digest": digest, "note": "ok"}, headers=hb)
+    assert r.status_code == 200, r.text
+    items = {i["item_id"]: i for i in live.get("/api/equipment", headers=hl).json()["items"]}
+    assert items["p2"]["status"] == "ACTIVE"
+    progs = {p["program_id"]: p for p in live.get("/api/programs", headers=hl).json()["programs"]}
+    assert progs["p2-test"]["status"] == "DRAFT" and progs["p2-test"]["simulation"]["passed"]
+    assert progs["p2-test"]["simulation"]["export"] == digest
+    assert live.post("/api/twin-changes/approve", json={"digest": digest}, headers=hb).status_code == 409   # once
+    v = live.get("/api/twin-changes", headers=hl).json()
+    assert v["pending"] == [] and v["undo_digest"] == digest
+    # undo: the item is retired again, the channel cleared, the program version retired
+    r = live.post("/api/twin-changes/undo", json={"digest": digest}, headers=hb)
+    assert r.status_code == 200 and r.json()["problems"] == [], r.text
+    items = {i["item_id"]: i for i in live.get("/api/equipment", headers=hl).json()["items"]}
+    assert items["p2"]["status"] == "RETIRED"
+    assert app.state.programs.get("p2-test", 1)["status"] == "RETIRED"
+    assert len(bus.write_frames()) == frames_before          # nothing reached the real modules
+
+
+def test_an_export_is_refused_when_the_real_system_changed_meanwhile(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    H = _twin_h(twin, "bench1")
+    ch = twin.get("/api/twin/changes").json()
+    p1 = next(i for i in ch["items"] if i["item_id"] == "p1")
+    assert twin.post("/api/twin/equipment/save", json={"item_id": "p1", "name": "Main pump", "type_id": p1["type_id"],
+                                                       "type_version": p1["type_version"], "icon": "pump", "body": p1["body"]},
+                     headers=H).status_code == 200
+    digest = twin.post("/api/twin/export", json={"note": ""}, headers=H).json()["digest"]
+    it = live.get("/api/equipment", headers=hl).json()["items"][0]
+    r = live.post("/api/equipment/items", json={"item_id": "p1", "name": "Pump one", "type_id": "pump", "icon": "pump",
+                                                "body": {}, "expected_version": it["version"]}, headers=hl)
+    assert r.status_code == 200, r.text
+    pkg = live.get("/api/twin-changes", headers=hl).json()["pending"][0]
+    assert pkg["conflicts"] and pkg["items"][0]["diff"][0]["field"] == "name"
+    r = live.post("/api/twin-changes/approve", json={"digest": digest}, headers=login(live, "admin1", ORIGIN))
+    assert r.status_code == 409 and "Import in the twin" in r.json()["detail"]

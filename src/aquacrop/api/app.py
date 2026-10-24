@@ -865,6 +865,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         # owner decision 2026-10-24: administrators, and operators with commissioning
         return p.can(Perm.EQUIPMENT_EDIT) and p.has_commissioning
 
+    from . import changes as changes_routes
+    changes_routes.register(app, require, equipment, programs, feed_dir, state_dir, hist, can_accept_layout, publish)
+
     def live_readings() -> dict:
         from ..equipment.definitions import ItemBody, TypeBody
         from ..programs.engine import ItemView

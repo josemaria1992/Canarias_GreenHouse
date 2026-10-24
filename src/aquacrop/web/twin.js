@@ -184,10 +184,12 @@
       if (keep) return;               // don't redraw under a field being typed in
       // the diagram card stays in the page (never detached), so a drag in the editor is not cut off by a redraw
       const D = window.AqTwinDiagram;
-      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), D.card(), h("div", { id: "t-rest" }));
+      const X = window.AqTwinChanges;
+      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), D.card(), h("div", { id: "t-rest" }), X.card());
       $("t-top").replaceChildren(controls(v));
       $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
       D.update(v);
+      X.update(v);
     } catch (e) { /* shown by the next action */ }
     finally { S.busy = false; }
   }

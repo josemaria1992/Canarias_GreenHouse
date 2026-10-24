@@ -172,7 +172,7 @@ class EquipmentStore:
         return hit[0]
 
     def save_item(self, actor: str, item_id: str, name: str, type_id: str, type_version: int | None, icon: str,
-                  body: dict, *, expected_version: int | None = None) -> dict:
+                  body: dict, *, expected_version: int | None = None, reactivate: bool = False) -> dict:
         self._check_id(item_id, "equipment id")
         name = (name or "").strip()
         if not 1 <= len(name) <= 80:
@@ -204,7 +204,7 @@ class EquipmentStore:
             if expected_version != cur:
                 raise EquipmentRefused(f"equipment {item_id} changed meanwhile (now v{cur}); reload and edit again"
                                        if cur else f"equipment {item_id} does not exist yet")
-            if cur is not None and self.item(item_id)["status"] == "RETIRED":
+            if cur is not None and self.item(item_id)["status"] == "RETIRED" and not reactivate:
                 raise EquipmentRefused(f"equipment {item_id} is retired")
             version = (cur or 0) + 1
             canon = ib.model_dump(mode="json")

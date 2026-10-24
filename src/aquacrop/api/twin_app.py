@@ -34,6 +34,7 @@ from ..programs.schedule import upcoming
 from ..programs.store import ProgramRefused
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret
 from ..twin import feed
+from ..twin.changes import ChangeRefused, TwinChanges, preview as changes_preview, program_items, write_export
 from ..twin.equipment_service import EquipmentTwinService, twin_config
 from .app import safe_validation_response
 
@@ -66,6 +67,35 @@ class LayoutStartIn(_B):
 
 class SendLayoutIn(_B):
     note: str = Field(default="", max_length=500)
+
+
+class ItemSaveIn(_B):
+    item_id: str = Field(max_length=48)
+    name: str = Field(max_length=80)
+    type_id: str = Field(max_length=48)
+    type_version: int = Field(ge=1)
+    icon: str = Field(max_length=24)
+    body: dict = Field(default_factory=dict)
+
+
+class ItemRefIn(_B):
+    item_id: str = Field(max_length=48)
+
+
+class BindIn(_B):
+    item_id: str = Field(max_length=48)
+    role: str = Field(max_length=48)
+    point: str | None = Field(default=None, max_length=64)
+
+
+class ProgramDraftIn(_B):
+    program_id: str = Field(max_length=48)
+    name: str = Field(max_length=80)
+    body: dict
+
+
+class ExportIn(_B):
+    note: str = Field(default="", max_length=1000)
 
 
 class ControlIn(_B):
@@ -132,6 +162,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     limiter = RateLimiter()
     tickets = feed.TicketCheck(feed_dir)
     svc = EquipmentTwinService(cfg, hist, session_id, feed_dir)
+    svc.changes = TwinChanges(state_dir / "changes.json")
     svc.sync_users(accounts)
     loopback = sec.loopback_http_cookie_exemption and bind_host in ("127.0.0.1", "localhost", "::1")
 
@@ -476,6 +507,110 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         except OSError as e:
             raise HTTPException(409, f"could not write the proposal: {e}")
         hist.event("TWIN_LAYOUT_SENT", {"digest": r["digest"]}, actor=p.username)
+        return r
+
+    # ------------------------------------------------------------------ changes for the real system (0.6.0)
+    def changed(fn, *a):
+        if svc.snap is None:
+            raise HTTPException(409, "no snapshot from the real system yet")
+        with svc.lock:
+            if any(o["state"] == "RUNNING" for o in svc.engine.view()["ops"]):
+                raise HTTPException(409, "a program is running in the twin: stop it before changing equipment")
+            try:
+                r = fn(*a)
+            except ChangeRefused as e:
+                raise HTTPException(409, str(e))
+            svc.reload_items()
+            return r
+
+    def users_of(item_id: str) -> list[str]:
+        out = []
+        for pid, (ver, body) in svc.programs.active(svc.store_id).items():
+            if item_id in program_items(body.model_dump(mode="json")):
+                out.append(f"{pid} v{ver}")
+        return out
+
+    @app.get("/api/twin/changes")
+    def changes_view(p: Principal = Depends(require(Perm.READ))):
+        snap = svc.snap or {"equipment": {"types": [], "items": []}, "bindings": [], "programs": []}
+        eff = svc.changes.overlay(snap) if svc.snap else snap
+        if svc.snap:
+            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results)
+        else:
+            pv = {"items": [], "bindings": [], "programs": [], "missing": [], "empty": True}
+        types = [{"type_id": t["type_id"], "version": t["version"], "name": t["name"], "status": t["status"],
+                  "default_icon": t["body"].get("default_icon", "generic"),
+                  "roles": [{"role": r["role"], "label": r["label"], "direction": r["direction"]}
+                            for r in t["body"]["roles"]]}
+                 for t in snap["equipment"]["types"] if t["status"] in ("ACTIVE", "SUPERSEDED")]
+        binds: dict[str, dict] = {}
+        for b in eff.get("bindings", []):
+            binds.setdefault(b["item_id"], {})[b["role"]] = b["point"]
+        doc = svc.changes.doc
+        items = [{k: i[k] for k in ("item_id", "name", "type_id", "type_version", "icon", "body", "status")}
+                 | {"bindings": binds.get(i["item_id"], {}),
+                    "changed": i["item_id"] in doc["items"] or i["item_id"] in doc["retire"]
+                    or any(k.startswith(i["item_id"] + ".") for k in doc["bindings"])}
+                 for i in eff["equipment"]["items"] if i["status"] != "RETIRED" or i["item_id"] in doc["retire"]]
+        return {"preview": pv, "types": types, "items": items, "points": sorted(str(x) for x in cfg.all_points()),
+                "snapshot_utc": svc.snapshot_utc}
+
+    @app.post("/api/twin/equipment/save")
+    def eq_save(body: ItemSaveIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        r = changed(svc.changes.save_item, svc.snap, cfg, body.item_id, body.name, body.type_id, body.type_version,
+                    body.icon, body.body)
+        hist.event("TWIN_EQUIPMENT_CHANGED", {"item": body.item_id}, actor=p.username)
+        return r
+
+    @app.post("/api/twin/equipment/retire")
+    def eq_retire(body: ItemRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        changed(svc.changes.retire_item, svc.snap, body.item_id, users_of(body.item_id))
+        hist.event("TWIN_EQUIPMENT_RETIRED", {"item": body.item_id}, actor=p.username)
+        return {"ok": True}
+
+    @app.post("/api/twin/equipment/bind")
+    def eq_bind(body: BindIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        changed(svc.changes.bind, svc.snap, cfg, body.item_id, body.role, body.point)
+        hist.event("TWIN_CHANNEL_CHANGED", {"item": body.item_id, "role": body.role, "point": body.point},
+                   actor=p.username)
+        return {"ok": True}
+
+    @app.post("/api/twin/equipment/revert")
+    def eq_revert(body: ItemRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        changed(svc.changes.revert, body.item_id)
+        return {"ok": True}
+
+    @app.post("/api/twin/changes/discard")
+    def changes_discard(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        changed(svc.changes.reset)
+        hist.event("TWIN_CHANGES_DISCARDED", {}, actor=p.username)
+        return {"ok": True}
+
+    @app.post("/api/twin/programs/draft")
+    def program_draft(body: ProgramDraftIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        have = [v for v in svc.programs.versions() if v["program_id"] == body.program_id]
+        draft_v = next((v["version"] for v in have if v["status"] == "DRAFT"), None)
+        v = refused(svc.programs.save_draft, p.username, body.program_id, body.name, body.body, version=draft_v)
+        try:
+            _validate_here(p.username, v["program_id"], v["version"])
+            issues = []
+        except ValueError as e:
+            issues = str(e).split("; ")
+        return refused(svc.programs.get, v["program_id"], v["version"]) | {"issues": issues}
+
+    @app.post("/api/twin/export")
+    def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        if svc.snap is None:
+            raise HTTPException(409, "no snapshot from the real system yet")
+        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results)
+        try:
+            r = write_export(feed_dir, pv, by=p.username, note=body.note, twin_run=svc.run_id,
+                             snapshot_utc=svc.snapshot_utc)
+        except ChangeRefused as e:
+            raise HTTPException(409, str(e))
+        except OSError as e:
+            raise HTTPException(409, f"could not write the export: {e}")
+        hist.event("TWIN_EXPORT_WRITTEN", r, actor=p.username)
         return r
 
     @app.get("/api/twin/events")
