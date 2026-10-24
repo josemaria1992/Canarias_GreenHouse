@@ -182,8 +182,11 @@
       if (v.runtime_id !== S.rid) S.rid = v.runtime_id;
       const keep = document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#main");
       if (keep) return;               // don't redraw under a field being typed in
+      // the diagram card stays in the page (never detached), so a drag in the editor is not cut off by a redraw
       const D = window.AqTwinDiagram;
-      $("main").replaceChildren(controls(v), D.card(), modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
+      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), D.card(), h("div", { id: "t-rest" }));
+      $("t-top").replaceChildren(controls(v));
+      $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
       D.update(v);
     } catch (e) { /* shown by the next action */ }
     finally { S.busy = false; }
