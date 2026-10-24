@@ -64,10 +64,17 @@ def test_simulation_routes_are_unavailable(hw, path):
         assert c.get(shared).status_code == 200, shared
 
 
-def test_admin_without_commissioning_cannot_arm(hw):
+def test_operator_without_commissioning_cannot_arm_but_an_admin_can(hw):
+    # owner decision 2026-10-24: administrators have every right, commissioning included
     app, c, bus, *_ = hw
-    h = login(c, "admin1")
+    h = login(c, "oper1")
     assert c.post("/api/bench/lease", json=arm_body(), headers=h).status_code == 403
+    c.post("/api/auth/logout", headers=h)
+    h = login(c, "admin1")
+    assert c.get("/api/auth/session").json()["commissioning"] is True
+    r = c.post("/api/bench/lease", json=arm_body(), headers=h)
+    assert r.status_code == 200, r.text
+    assert c.post("/api/bench/lease/revoke", json={}, headers=h).status_code == 200
     assert bus.write_frames() == []
 
 

@@ -301,3 +301,4 @@ textarea { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; b
 .inline-msg { font-size: 0.9em; margin-left: 8px; }
 .inline-msg.ok { color: var(--ok, #2a8); }
 .inline-msg.bad { color: var(--bad, #c33); }
+.role-text { border-left: 3px solid var(--line, #555); padding-left: 10px; margin-top: 8px; }

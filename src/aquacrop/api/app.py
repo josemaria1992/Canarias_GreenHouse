@@ -221,6 +221,10 @@ class UserUpdateIn(Body):
     disabled: bool | None = None
 
 
+class PasswordResetIn(Body):
+    new_password: str = Field(max_length=256)
+
+
 class RetentionConfirmIn(Body):
     cutoff_utc: str = Field(min_length=20, max_length=40)   # the cutoff shown by GET /api/retention
 
@@ -494,7 +498,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=secure, path="/",
                             max_age=sec.session_absolute_hours * 3600)
         hist.event("LOGIN", {"client": client}, actor=p.username)
-        return {"username": p.username, "role": p.role.value, "commissioning": p.commissioning,
+        return {"username": p.username, "role": p.role.value, "commissioning": p.has_commissioning,
                 "csrf_token": accounts.csrf_for(p.session_hash), "must_change_password": p.must_change_password}
 
     @app.post("/api/auth/logout")
@@ -508,7 +512,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/auth/session")
     async def session(p: Principal = Depends(require(Perm.READ))):
-        return {"username": p.username, "role": p.role.value, "commissioning": p.commissioning,
+        return {"username": p.username, "role": p.role.value, "commissioning": p.has_commissioning,
                 "csrf_token": accounts.csrf_for(p.session_hash), "must_change_password": p.must_change_password,
                 "permissions": [x.value for x in Perm if p.can(x)]}
 
@@ -1456,6 +1460,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         cur = [u for u in accounts.list_users() if u["username"] == username]
         if not cur:
             raise HTTPException(404, "unknown user")
+        if cur[0]["role"] == "admin" and (body.disabled or (body.role and body.role != Role.ADMIN)) \
+                and not _enabled_admins(exclude=username):
+            raise HTTPException(409, "the last administrator cannot be demoted or disabled")
         if body.role is not None or body.commissioning is not None:
             accounts.set_role(username, body.role or Role(cur[0]["role"]),
                               cur[0]["commissioning"] if body.commissioning is None else body.commissioning)
@@ -1466,6 +1473,45 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             svc.revoke(f"user changed by {p.username}", p.username)
         hist.event("USER_UPDATED", {"username": username} | body.model_dump(mode="json", exclude_none=True),
                    actor=p.username)
+        return {"ok": True}
+
+    def _enabled_admins(exclude: str | None = None) -> list[str]:
+        return [u["username"] for u in accounts.list_users()
+                if u["role"] == "admin" and not u["disabled"] and u["username"] != exclude]
+
+    @app.get("/api/users/roles")
+    def user_roles(p: Principal = Depends(require(Perm.READ))):
+        from ..security.auth import COMMISSIONING_TEXT, ROLE_TEXT
+        return {"roles": ROLE_TEXT, "commissioning": COMMISSIONING_TEXT}
+
+    @app.post("/api/users/{username}/password")
+    def reset_password(username: str, body: PasswordResetIn, p: Principal = Depends(require(Perm.USER_ADMIN))):
+        if not any(u["username"] == username for u in accounts.list_users()):
+            raise HTTPException(404, "unknown user")
+        if username == p.username:
+            raise HTTPException(409, "change your own password under Change my password")
+        try:
+            accounts.reset_password(username, body.new_password)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
+            svc.revoke(f"password reset by {p.username}", p.username)
+        hist.event("USER_PASSWORD_RESET", {"username": username}, actor=p.username)
+        return {"ok": True, "detail": f"{username} must choose a new password at the next login"}
+
+    @app.delete("/api/users/{username}")
+    def delete_user(username: str, p: Principal = Depends(require(Perm.USER_ADMIN))):
+        cur = [u for u in accounts.list_users() if u["username"] == username]
+        if not cur:
+            raise HTTPException(404, "unknown user")
+        if username == p.username:
+            raise HTTPException(409, "you cannot delete yourself")
+        if cur[0]["role"] == "admin" and not _enabled_admins(exclude=username):
+            raise HTTPException(409, "the last administrator cannot be deleted")
+        if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
+            svc.revoke(f"user deleted by {p.username}", p.username)
+        accounts.delete_user(username)
+        hist.event("USER_DELETED", {"username": username}, actor=p.username)
         return {"ok": True}
 
     @app.post("/api/users/{username}/revoke-sessions")

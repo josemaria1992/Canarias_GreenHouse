@@ -1477,22 +1477,72 @@
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.history.map(occRow)))));
   };
 
+  // ------------------------------------------------ users and roles (owner feedback 2026-10-24)
+  // Results and refusals appear next to the button that caused them; the chosen role's rights are shown below it.
+  const UMSG = {};
+  function umsg(key) { const m = UMSG[key]; return m ? h("span", { class: "inline-msg " + (m.bad ? "bad" : "ok"), role: "status" }, m.text) : null; }
+  async function uact(key, method, path, body, okText) {
+    try { await api(method, path, body); UMSG[key] = { text: okText }; S.settingsLoaded = false; refresh(); return true; }
+    catch (e) { UMSG[key] = { text: W.refusal(String(e.message || e)), bad: true }; S.settingsLoaded = false; refresh(); return false; }
+  }
+  function roleText(R, role, commissioning) {
+    const t = R.roles[role];
+    if (!t) return null;
+    return h("div", { class: "role-text" }, h("strong", null, `${t.title}: ${t.summary}`),
+      h("ul", { class: "small" }, t.can.map(x => h("li", null, "✓ " + x)), t.cannot.map(x => h("li", { class: "muted" }, "✗ " + x))),
+      role === "operator" ? h("p", { class: "small" }, commissioning ? "With Commissioning ticked: " + R.commissioning : "Commissioning is not ticked: this operator cannot work on the real modules.") : null,
+      role === "admin" ? h("p", { class: "small" }, R.commissioning) : null);
+  }
+  function usersCard(s, R) {
+    const me = S.user;
+    const rows = (s.users || []).map(x => {
+      const k = "u:" + x.username;
+      const role = h("select", { "aria-label": `Role of ${x.username}`, disabled: x.username === me }, ["viewer", "operator", "admin"].map(r => h("option", { value: r, selected: x.role === r }, R.roles[r].title)));
+      const cm = h("input", { type: "checkbox", checked: x.role === "admin" || !!x.commissioning, disabled: x.role !== "operator", "aria-label": `Commissioning for ${x.username}` });
+      const pw = h("input", { type: "password", placeholder: "temporary password (12+)", "aria-label": `New password for ${x.username}` });
+      const del = h("button", { class: "small danger", disabled: x.username === me, onclick: () => {
+        if (UMSG[k + ":del"]) { delete UMSG[k + ":del"]; uact(k, "DELETE", `/api/users/${x.username}`, undefined, "Deleted."); }
+        else { UMSG[k + ":del"] = true; UMSG[k] = { text: `Press Delete again to remove ${x.username}. Their name stays in the history.`, bad: true }; refresh(); }
+      } }, "Delete");
+      return h("tr", null, h("td", null, x.username, x.username === me ? " (you)" : ""),
+        h("td", null, role), h("td", null, cm),
+        h("td", null, x.disabled ? pill("disabled", "bad") : pill("active", "ok"), x.must_change_password ? " must change password" : ""),
+        h("td", null, h("div", { class: "row" },
+          h("button", { class: "small", disabled: x.username === me, onclick: () => uact(k, "POST", `/api/users/${x.username}`, { role: role.value, commissioning: role.value === "operator" ? cm.checked : role.value === "admin" }, "Saved.") }, "Save"),
+          h("button", { class: "small ghost", disabled: x.username === me, onclick: () => uact(k, "POST", `/api/users/${x.username}`, { disabled: !x.disabled }, x.disabled ? "Enabled." : "Disabled: their sessions ended.") }, x.disabled ? "Enable" : "Disable"),
+          pw, h("button", { class: "small ghost", disabled: x.username === me, onclick: () => uact(k, "POST", `/api/users/${x.username}/password`, { new_password: pw.value }, "Password reset: they choose a new one at the next login.") }, "Reset password"),
+          del, umsg(k))));
+    });
+    const u = h("input", { placeholder: "login name", "aria-label": "New login name" });
+    const p = h("input", { type: "password", placeholder: "first password (12+)", "aria-label": "First password" });
+    const r = h("select", { "aria-label": "Role of the new user" }, ["viewer", "operator", "admin"].map(x => h("option", { value: x, selected: x === (S.newRole || "operator") }, R.roles[x].title)));
+    const cm = h("input", { type: "checkbox", checked: !!S.newCommissioning, "aria-label": "Commissioning" });
+    const desc = h("div", null);
+    const show = () => {
+      S.newRole = r.value; S.newCommissioning = cm.checked;
+      cm.disabled = r.value !== "operator"; if (r.value === "admin") cm.checked = true; if (r.value === "viewer") cm.checked = false;
+      desc.replaceChildren(roleText(R, r.value, cm.checked));
+    };
+    r.addEventListener("change", show); cm.addEventListener("change", show); show();
+    return h("div", null,
+      h("table", { class: "compact" }, h("thead", null, h("tr", null, ["User", "Role", "Commissioning", "State", ""].map(x => h("th", null, x)))), h("tbody", null, rows)),
+      h("h3", null, "New user"),
+      h("div", { class: "row" }, u, p, h("label", null, "Role ", r), h("label", null, cm, " Commissioning"),
+        h("button", { class: "small", onclick: () => uact("new", "POST", "/api/users", { username: u.value, password: p.value, role: r.value, commissioning: r.value === "admin" || (r.value === "operator" && cm.checked) }, `${u.value} created: they choose their own password at the first login.`) }, "Create user"),
+        umsg("new")),
+      desc);
+  }
+
   // ------------------------------------------------ settings
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
     const [s, ret, bk, qu, off] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
       api("GET", "/api/backup").catch(() => null), api("GET", "/api/history/quarantine").catch(() => null),
       api("GET", "/api/offsite").catch(() => null)]), c = s.config;
+    const ROLES = await api("GET", "/api/users/roles");
     S.settingsLoaded = true;
     const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
-    const userForm = can("user_admin") ? (() => {
-      const u = h("input", { placeholder: "username" }), p = h("input", { type: "password", placeholder: "initial password (12+)" });
-      const r = h("select", null, ["viewer", "operator", "admin"].map(x => h("option", { value: x }, x)));
-      const cm = h("input", { type: "checkbox" });
-      return h("div", null, tbl(["User", "Role", "Commissioning", "Disabled", "Must change pw"], (s.users || []).map(x => [x.username, x.role, x.commissioning ? "yes" : "no", x.disabled ? "yes" : "no", x.must_change_password ? "yes" : "no"])),
-        h("div", { class: "row" }, u, p, r, h("label", null, h("span", null, "commissioning"), cm),
-          h("button", { class: "small", onclick: () => act("POST", "/api/users", { username: u.value, password: p.value, role: r.value, commissioning: cm.checked }, "user created") }, "Create user")));
-    })() : h("p", { class: "muted" }, "User administration requires the admin role.");
+    const userForm = can("user_admin") ? usersCard(s, ROLES) : h("p", { class: "muted" }, "Only an administrator manages users.");
     mount("v-settings",
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
@@ -1528,7 +1578,7 @@
       h("div", { class: "card" }, h("h2", null, "Virtual mapping (SIMULATED) / physical mapping"), tbl(["Point", "Signal", "Note"], c.virtual_mapping.map(m => [m.point, m.signal, m.note])),
         h("p", null, "Physical mapping: ", c.physical_mapping.length ? "" : "empty — no approved wiring or topology.")),
       h("div", { class: "card" }, h("h2", null, "Users and roles"), userForm,
-        h("p", { class: "muted" }, "Proposed role rights: viewer reads; operator commands simulation and acknowledges; admin manages accounts/config. Commissioning is a separate flag that additionally needs an isolated setup and an expiring server-side lease. Production assignments need owner approval.")),
+        h("p", { class: "muted small" }, "Viewer: looks only. Operator: runs the installation day to day. Administrator: every right. Commissioning (operators only; administrators always have it): work on the real modules at the bench.")),
       h("div", { class: "card" }, h("h2", null, "Change my password"), (() => {
         const o = h("input", { type: "password", placeholder: "current" }), n = h("input", { type: "password", placeholder: "new (12+)" });
         return h("div", { class: "row" }, o, n, h("button", { class: "small", onclick: async () => { const r = await act("POST", "/api/auth/password", { old_password: o.value, new_password: n.value }); if (r) showLogin(); } }, "Change"));

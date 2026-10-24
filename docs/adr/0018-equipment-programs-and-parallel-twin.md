@@ -64,3 +64,10 @@ of ADR-0014 are specific to the 80-point hydraulic model and stay unchanged.
   migrated after the usual verified backup.
 * A twin pass is a logic test on virtual modules with DEMO dynamics. It is never physical verification.
 * Relay outputs, the drive, pumps, valves and dosing stay out of physical scope.
+
+## Addendum (2026-10-24, 0.5.4): administrators have every right
+
+Owner decision: an administrator has every permission, commissioning included. The commissioning flag is an
+operator's additional right to work on the real modules. This supersedes ADR-0017's rule that an administrator
+without the flag cannot arm a bench lease. Every other gate (the lease's confirmation, allowlist, preflight and
+expiry; Normal modes; the bench-test allowlist) is unchanged.

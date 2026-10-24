@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 (2026-10-24): users and roles (owner feedback)
+
+- An administrator has every right, commissioning included (owner decision; supersedes ADR-0017's rule that an
+  administrator without the flag cannot arm a bench lease). The commissioning flag now matters for operators only.
+- Settings, Users and roles: each user has Save (role, commissioning), Disable or Enable, Reset password (a temporary
+  password the user must change at the next login) and Delete (pressed twice; the name stays in the history). The
+  last administrator cannot be deleted, demoted or disabled, and nobody can delete or demote themselves.
+- Creating a user shows only the chosen role's rights, in plain words, and what Commissioning means.
+
 ## 0.5.3 (2026-10-24): a simpler Add module wizard (owner feedback)
 
 - Start opens the adapter and reads the module at once. No confirmation phrase is typed: pressing Start is the

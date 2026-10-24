@@ -64,6 +64,37 @@ PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.A
                  Perm.EQUIPMENT_EDIT: Role.OPERATOR, Perm.EQUIPMENT_ACTIVATE: Role.ADMIN,
                  Perm.MODULE_SETUP: Role.OPERATOR}
 
+COMMISSIONING_PERMS = (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP)
+
+# What each role may do, shown when a user is created or changed. Owner decision 2026-10-24: an administrator
+# has every right, commissioning included; the commissioning flag matters for operators only.
+ROLE_TEXT = {
+    "viewer": {"title": "Viewer", "summary": "Looks, changes nothing.",
+               "can": ["See every page: overview, I/O board, equipment, programs, history, alarms and the digital twin",
+                       "Export history"],
+               "cannot": ["Change, start, stop or acknowledge anything"]},
+    "operator": {"title": "Operator", "summary": "Runs the installation day to day.",
+                 "can": ["Everything a viewer can",
+                         "Acknowledge alarms and reset process faults",
+                         "Switch the installation between AUTO and MANUAL, approve the restart checklist, choose "
+                         "between conflicting programs, run or stop a program by hand",
+                         "Create and edit equipment and program drafts, and validate them",
+                         "Use the digital twin: run it, inject faults, accept a twin result"],
+                 "cannot": ["Activate equipment types or programs on the real system",
+                            "Manage users, backups, retention or settings",
+                            "Work on the real modules, unless Commissioning is ticked"]},
+    "admin": {"title": "Administrator", "summary": "Every right, including commissioning.",
+              "can": ["Everything an operator can, and commissioning",
+                      "Activate and retire equipment types, activate programs",
+                      "Create, change, disable and delete users; reset their passwords",
+                      "Backups, retention, off-site copies and every other setting"],
+              "cannot": []},
+}
+COMMISSIONING_TEXT = ("Commissioning is the right to work on the real modules at the bench: switch real outputs during an "
+                      "armed test session, choose and verify which module channel each piece of equipment uses, prepare "
+                      "new modules with the Add module wizard, and start discovery scans. Give it to an operator who "
+                      "works at the bench. Administrators always have it.")
+
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library
 
@@ -76,8 +107,12 @@ class Principal:
     session_hash: str
     must_change_password: bool
 
+    @property
+    def has_commissioning(self) -> bool:
+        return self.commissioning or self.role == Role.ADMIN
+
     def can(self, perm: Perm) -> bool:
-        if perm in (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP) and not self.commissioning:
+        if perm in COMMISSIONING_PERMS and not self.has_commissioning:
             return False
         if self.must_change_password and perm != Perm.READ:
             return False
@@ -152,6 +187,22 @@ class Accounts:
                       wait=True)
         if disabled:
             self.revoke_user_sessions(username, "account disabled")
+
+    def delete_user(self, username: str) -> None:
+        """Remove an account. Its name stays in the history it wrote (events, commands, records)."""
+        def op(c):
+            c.execute("DELETE FROM auth_sessions WHERE username=?", (username,))
+            c.execute("DELETE FROM users WHERE username=?", (username,))
+        self.h.submit(op, wait=True)
+
+    def reset_password(self, username: str, new: str) -> None:
+        """An administrator sets a temporary password; the user must change it at the next login."""
+        validate_password(new, username)
+        ph = _ph.hash(new)
+        self.h.submit(lambda c: c.execute("UPDATE users SET password_hash=?, password_changed_utc=?, "
+                                          "must_change_password=1 WHERE username=?", (ph, utc_iso(), username)),
+                      wait=True)
+        self.revoke_user_sessions(username, "password reset by an administrator")
 
     def set_role(self, username: str, role: Role, commissioning: bool) -> None:
         self.h.submit(lambda c: c.execute("UPDATE users SET role=?, commissioning=? WHERE username=?",
