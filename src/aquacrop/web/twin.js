@@ -159,6 +159,8 @@
               !p.active ? h("button", { class: "small", disabled: !edit, onclick: () => act("POST", "api/twin/programs/activate", { program_id: p.program_id, version: p.version }, "active in the twin") }, "Activate in twin")
                 : h("button", { class: "small ghost", disabled: !edit, onclick: () => act("POST", "api/twin/programs/deactivate", { program_id: p.program_id, version: p.version }) }, "Deactivate"),
               p.active && t.type !== "CONTINUOUS" ? h("button", { class: "small", disabled: !run || v.engine.mode !== "MANUAL", title: "MANUAL mode only", onclick: () => act("POST", "api/twin/run-now", { program_id: p.program_id }, "started") }, "Run now") : null,
+              p.created_by !== "live-snapshot" ? twice("rm-" + p.program_id, "Remove from the twin", "Press again to remove it", "small ghost", !edit,
+                () => act("POST", "api/twin/programs/remove", { program_id: p.program_id }, "removed from the twin: it will not be sent")) : null,
               runs.some(r => r.result === "DONE") ? (() => {
                 const failed = runs.some(r => r.result !== "DONE");
                 const note = failed ? h("input", { class: "small", maxlength: 500, placeholder: "why accept although some runs failed", "aria-label": "Reason" }) : null;

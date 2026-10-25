@@ -100,6 +100,10 @@ class ProgramDraftIn(_B):
     body: dict
 
 
+class ProgramIdIn(_B):
+    program_id: str = Field(max_length=48)
+
+
 class ExportIn(_B):
     note: str = Field(default="", max_length=1000)
 
@@ -347,6 +351,8 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         active = svc.programs.active(svc.store_id)
         out = []
         for v in svc.programs.versions():
+            if v["status"] == "RETIRED":
+                continue                               # removed from the twin (0.6.9)
             a = active.get(v["program_id"])
             entry = {k: v[k] for k in ("program_id", "version", "status", "name", "digest", "body")} | {
                 "active": bool(a and a[0] == v["version"]), "created_by": v["created_by"]}
@@ -702,6 +708,28 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         save_draft(lay)
         hist.event("TWIN_STARTER", {"items": made, "links": linked}, actor=p.username)
         return {"created": made, "skipped": len(st.parts()) - len(made), "links": linked}
+
+    @app.post("/api/twin/programs/remove")
+    def program_remove(body: ProgramIdIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Remove the versions of a program made in the twin, so they are not sent to the real system (0.6.9).
+        The real system's versions are untouched; history keeps the removed versions as RETIRED."""
+        with svc.lock:
+            if any(o["program_id"] == body.program_id and o["state"] == "RUNNING" for o in svc.engine.view()["ops"]):
+                raise HTTPException(409, "the program is running in the twin: stop it first")
+            mine = [v for v in svc.programs.versions() if v["program_id"] == body.program_id
+                    and v["created_by"] != "live-snapshot" and v["status"] != "RETIRED"]
+            if not mine:
+                raise HTTPException(409, "only program versions made in the twin can be removed here")
+            if body.program_id in svc.programs.active(svc.store_id):
+                refused(svc.programs.deactivate, p.username, svc.store_id, body.program_id)
+            now = datetime.now(timezone.utc).isoformat()
+            for v in mine:
+                hist.submit(lambda c, v=v: c.execute(
+                    "UPDATE programs SET status='RETIRED', updated_utc=? WHERE program_id=? AND version=?",
+                    (now, v["program_id"], v["version"])), wait=True)
+        hist.event("TWIN_PROGRAM_REMOVED", {"program": body.program_id, "versions": [v["version"] for v in mine]},
+                   actor=p.username)
+        return {"removed": [v["version"] for v in mine]}
 
     @app.post("/api/twin/export")
     def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

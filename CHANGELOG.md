@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.9 (2026-10-25): remove a program from the twin
+
+- Digital twin, Programs: "Remove from the twin" (press twice) removes the versions of a program made in the twin.
+  They are deactivated in the twin and are not sent to the real system. The real system's own versions are
+  never touched, and history keeps the removed versions as RETIRED. A practice program no longer blocks an
+  export for lack of proof.
+
 ## 0.6.8 (2026-10-25): a lighter twin page
 
 - The twin page's requests are cheaper:

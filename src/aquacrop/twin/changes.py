@@ -216,7 +216,7 @@ def twin_programs(snap: dict, versions: list[dict]) -> list[dict]:
     live_digests = {(p["program_id"], p["digest"]) for p in snap.get("programs", [])}
     mine: dict[str, dict] = {}
     for v in versions:
-        if v["created_by"] == "live-snapshot" or (v["program_id"], v["digest"]) in live_digests:
+        if v["created_by"] == "live-snapshot" or v["status"] == "RETIRED"                 or (v["program_id"], v["digest"]) in live_digests:
             continue
         if v["program_id"] not in mine or mine[v["program_id"]]["version"] < v["version"]:
             mine[v["program_id"]] = v

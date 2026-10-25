@@ -412,3 +412,19 @@ def test_twin_water_fills_tanks_through_open_valves_and_pumps_move_it():
     before = w.state["tanks"]["tank-b"]["pct"]
     w.step(1.0, "d2", doc, lambda it: False, lambda it: 20.0)
     assert w.state["tanks"]["tank-b"]["pct"] == before          # resized: same percentage
+
+
+def test_a_program_made_in_the_twin_can_be_removed_so_it_is_not_sent(live_and_twin):
+    twin = live_and_twin[3]
+    H = _twin_h(twin, "bench1")
+    body = {"trigger": {"type": "MANUAL"}, "action": {"type": "RUN_FOR", "item": "p1", "duration_s": 10}}
+    assert twin.post("/api/twin/programs/draft", json={"program_id": "tryout", "name": "Try", "body": body},
+                     headers=H).status_code == 200
+    assert twin.post("/api/twin/programs/activate", json={"program_id": "tryout", "version": 1}, headers=H).status_code == 200
+    assert [p["program_id"] for p in twin.get("/api/twin/changes").json()["preview"]["programs"]] == ["tryout"]
+    r = twin.post("/api/twin/programs/remove", json={"program_id": "tryout"}, headers=H)
+    assert r.status_code == 200 and r.json()["removed"] == [1]
+    assert twin.get("/api/twin/changes").json()["preview"]["programs"] == []
+    assert "tryout" not in [p["program_id"] for p in twin.get("/api/twin").json()["programs"]]
+    # the real system's program (imported) cannot be removed here
+    assert twin.post("/api/twin/programs/remove", json={"program_id": "fill"}, headers=H).status_code == 409
