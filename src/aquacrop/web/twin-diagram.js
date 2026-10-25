@@ -7,7 +7,7 @@
   const T = window.AqTwin, L = window.AqLayout, { h, api, can } = T;
   const D = { card: null, body: null, data: null, frames: [], runId: null, at: null, playing: null, edit: null,
     sel: null, pipeDraft: null, msg: {}, dragging: false, lastFetch: 0, diagEl: null };
-  const KINDS = [["tank", "Tank"], ["pump", "Pump"], ["valve", "Valve"], ["sensor", "Sensor"], ["sector", "Sector"], ["box", "Box"], ["label", "Text"]];
+  const KINDS = [["source", "Water source"], ["tank", "Tank"], ["pump", "Pump"], ["valve", "Valve"], ["sensor", "Sensor"], ["sector", "Sector"], ["box", "Box"], ["label", "Text"]];
   const clone = o => JSON.parse(JSON.stringify(o));
   const SNAP = 24;                                        // a pipe end this close to a symbol attaches to it
   const BOXES = ["tank", "sector", "box"];
@@ -71,8 +71,8 @@
   }
   /** The readings to draw: a replayed frame, or now. */
   function shown() {
-    if (D.at != null && D.frames[D.at]) return { R: D.frames[D.at].items, frame: D.frames[D.at] };
-    return { R: D.data.readings, frame: D.frames[D.frames.length - 1] || null };
+    if (D.at != null && D.frames[D.at]) return { R: D.frames[D.at].items, frame: D.frames[D.at], W: D.frames[D.at].water };
+    return { R: D.data.readings, frame: D.frames[D.frames.length - 1] || null, W: D.data.water };
   }
 
   // ---------------------------------------------------------------- the card
@@ -97,8 +97,8 @@
   function draw() {
     if (!D.data || !D.body) return;
     const editing = !!D.edit, lay = editing ? D.edit : D.data.layout;
-    const { R, frame } = editing ? { R: D.data.readings, frame: null } : shown();
-    const svg = L.render(lay, R, {
+    const { R, frame, W } = editing ? { R: D.data.readings, frame: null, W: null } : shown();
+    const svg = L.render(lay, R, { water: W,
       edit: editing, selected: D.sel && D.sel.id,
       onSelect: (kind, id) => { D.sel = { kind, id }; draw(); },
       drawing: editing && !!D.pipeDraft,
@@ -123,7 +123,7 @@
           D.dirty = true; draw();
         } else if (D.sel) { D.sel = null; draw(); }
       } });
-    const wrap = h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, svg), side(R, lay));
+    const wrap = h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, svg), side(R, lay, W));
     D.body.replaceChildren(...[
       h("div", { class: "row" }, h("h2", null, editing ? "Installation diagram — editing" : "Installation diagram"),
         editing ? h("span", { class: "pill warn" }, D.dirty ? "unsaved changes" : "editing") : (D.at != null ? h("span", { class: "pill warn" }, "REPLAY") : h("span", { class: "pill ok" }, "LIVE")),
@@ -166,7 +166,7 @@
   function stop() { if (D.playing) { clearInterval(D.playing); D.playing = null; } }
 
   // ---------------------------------------------------------------- side panel
-  function side(R, lay) {
+  function side(R, lay, W) {
     if (!D.sel) return h("div", { class: "card side-panel" }, h("h3", null, "Nothing selected"),
       h("p", { class: "muted" }, D.edit ? "Drag a symbol to move it. Select a symbol or a pipe to change it, or add one above." : "Select a pump, valve, tank, sensor or pipe to see its state here."));
     if (D.sel.kind === "pipe") {
@@ -179,6 +179,19 @@
     const n = lay.nodes.find(q => q.id === D.sel.id);
     if (!n) return h("div");
     if (D.edit) return nodeForm(n);
+    if (n.kind === "tank" && W && W.tanks[n.id]) {          // the twin's simulated water: read and set the level
+      const t = W.tanks[n.id], pct = h("input", { type: "number", min: 0, max: 100, step: 5, class: "narrow-num", value: Math.round(t.pct), "aria-label": "Level in %" });
+      return h("div", { class: "card side-panel" }, h("h3", null, n.label || n.id),
+        h("dl", { class: "kv" }, h("dt", null, "Water (simulated)"), h("dd", null, `${Math.round(t.L)} of ${Math.round(t.capacity_L)} L (${t.pct} %)`),
+          h("dt", null, "In / out"), h("dd", null, `${t.in_L_min} / ${t.out_L_min} L/min`),
+          h("dt", null, "Level sensor"), h("dd", null, n.item ? itemName(n.item) : "not linked")),
+        h("div", { class: "row" }, h("label", { class: "small" }, "Set level ", pct, " %"),
+          h("button", { class: "small", disabled: !can("sim_command"), onclick: () => call("lvl", "POST", "api/twin/water/level", { node: n.id, pct: Number(pct.value) }, "level set").then(() => { D.lastFetch = 0; }) }, "Set"), msgEl("lvl")),
+        h("p", { class: "muted small" }, "Demo flows. Setting a level changes the simulation only."));
+    }
+    if (n.kind === "source") return h("div", { class: "card side-panel" }, h("h3", null, n.label || "Water source"),
+      h("p", null, `Gives ${n.flow_L_min || 60} L/min, shared between every place it reaches through open valves.`),
+      h("p", { class: "muted small" }, "Change its flow in Edit layout."));
     const r = n.item && R[n.item];
     const s = ["pump", "valve", "box", "sector"].includes(n.kind) ? L.eqState(R, n) : null;
     return h("div", { class: "card side-panel" }, h("h3", null, n.label || n.id),
@@ -246,7 +259,7 @@
       (it ? it.inputs : []).map(r => h("option", { value: r.role, selected: obj[key] === r.role }, `${r.label}${r.unit ? " (" + r.unit + ")" : ""}`)));
   }
   function nodeForm(n) {
-    const sized = ["tank", "sector", "box"].includes(n.kind), linked = n.kind !== "label";
+    const sized = ["tank", "sector", "box"].includes(n.kind), linked = !["label", "source"].includes(n.kind);
     return h("div", { class: "card side-panel" }, h("h3", null, `${KINDS.find(k => k[0] === n.kind)[1]}: ${n.label || n.id}`),
       field("Text", txt(n, "label")),
       ["sector", "box"].includes(n.kind) ? field("Second line", txt(n, "sub", 120)) : null,
@@ -257,6 +270,7 @@
       n.kind === "pump" ? field("Direction", h("select", { onchange: ev => { n.dir = ev.target.value; D.dirty = true; draw(); } }, ["right", "left", "down", "up"].map(d => h("option", { selected: n.dir === d }, d)))) : null,
       n.kind === "valve" ? h("label", { class: "small field" }, h("input", { type: "checkbox", checked: n.vertical, onchange: ev => { n.vertical = ev.target.checked; D.dirty = true; draw(); } }), " Vertical") : null,
       n.kind === "tank" ? [field("Capacity (L)", numIn(n, "capacity_L")), field("Full at (sensor reading)", numIn(n, "full_at"))] : null,
+      n.kind === "source" ? field("Flow (L/min)", numIn(n, "flow_L_min")) : null,
       h("div", { class: "row" }, field("x", numIn(n, "x")), field("y", numIn(n, "y")), sized ? [field("width", numIn(n, "w")), field("height", numIn(n, "h"))] : null),
       h("div", { class: "row" },
         h("button", { class: "small ghost", onclick: () => { const c = clone(n); c.id = newId(n.kind, D.edit.nodes); c.x += 20; c.y += 20; D.edit.nodes.push(c); D.sel = { kind: "node", id: c.id }; D.dirty = true; draw(); } }, "Duplicate"),

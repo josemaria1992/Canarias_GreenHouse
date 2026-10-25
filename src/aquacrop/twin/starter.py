@@ -96,6 +96,14 @@ def link_layout(lay: Layout, have: set[str]) -> tuple[Layout, int]:
     """Link the standard drawing's symbols and pipes to the starter's items that exist (by id). Symbols the
     owner removed or renamed are left alone; links already set are kept."""
     doc = lay.model_dump(mode="json")
+    ids = {n["id"] for n in doc["nodes"]}
+    if "mains" not in ids and any(p["id"] == "mains" for p in doc["pipes"]):      # the twin's water needs a source
+        start = next(p for p in doc["pipes"] if p["id"] == "mains")["points"][0]
+        doc["nodes"].append({"id": "mains", "kind": "source", "x": start[0], "y": start[1], "label": "Mains",
+                             "flow_L_min": 60})
+    for p in doc["pipes"]:                     # 0.5.6 drew the dosing pipes from below the tank's edge
+        if p["id"] in ("dose-a", "dose-b", "dose-acid") and not p.get("from_node") and p["points"][0][1] == 262:
+            p["points"][0] = [p["points"][0][0], 225]
     by_symbol = {sym: (p["item_id"], role) for p in parts() for sym, role in p["symbols"]}
     facts = InstallationFacts()
     n = 0
@@ -105,7 +113,7 @@ def link_layout(lay: Layout, have: set[str]) -> tuple[Layout, int]:
             node["item"], node["role"] = hit
             node["planned"] = False
             n += 1
-        if node["id"] in _TANK and not node.get("capacity_L"):
+        if node["id"] in _TANK and node.get("capacity_L") in (None, 100, 200, 1000):   # 0.5.6 placeholders
             node["capacity_L"] = facts.tank_capacity(_TANK[node["id"]])
     for pipe in doc["pipes"]:                       # ends touching a symbol are attached: they move with it
         if not pipe.get("from_node"):

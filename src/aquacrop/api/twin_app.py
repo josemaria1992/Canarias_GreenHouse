@@ -66,6 +66,11 @@ class LayoutStartIn(_B):
     source: str = Field(pattern="^(live|default)$")
 
 
+class WaterLevelIn(_B):
+    node: str = Field(max_length=48)
+    pct: float = Field(ge=0, le=100)
+
+
 class SendLayoutIn(_B):
     note: str = Field(default="", max_length=500)
 
@@ -461,6 +466,27 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         tmp.write_text(json.dumps(layout.canonical(lay), indent=1), encoding="utf-8")
         tmp.replace(draft_path)
 
+    _lay_cache: dict = {}
+
+    def layout_now():                       # the twin's water follows the twin's own drawing
+        try:
+            mt = draft_path.stat().st_mtime
+        except OSError:
+            mt = None
+        if _lay_cache.get("mt") != mt or "doc" not in _lay_cache:
+            lay = draft()[0]
+            _lay_cache.update(mt=mt, digest=layout.digest(lay), doc=layout.canonical(lay))
+        return _lay_cache["digest"], _lay_cache["doc"]
+    svc.layout_fn = layout_now
+
+    @app.post("/api/twin/water/level")
+    def water_level(body: WaterLevelIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
+        with svc.lock:
+            refused(svc.water.set_level, body.node, body.pct, layout_now()[1])
+            svc.step_water(0.0)
+        hist.event("TWIN_WATER_LEVEL", {"tank": body.node, "pct": body.pct}, actor=p.username)
+        return {"ok": True}
+
     @app.get("/api/twin/diagram")
     def diagram(p: Principal = Depends(require(Perm.READ))):
         lay, src = draft()
@@ -473,7 +499,8 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                                      if r.direction.value == "INPUT"] if v else []})
         return {"layout": layout.canonical(lay), "source": src, "digest": layout.digest(lay),
                 "live_digest": layout.digest(live), "changes": layout.summary(live, lay),
-                "issues": layout.issues(lay, svc.items.items), "items": items, "readings": svc.readings()}
+                "issues": layout.issues(lay, svc.items.items), "items": items, "readings": svc.readings(),
+                "water": svc.water.state}
 
     @app.get("/api/twin/frames")
     def frames(after: float = -1.0, p: Principal = Depends(require(Perm.READ))):

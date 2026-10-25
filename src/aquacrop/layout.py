@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 KIND = "AQUACROP_LAYOUT"
 PROPOSAL_PREFIX = "layout-"
-NodeKind = Literal["tank", "pump", "valve", "sensor", "sector", "box", "label"]
+NodeKind = Literal["tank", "pump", "valve", "sensor", "sector", "box", "label", "source"]
 
 
 class _B(BaseModel):
@@ -50,6 +50,7 @@ class Node(_B):
     capacity_L: float | None = Field(default=None, gt=0, le=1e7)
     full_at: float | None = Field(default=None, gt=0, le=1e6)  # tank: the sensor reading that means full (0.6.2)
     planned: bool = False                                   # drawn, but the equipment does not exist yet
+    flow_L_min: float | None = Field(default=None, gt=0, le=1e5)   # a water source's flow (twin water, 0.6.4)
 
 
 class Pipe(_B):
@@ -232,26 +233,29 @@ def read_proposals(feed_dir: Path) -> list[dict]:
 
 # ---------------------------------------------------------------------- the 0.5.5 drawing as data
 def default_layout() -> Layout:
+    from .twin.installation_params import InstallationFacts
+    cap = InstallationFacts().tank_capacity
     n: list[dict] = []
     p: list[dict] = []
     n.append({"id": "t-mains", "kind": "label", "x": 20, "y": 26, "label": "Mains water"})
+    n.append({"id": "mains", "kind": "source", "x": 20, "y": 40, "label": "Mains", "flow_L_min": 60})
     p.append({"id": "mains", "points": [(20, 40), (620, 40)]})
     p.append({"id": "fill-main", "points": [(620, 40), (620, 210)]})
     for s, name, x in (("a", "Fertiliser A", 60), ("b", "Fertiliser B", 200), ("acid", "Acid", 340)):
         c = x + 45
         tp = "TP acid" if s == "acid" else f"TP {s.upper()}"
         n += [{"id": f"v-fill-{s}", "kind": "valve", "x": c, "y": 80, "label": "water in", "vertical": True},
-              {"id": f"tank-{s}", "kind": "tank", "x": x, "y": 125, "w": 90, "h": 100, "label": name, "capacity_L": 100},
+              {"id": f"tank-{s}", "kind": "tank", "x": x, "y": 125, "w": 90, "h": 100, "label": name, "capacity_L": cap(s.upper())},
               {"id": f"lvl-{s}", "kind": "sensor", "x": x + 78, "y": 137, "tag": "L", "label": f"{name} level"},
               {"id": f"v-out-{s}", "kind": "valve", "x": c, "y": 290, "label": "outlet", "vertical": True},
               {"id": f"tp-{s}", "kind": "pump", "x": c, "y": 352, "label": tp, "dir": "down"},
               {"id": f"flow-tp-{s}", "kind": "sensor", "x": c + 22, "y": 416, "tag": "F", "label": f"{tp} flow"}]
         p += [{"id": f"fill-{s}", "points": [(c, 40), (c, 125)]},
-              {"id": f"dose-{s}", "points": [(c, 262), (c, 430), (500, 430)]}]
+              {"id": f"dose-{s}", "points": [(c, 225), (c, 430), (500, 430)]}]
     n.append({"id": "t-mixing", "kind": "label", "x": 20, "y": 470, "label": "No stirrer or air pump: mixing is not checked."})
     n += [{"id": "v-fill-main", "kind": "valve", "x": 620, "y": 128, "label": "water in", "vertical": True},
           {"id": "flow-fill-main", "kind": "sensor", "x": 642, "y": 180, "tag": "F", "label": "Main tank fill flow"},
-          {"id": "tank-main", "kind": "tank", "x": 500, "y": 210, "w": 160, "h": 240, "label": "Main tank", "capacity_L": 1000},
+          {"id": "tank-main", "kind": "tank", "x": 500, "y": 210, "w": 160, "h": 240, "label": "Main tank", "capacity_L": cap("MAIN")},
           {"id": "lvl-main", "kind": "sensor", "x": 508, "y": 232, "tag": "L", "label": "Main tank level"},
           {"id": "ph", "kind": "sensor", "x": 530, "y": 515, "tag": "pH", "label": "pH"},
           {"id": "ec", "kind": "sensor", "x": 580, "y": 515, "tag": "EC", "label": "EC"},
@@ -273,7 +277,7 @@ def default_layout() -> Layout:
         p += [{"id": f"s{j}", "points": [(893, ys), (930, ys)]},
               {"id": f"drain-s{j}", "points": [(1090, ys + 30), (1097, ys + 30), (1097, 600), (960, 600)]}]
     n += [{"id": "t-gravity", "kind": "label", "x": 975, "y": 592, "label": "by gravity, not measured"},
-          {"id": "tank-sump", "kind": "tank", "x": 860, "y": 560, "w": 100, "h": 80, "label": "Drainage tank", "capacity_L": 200},
+          {"id": "tank-sump", "kind": "tank", "x": 860, "y": 560, "w": 100, "h": 80, "label": "Drainage tank", "capacity_L": cap("SUMP")},
           {"id": "lvl-sump", "kind": "sensor", "x": 946, "y": 574, "tag": "L", "label": "Drainage tank level"},
           {"id": "rp1", "kind": "pump", "x": 770, "y": 620, "label": "Return pump 1", "dir": "left"},
           {"id": "rp2", "kind": "pump", "x": 670, "y": 620, "label": "Return pump 2", "dir": "left"},

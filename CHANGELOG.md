@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.4 (2026-10-25): water in the digital twin (owner request)
+
+- Water moves along the twin's drawing: a water source (new symbol; the mains) fills through open valves, running
+  pumps move water from tank to tank, and sectors drain part back by gravity. Tanks rise and fall; an empty tank
+  stops its pumps, and a full one takes nothing more. Flows are demo numbers.
+- Flow meters and level sensors in the drawing show the simulated values. Sensors with a channel and a scaling
+  also read them, so programs see them.
+- Select a tank to read its water and set its level. Real tank sizes come from the installation model.
+- The starter adds the mains source to existing drawings and starts the dosing pipes at their tanks.
+
 ## 0.6.3 (2026-10-25): the starter is all or nothing
 
 - "Create the installation's equipment" checks every name before creating anything. If an existing item already

@@ -109,6 +109,7 @@ class EquipmentTwin:
         self.backend = TwinBackend(cfg, self.s, clock, self.lock)
         self._samples: dict[str, Sample] = {}
         self.not_modelled: dict[str, str] = {}                    # point -> why
+        self.external: dict[str, float] = {}                     # item -> value from the twin's water (0.6.4)
 
     # ------------------------------------------------------------------ user inputs and faults
     def set_input(self, point: str, value) -> None:
@@ -195,7 +196,10 @@ class EquipmentTwin:
                     if p is None or r.purpose != Purpose.MEASUREMENT:
                         continue
                     beh = (it.body.simulation or it.type.simulation).behavior
-                    if iid in flows and beh in (SimBehavior.MANUAL_ANALOG, SimBehavior.NOT_MODELLED):
+                    if iid in self.external and beh in (SimBehavior.MANUAL_ANALOG, SimBehavior.NOT_MODELLED):
+                        values[p] = self._to_raw(it, r.role, self.external[iid])      # the twin's water
+                        self.not_modelled.pop(p, None)
+                    elif iid in flows and beh in (SimBehavior.MANUAL_ANALOG, SimBehavior.NOT_MODELLED):
                         values[p] = self._to_raw(it, r.role, flows[iid])
                         self.not_modelled.pop(p, None)
                     elif beh == SimBehavior.MANUAL_ANALOG and isinstance(values.get(p), (int, float)):

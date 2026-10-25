@@ -331,3 +331,5 @@ button.link { background: none; border: none; color: var(--accent); padding: 0; 
 .side-panel .row .field input { width: 80px; }
 .selected-card { border-color: var(--focus); }
 .diagram .joint { fill: var(--focus); stroke: var(--bg); stroke-width: 1.5; pointer-events: none; }
+.diagram .source { fill: var(--water); stroke: var(--ink); stroke-width: 1.2; }
+svg text.source-t { fill: #fff; font-size: 14px; }

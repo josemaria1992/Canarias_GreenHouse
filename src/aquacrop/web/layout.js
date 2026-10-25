@@ -50,11 +50,12 @@
     return "";
   }
 
+  const n0 = v => Math.round(v).toLocaleString("en-US").replace(/,/g, " ");
   let seq = 0;
   /** opts: { edit, selected, onSelect(kind, id), onMove(id, x, y), onPoint(pipeId, index, x, y), onCanvas(x, y) } */
   function render(lay, R, opts) {
     opts = opts || {};
-    const uid = "lay" + (++seq), sel = opts.selected;
+    const uid = "lay" + (++seq), sel = opts.selected, W = opts.water || null;   // W: the twin's simulated water
     const svg = document.createElementNS(NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${lay.width} ${lay.height}`);
     svg.setAttribute("class", "schematic diagram" + (opts.edit ? " editing" : ""));
@@ -108,7 +109,11 @@
     }
 
     // ---- pipes first, idle under moving
-    const pipes = lay.pipes.map(p => [p, pipeState(R, p)]).sort((a, b) => (a[1] ? 1 : 0) - (b[1] ? 1 : 0));
+    const wpipe = p => {                                 // with simulated water: moving where it moves, else asked
+      if (W.pipes[p.id] > 0) return "flow";
+      return p.item && eqState(R, { kind: "pump", item: p.item }).st === "up" ? "asked" : "";
+    };
+    const pipes = lay.pipes.map(p => [p, W ? wpipe(p) : pipeState(R, p)]).sort((a, b) => (a[1] ? 1 : 0) - (b[1] ? 1 : 0));
     for (const [p, st] of pipes) {
       const d = "M" + p.points.map(q => q.join(" ")).join(" L");
       const g = hot("pipe", p.id, `pipe ${p.id}${st === "flow" ? ", water moving" : ""}`, () => {
@@ -133,6 +138,26 @@
       let g;
       if (n.kind === "label") {
         g = hot("node", n.id, n.label, () => e("text", { x, y, class: n.label.length > 20 ? "small muted-t" : "th" }, n.label));
+      } else if (n.kind === "source") {
+        const q = W && n.id in (W.sources || {}) ? W.sources[n.id] : null;
+        g = hot("node", n.id, `${n.label || "Water source"}`, () => {
+          e("circle", { cx: x, cy: y, r: 12, class: "source hl" });
+          e("text", { x, y: y + 5, "text-anchor": "middle", class: "tagt source-t" }, "≈");
+          e("text", { x: x + 16, y: y - 8, class: "small" }, n.label || "Water source");
+          if (q != null) e("text", { x: x + 16, y: y + 16, class: "small flow-t" }, `${q} L/min`);
+        });
+      } else if (n.kind === "tank" && W && W.tanks[n.id]) {
+        const w = n.w || 100, hh = n.h || 100, t = W.tanks[n.id], f = Math.max(0, Math.min(1, t.pct / 100));
+        const trend = t.in_L_min - t.out_L_min;
+        g = hot("node", n.id, `${n.label}: ${n0(t.L)} of ${n0(t.capacity_L)} L (simulated)`, () => {
+          e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-bg" });
+          e("rect", { x: x + 2, y: y + 2 + (hh - 4) * (1 - f), width: w - 4, height: (hh - 4) * f, class: "water" });
+          e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-wall hl" });
+          e("text", { x: x + w / 2, y: y - 6, "text-anchor": "middle", class: "th" }, n.label);
+          e("text", { x: x + w / 2, y: y + hh + 14, "text-anchor": "middle", class: "val" }, `${n0(t.L)} / ${n0(t.capacity_L)} L · ${t.pct.toFixed(0)} %`);
+          if (Math.abs(trend) > 0.01) e("text", { x: x + w / 2, y: y + hh + 28, "text-anchor": "middle", class: "val trend-t" },
+            `${trend > 0 ? "▲" : "▼"} ${Math.abs(trend).toFixed(1)} L/min`);
+        });
       } else if (n.kind === "tank") {
         const w = n.w || 100, hh = n.h || 100, r = reading(R, n);
         g = hot("node", n.id, `${n.label}: ${r.txt}`, () => {
@@ -148,7 +173,8 @@
           e("text", { x: x + w / 2, y: y + hh + 14, "text-anchor": "middle", class: "val" }, n.item ? `level ${r.txt}` : r.none && !n.planned ? "level not linked" : r.txt);
         });
       } else if (n.kind === "sensor") {
-        const r = reading(R, n);
+        const ws = W && W.sensors[n.id];
+        const r = ws ? { ok: true, txt: `${ws.value} ${ws.unit}`, v: ws.value } : reading(R, n);
         g = hot("node", n.id, `${n.label || n.tag}: ${r.txt}`, () => {
           e("circle", { cx: x, cy: y, r: 11, class: "sensor hl " + (r.none ? "s-none" : r.ok ? "s-ok" : "s-old") });
           e("text", { x, y: y + 4, "text-anchor": "middle", class: "tagt" }, n.tag || "?");
@@ -177,13 +203,14 @@
           e("text", { x: lx, y: v ? y + 14 : n.kind === "pump" ? y + 44 : y + 23, "text-anchor": anchor, class: "small st-t " + s.cls }, s.word);
         });
       } else {                                          // sector or box
-        const w = n.w || 140, hh = n.h || 50, s = eqState(R, n), sector = n.kind === "sector";
+        const w = n.w || 140, hh = n.h || 50, sector = n.kind === "sector";
+        const wet = sector && W && W.sectors[n.id] > 0, s = wet ? { st: "on", cls: "st-on", word: "being watered" } : eqState(R, n);
         g = hot("node", n.id, `${n.label}: ${n.item ? s.word : n.sub}`, () => {
           e("rect", { x, y, width: w, height: hh, rx: 6, class: "box hl " + (sector ? "sector-box" + (s.st === "on" ? " watering" : "") : "eqbox " + s.cls) + (n.planned ? " planned" : "") });
           e("text", { x: x + w / 2, y: y + (sector ? 19 : 19), "text-anchor": "middle", class: sector ? "th" : "small" }, n.label);
           if (n.sub) e("text", { x: x + w / 2, y: y + 35, "text-anchor": "middle", class: "small" }, n.sub);
           e("text", { x: x + w / 2, y: y + (n.sub ? 53 : 36), "text-anchor": "middle", class: "small st-t " + (n.item ? s.cls : "muted-t") },
-            sector ? (n.item ? (s.st === "on" ? "being watered" : s.word) : "not linked") : s.word);
+            sector ? (wet ? `being watered · ${W.sectors[n.id]} L/min` : n.item ? (s.st === "on" ? "being watered" : s.word) : "not linked") : s.word);
         });
       }
       if (opts.edit && !opts.drawing) draggable(g, (dx, dy) => opts.onMove && opts.onMove(n.id, x + dx, y + dy));
@@ -195,7 +222,8 @@
     return h("div", { class: "muted small legend-box" },
       h("p", null, "Pumps and valves: ", sw("st-on", "Running / Open", "the equipment reports it"), " ", sw("st-move", "Starting… / Opening…", "asked for, not yet reported"),
         " ", sw("st-off", "Stopped / Closed", ""), " ", sw("st-fault", "Fault", ""), " ", sw("st-unk", "Not known", "no feedback, not linked, or its reading is old")),
-      h("p", null, "Pipes: moving water and arrows while the linked flow meter measures flow (or, without one, while the linked pump or valve reports running or open); dashed where it was asked for but not reported yet. Round tags are sensors (L level, F flow, P pressure, pH, EC, T temperature)."));
+      h("p", null, "In the digital twin, water is simulated along the drawing's pipes (demo flows): a water source fills through open valves, running pumps move water from tank to tank, sectors drain back by gravity. ",
+        "Pipes: moving water and arrows while the linked flow meter measures flow (or, without one, while the linked pump or valve reports running or open); dashed where it was asked for but not reported yet. Round tags are sensors (L level, F flow, P pressure, pH, EC, T temperature)."));
   }
   window.AqLayout = { render, legend, eqState, reading };
 })();

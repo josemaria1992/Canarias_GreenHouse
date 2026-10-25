@@ -30,6 +30,7 @@ from ..programs.definitions import digest as program_digest, parse
 from ..programs.engine import Clock, Engine, ItemView
 from ..programs.store import ProgramStore, SqlEngineStore
 from .equipment_twin import EquipmentTwin, SimClock
+from .water import Water
 from . import feed
 
 SPEEDS = (1, 10, 60, 600, 3600)
@@ -109,6 +110,8 @@ class EquipmentTwinService:
         self.store = SqlEngineStore(hist, self.store_id, session_id, key_prefix=self.run_id)
         self.results: list[dict] = []
         self.frames: deque[dict] = deque(maxlen=FRAMES)
+        self.water = Water()                      # 0.6.4: water along the drawing's pipes
+        self.layout_fn = None                     # () -> (digest, layout doc), set by the app
         self.loop_error: str | None = None
         self.engine = self._engine()
 
@@ -256,6 +259,7 @@ class EquipmentTwinService:
             self.twin.step(0.0)
             self.engine.start()
             self.frames.clear()
+            self.water.reset()
             self._frame()
             self.hist.event("TWIN_RESET", {"start_utc": self.clock.start_utc.isoformat(), "run_id": self.run_id},
                             actor=actor)
@@ -266,7 +270,39 @@ class EquipmentTwinService:
                 self.twin.step(DT_S)
                 self.engine.tick()
             if n:
+                self.step_water(n * DT_S)
                 self._frame()
+
+    def _item_on(self, iid: str) -> bool:
+        """A pump runs or a valve is open: its twin output is on and its start or travel time has passed."""
+        it = self.items.views().get(iid)
+        cp = it.command_point if it else None
+        if not cp:
+            return False                              # no channel: nothing can switch it in the twin
+        fault = self.twin.s.faults.get(iid)
+        if fault == "STUCK_ON":
+            return True
+        if fault == "NO_FLOW" or not self.twin.s.coils.get(cp):
+            return False
+        beh = it.body.simulation or it.type.simulation
+        return self.clock.sim_s - self.twin.s.on_since.get(cp, 0.0) >= beh.delay_s
+
+    def _item_rate(self, iid: str) -> float:
+        it = self.items.views().get(iid)
+        if it is None:
+            return 0.0
+        beh = it.body.simulation or it.type.simulation
+        return float(it.body.properties.get("rated_flow_l_min") or beh.demo_flow_L_min or 20.0)
+
+    def step_water(self, dt: float) -> None:
+        if self.layout_fn is None:
+            return
+        try:
+            digest, doc = self.layout_fn()
+            self.water.step(dt, digest, doc, self._item_on, self._item_rate)
+            self.twin.external = self.water.item_values()
+        except Exception as e:                       # a drawing being edited never stops the simulation
+            self.water.state["notes"] = [f"water not simulated: {e}"]
 
     def reload_items(self) -> None:
         """After a change in the twin's change set: the twin runs the snapshot with the changes applied."""
@@ -287,13 +323,15 @@ class EquipmentTwinService:
         ops = [{"program_id": o["program_id"], "version": o["version"], "step": o.get("step"), "state": o["state"]}
                for o in self.engine.view()["ops"]]
         self.frames.append({"sim_utc": self.clock.utc().isoformat(), "sim_s": round(self.clock.sim_s, 1),
-                            "run_id": self.run_id, "items": self.readings(), "ops": ops})
+                            "run_id": self.run_id, "items": self.readings(), "ops": ops,
+                            "water": self.water.state})
 
     def start(self) -> None:
         with contextlib.suppress(ValueError):          # no snapshot yet: the twin starts empty
             self.import_snapshot("system")
         self.twin.step(0.0)
         self.engine.start()
+        self.step_water(0.0)
         self._frame()
 
     async def run_forever(self) -> None:
