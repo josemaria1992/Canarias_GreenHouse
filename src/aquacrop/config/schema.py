@@ -382,6 +382,17 @@ class OffsiteBackupSettings(_Strict):
 SAFE_STATE_TRIGGERS = ("START", "STOP", "LEASE_END", "MODULE_RETURN")
 
 
+class BenchTestSettings(_Strict):
+    """Scheduled physical bench tests (ADR-0018 §9). Absent or disabled: no program can command a real output,
+    and a HARDWARE_READ_ONLY installation keeps its exact wire-write guarantees. Enabled: programs may switch the
+    listed IO 8CH transistor outputs, and only while a commissioning user's bench lease is armed and includes
+    them; the lease's expiry, revocation or a restart stops them. Relay (D) outputs and drives are never listed."""
+    enabled: bool = False
+    allowlist: list[str] = Field(default_factory=list)
+    approved_by: str | None = Field(default=None, max_length=80)     # who approved the test loads and wiring
+    loads: str | None = Field(default=None, max_length=500)          # what is wired, e.g. "LED board, 24 V, 10 mA"
+
+
 class SafeStateSettings(_Strict):
     """When the hardware service switches digital outputs OFF by itself (ADR-0017). OFF only, each coil that
     reads ON, with an FC01 readback; never ON, never a drive. Empty (the default) keeps the read-only rule
@@ -448,6 +459,7 @@ class InstallationConfig(_Strict):
     offsite_backup: OffsiteBackupSettings = OffsiteBackupSettings()
     security: SecuritySettings = SecuritySettings()
     safe_state: SafeStateSettings = SafeStateSettings()
+    bench_tests: BenchTestSettings = BenchTestSettings()
 
     @field_validator("twin", mode="before")
     @classmethod
@@ -494,6 +506,25 @@ class InstallationConfig(_Strict):
             errs.append(f"{self.profile.value} profile allows rtu buses only")
         if self.safe_state.outputs_off_on and self.profile != AccessPolicy.HARDWARE_READ_ONLY:
             errs.append("safe_state applies to a HARDWARE_READ_ONLY profile only (the simulation has no real outputs)")
+        bt = self.bench_tests
+        if bt.enabled:
+            if self.profile != AccessPolicy.HARDWARE_READ_ONLY:
+                errs.append("bench_tests apply to a HARDWARE_READ_ONLY installation only")
+            if "LEASE_END" not in self.safe_state.outputs_off_on:
+                errs.append("bench_tests need safe_state LEASE_END: outputs go OFF when a test session ends")
+            if not bt.allowlist:
+                errs.append("bench_tests need an allowlist of IO 8CH outputs")
+            if not bt.approved_by or not bt.loads:
+                errs.append("bench_tests need approved_by and loads (who approved which test loads)")
+            pts = {str(x): x for x in (p for d in self.devices for p in d.point_ids())}
+            for t in bt.allowlist:
+                pid = pts.get(t)
+                if pid is None or pid.kind.value != "DO":
+                    errs.append(f"bench_tests: {t} is not a configured output")
+                elif next(d for d in self.devices if d.device_uid == pid.device_uid).model != ModelId.WAVESHARE_IO_8CH:
+                    errs.append(f"bench_tests: {t} is not an IO 8CH transistor output (relay outputs stay deferred)")
+            if len(set(bt.allowlist)) != len(bt.allowlist):
+                errs.append("bench_tests: an output is listed twice")
         ports = [b.port for b in self.buses if b.port]
         if len(ports) != len(set(ports)):
             errs.append("two buses name the same serial port (one owner per bus)")

@@ -123,11 +123,24 @@
   function pill(text, cls) { return h("span", { class: "pill " + (cls || "") }, text); }
 
   // ---------------------------------------------------------------- API
+
+  // 0.6.11: a page left open across an upgrade reloads itself (once per version) to run the new code
+  const PAGE_VERSION = (document.querySelector('meta[name="aquacrop-version"]') || {}).content;
+  function checkVersion(r) {
+    const v = r.headers.get("X-AquaCrop-Version");
+    if (!v || !PAGE_VERSION || v === PAGE_VERSION) return;
+    let tried = null;
+    try { tried = sessionStorage.getItem("aquacrop-reloaded-for"); } catch (e) { /* storage blocked */ }
+    if (tried === v) return;                       // never loop if the page still does not match
+    try { sessionStorage.setItem("aquacrop-reloaded-for", v); } catch (e) { /* storage blocked */ }
+    location.reload();
+  }
   async function api(method, path, body) {
     const opts = { method, headers: {}, credentials: "same-origin" };
     if (method !== "GET") { opts.headers["X-CSRF-Token"] = S.csrf || ""; }
     if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
     const r = await fetch(path, opts);
+    checkVersion(r);
     if (r.status === 401) { showLogin(); throw new Error("not authenticated"); }
     const ct = r.headers.get("content-type") || "";
     const data = ct.includes("json") ? await r.json() : await r.text();
@@ -282,7 +295,6 @@
     const b = $("banner"); b.textContent = st.banner;
     b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
     const real = st.profile !== "SIMULATED";
-    document.querySelectorAll('#nav a[href="#twin"]').forEach(a => a.classList.toggle("hidden", real));
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
     // the developer I/O board is for the people who commission the modules: not for a viewer account
     $("nav-board").classList.toggle("hidden", !(can("sim_command") || can("process_control") || can("io_assign")));
@@ -861,8 +873,65 @@
     return svg;
   }
 
+  /** 0.6.0: equipment and programs exported from the twin, with their differences, proof and conflicts. An
+   * administrator or an operator with commissioning approves one; the latest approved one can be undone. */
+  async function twinChanges() {
+    const V = await api("GET", "/api/twin-changes");
+    const st = S.tc = S.tc || { msg: {} };
+    const say = (k, text, bad) => { st.msg[k] = { text, bad }; refresh(); };
+    const msg = k => st.msg[k] ? h("span", { class: st.msg[k].bad ? "error small" : "muted small", role: "status" }, st.msg[k].text) : null;
+    const send = async (k, path, body, ok) => { try { await api("POST", path, body); say(k, ok); } catch (e) { say(k, String(e.message || e), true); } };
+    const val = x => x == null ? "—" : typeof x === "object" ? JSON.stringify(x) : String(x);
+    const diffTable = d => d && d.length ? h("table", { class: "compact small" }, h("thead", null, h("tr", null, ["Field", "Now", "From the twin"].map(x => h("th", null, x)))),
+      h("tbody", null, d.map(r => h("tr", null, h("td", { class: "mono" }, r.field), h("td", null, val(r.before)), h("td", null, h("strong", null, val(r.after))))))) : null;
+    const opWord = { create: "New equipment", update: "Changed equipment", retire: "Retire equipment" };
+    const pend = V.pending.map(x => {
+      const note = h("input", { maxlength: 1000, placeholder: "note (needed when some twin runs failed)", "aria-label": "Approval note" });
+      return h("div", { class: "card" + (x.conflicts.length ? " bad" : "") },
+        h("h3", null, `From the twin, by ${x.by}, ${fmtTime(x.written_utc)}`), x.note ? h("p", null, x.note) : null,
+        x.conflicts.length ? h("div", { class: "warn" }, h("strong", null, "Cannot be applied: the real system changed since the twin imported it. Import in the twin and export again."),
+          h("ul", { class: "small" }, x.conflicts.map(c => h("li", null, c)))) : null,
+        x.items.map(i => h("div", null, h("strong", null, `${opWord[i.op]}: ${i.name} (${i.item_id})`), i.detail ? h("span", { class: "muted small" }, " " + i.detail) : null,
+          i.op !== "retire" ? h("div", { class: "small " + (i.exercised_by.length ? "muted" : "warn") }, i.exercised_by.length ? `Ran in the twin in ${i.exercised_by.join(", ")}` : "Not exercised by any program run in the twin") : null,
+          diffTable(i.diff))),
+        x.bindings.length ? h("div", null, h("strong", null, "Channels"), h("ul", { class: "small" }, x.bindings.map(b => h("li", null, `${b.item_id}.${b.role}: ${b.base_point || "no channel"} → ${b.point || "no channel"} (arrives as proposed; verify it at the bench)`)))) : null,
+        x.programs.map(p => h("div", null, h("strong", null, `Program ${p.name}: ${p.base_version ? "new version replacing v" + p.base_version : "new program"}`), " ",
+          p.passed ? pill(`TWIN PASSED (${p.runs.filter(r => r.result === "DONE").length} DONE${p.failed ? ", " + p.failed + " not DONE" : ""})`, p.failed ? "warn" : "ok") : pill("NO TWIN PROOF", "bad"),
+          diffTable(p.diff), !p.diff ? h("pre", { class: "small mono" }, JSON.stringify(p.body, null, 1)) : null)),
+        h("p", { class: "muted small" }, (x.meaning || "") + ". Programs arrive as drafts with this proof; validate and activate them on Programs and Operation as usual."),
+        V.can_approve ? h("div", { class: "row" }, note,
+          x.conflicts.length ? h("button", { class: "ghost", onclick: () => send("ap-" + x.digest, "/api/twin-changes/dismiss", { digest: x.digest, note: note.value }, "dismissed") }, "Dismiss (cannot be applied)")
+            : h("button", { onclick: () => send("ap-" + x.digest, "/api/twin-changes/approve", { digest: x.digest, note: note.value }, "applied") }, "Approve and apply"),
+          msg("ap-" + x.digest))
+          : h("p", { class: "muted small" }, "An administrator, or an operator with commissioning, approves changes from the twin."));
+    });
+    const applied = V.applied.length ? h("details", { class: "card" }, h("summary", null, `Applied from the twin (${V.applied.length})`),
+      h("table", { class: "compact small" }, h("tbody", null, V.applied.map(a => h("tr", null, h("td", null, fmtTime(a.applied_utc)), h("td", null, `exported by ${a.by}, approved by ${a.approved_by}`),
+        h("td", null, a.summary), h("td", null, a.undone_utc ? `undone by ${a.undone_by}` : a.digest === V.undo_digest && V.can_approve
+          ? [h("button", { class: "small ghost", onclick: () => send("undo", "/api/twin-changes/undo", { digest: a.digest }, "undone") }, "Undo"), " ", msg("undo")] : ""))))))
+      : null;
+    return h("div", null, h("div", { class: "card" }, h("h2", null, "Changes from the twin"),
+      V.pending.length ? h("p", null, `${V.pending.length} waiting for approval.`) : h("p", { class: "muted" }, "Nothing waiting. Equipment and programs changed in the twin arrive here with their proof.")),
+      pend, applied);
+  }
+
   VIEWS.twin = async function () {
-    if (isReal()) return mount("v-twin", h("div", { class: "card" }, "The digital twin is available in the simulation profile only."));
+    if (isReal()) {                // 0.5.0: the equipment twin is its own service beside this one
+      const L = await api("GET", "/api/twin-link");
+      const open = async () => {
+        try {
+          const t = await api("POST", "/api/twin-link/ticket");
+          location.assign(t.url + "#t=" + encodeURIComponent(t.ticket));
+        } catch (e) { msg.textContent = String(e.message || e); }
+      };
+      const msg = h("span", { class: "error" });
+      return mount("v-twin", h("div", { class: "card" }, h("h2", null, "Digital twin"), h("p", null, L.note),
+        L.url ? h("p", { class: "row" }, h("button", { onclick: open }, "Open the digital twin"), msg)
+          : h("p", { class: "warn" }, "The twin service is not configured on this controller yet."),
+        L.feed ? h("button", { class: "ghost", disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/twin-link/publish", undefined, "equipment and programs sent to the twin") }, "Send equipment and programs to the twin now") : null,
+        h("p", { class: "muted small" }, "The twin opens with your login; it receives a copy of the equipment and programs every 30 seconds.")),
+        await twinChanges());
+    }
     if (isInst()) return instTwin();
     const tw = await api("GET", "/api/twin"), sn = tw.snapshot, pl = sn.plant;
     if (!S.scenarios) S.scenarios = await api("GET", "/api/scenarios");
@@ -1470,22 +1539,72 @@
         h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, al.history.map(occRow)))));
   };
 
+  // ------------------------------------------------ users and roles (owner feedback 2026-10-24)
+  // Results and refusals appear next to the button that caused them; the chosen role's rights are shown below it.
+  const UMSG = {};
+  function umsg(key) { const m = UMSG[key]; return m ? h("span", { class: "inline-msg " + (m.bad ? "bad" : "ok"), role: "status" }, m.text) : null; }
+  async function uact(key, method, path, body, okText) {
+    try { await api(method, path, body); UMSG[key] = { text: okText }; S.settingsLoaded = false; refresh(); return true; }
+    catch (e) { UMSG[key] = { text: W.refusal(String(e.message || e)), bad: true }; S.settingsLoaded = false; refresh(); return false; }
+  }
+  function roleText(R, role, commissioning) {
+    const t = R.roles[role];
+    if (!t) return null;
+    return h("div", { class: "role-text" }, h("strong", null, `${t.title}: ${t.summary}`),
+      h("ul", { class: "small" }, t.can.map(x => h("li", null, "✓ " + x)), t.cannot.map(x => h("li", { class: "muted" }, "✗ " + x))),
+      role === "operator" ? h("p", { class: "small" }, commissioning ? "With Commissioning ticked: " + R.commissioning : "Commissioning is not ticked: this operator cannot work on the real modules.") : null,
+      role === "admin" ? h("p", { class: "small" }, R.commissioning) : null);
+  }
+  function usersCard(s, R) {
+    const me = S.user;
+    const rows = (s.users || []).map(x => {
+      const k = "u:" + x.username;
+      const role = h("select", { "aria-label": `Role of ${x.username}`, disabled: x.username === me }, ["viewer", "operator", "admin"].map(r => h("option", { value: r, selected: x.role === r }, R.roles[r].title)));
+      const cm = h("input", { type: "checkbox", checked: x.role === "admin" || !!x.commissioning, disabled: x.role !== "operator", "aria-label": `Commissioning for ${x.username}` });
+      const pw = h("input", { type: "password", placeholder: "temporary password (12+)", "aria-label": `New password for ${x.username}` });
+      const del = h("button", { class: "small danger", disabled: x.username === me, onclick: () => {
+        if (UMSG[k + ":del"]) { delete UMSG[k + ":del"]; uact(k, "DELETE", `/api/users/${x.username}`, undefined, "Deleted."); }
+        else { UMSG[k + ":del"] = true; UMSG[k] = { text: `Press Delete again to remove ${x.username}. Their name stays in the history.`, bad: true }; refresh(); }
+      } }, "Delete");
+      return h("tr", null, h("td", null, x.username, x.username === me ? " (you)" : ""),
+        h("td", null, role), h("td", null, cm),
+        h("td", null, x.disabled ? pill("disabled", "bad") : pill("active", "ok"), x.must_change_password ? " must change password" : ""),
+        h("td", null, h("div", { class: "row" },
+          h("button", { class: "small", disabled: x.username === me, onclick: () => uact(k, "POST", `/api/users/${x.username}`, { role: role.value, commissioning: role.value === "operator" ? cm.checked : role.value === "admin" }, "Saved.") }, "Save"),
+          h("button", { class: "small ghost", disabled: x.username === me, onclick: () => uact(k, "POST", `/api/users/${x.username}`, { disabled: !x.disabled }, x.disabled ? "Enabled." : "Disabled: their sessions ended.") }, x.disabled ? "Enable" : "Disable"),
+          pw, h("button", { class: "small ghost", disabled: x.username === me, onclick: () => uact(k, "POST", `/api/users/${x.username}/password`, { new_password: pw.value }, "Password reset: they choose a new one at the next login.") }, "Reset password"),
+          del, umsg(k))));
+    });
+    const u = h("input", { placeholder: "login name", "aria-label": "New login name" });
+    const p = h("input", { type: "password", placeholder: "first password (12+)", "aria-label": "First password" });
+    const r = h("select", { "aria-label": "Role of the new user" }, ["viewer", "operator", "admin"].map(x => h("option", { value: x, selected: x === (S.newRole || "operator") }, R.roles[x].title)));
+    const cm = h("input", { type: "checkbox", checked: !!S.newCommissioning, "aria-label": "Commissioning" });
+    const desc = h("div", null);
+    const show = () => {
+      S.newRole = r.value; S.newCommissioning = cm.checked;
+      cm.disabled = r.value !== "operator"; if (r.value === "admin") cm.checked = true; if (r.value === "viewer") cm.checked = false;
+      desc.replaceChildren(roleText(R, r.value, cm.checked));
+    };
+    r.addEventListener("change", show); cm.addEventListener("change", show); show();
+    return h("div", null,
+      h("table", { class: "compact" }, h("thead", null, h("tr", null, ["User", "Role", "Commissioning", "State", ""].map(x => h("th", null, x)))), h("tbody", null, rows)),
+      h("h3", null, "New user"),
+      h("div", { class: "row" }, u, p, h("label", null, "Role ", r), h("label", null, cm, " Commissioning"),
+        h("button", { class: "small", onclick: () => uact("new", "POST", "/api/users", { username: u.value, password: p.value, role: r.value, commissioning: r.value === "admin" || (r.value === "operator" && cm.checked) }, `${u.value} created: they choose their own password at the first login.`) }, "Create user"),
+        umsg("new")),
+      desc);
+  }
+
   // ------------------------------------------------ settings
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
     const [s, ret, bk, qu, off] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
       api("GET", "/api/backup").catch(() => null), api("GET", "/api/history/quarantine").catch(() => null),
       api("GET", "/api/offsite").catch(() => null)]), c = s.config;
+    const ROLES = await api("GET", "/api/users/roles");
     S.settingsLoaded = true;
     const tbl = (hdr, rows) => h("table", null, h("thead", null, h("tr", null, hdr.map(x => h("th", null, x)))), h("tbody", null, rows.map(r => h("tr", null, r.map(x => h("td", null, x == null ? "" : String(x)))))));
-    const userForm = can("user_admin") ? (() => {
-      const u = h("input", { placeholder: "username" }), p = h("input", { type: "password", placeholder: "initial password (12+)" });
-      const r = h("select", null, ["viewer", "operator", "admin"].map(x => h("option", { value: x }, x)));
-      const cm = h("input", { type: "checkbox" });
-      return h("div", null, tbl(["User", "Role", "Commissioning", "Disabled", "Must change pw"], (s.users || []).map(x => [x.username, x.role, x.commissioning ? "yes" : "no", x.disabled ? "yes" : "no", x.must_change_password ? "yes" : "no"])),
-        h("div", { class: "row" }, u, p, r, h("label", null, h("span", null, "commissioning"), cm),
-          h("button", { class: "small", onclick: () => act("POST", "/api/users", { username: u.value, password: p.value, role: r.value, commissioning: cm.checked }, "user created") }, "Create user")));
-    })() : h("p", { class: "muted" }, "User administration requires the admin role.");
+    const userForm = can("user_admin") ? usersCard(s, ROLES) : h("p", { class: "muted" }, "Only an administrator manages users.");
     mount("v-settings",
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
@@ -1521,7 +1640,7 @@
       h("div", { class: "card" }, h("h2", null, "Virtual mapping (SIMULATED) / physical mapping"), tbl(["Point", "Signal", "Note"], c.virtual_mapping.map(m => [m.point, m.signal, m.note])),
         h("p", null, "Physical mapping: ", c.physical_mapping.length ? "" : "empty — no approved wiring or topology.")),
       h("div", { class: "card" }, h("h2", null, "Users and roles"), userForm,
-        h("p", { class: "muted" }, "Proposed role rights: viewer reads; operator commands simulation and acknowledges; admin manages accounts/config. Commissioning is a separate flag that additionally needs an isolated setup and an expiring server-side lease. Production assignments need owner approval.")),
+        h("p", { class: "muted small" }, "Viewer: looks only. Operator: runs the installation day to day. Administrator: every right. Commissioning (operators only; administrators always have it): work on the real modules at the bench.")),
       h("div", { class: "card" }, h("h2", null, "Change my password"), (() => {
         const o = h("input", { type: "password", placeholder: "current" }), n = h("input", { type: "password", placeholder: "new (12+)" });
         return h("div", { class: "row" }, o, n, h("button", { class: "small", onclick: async () => { const r = await act("POST", "/api/auth/password", { old_password: o.value, new_password: n.value }); if (r) showLogin(); } }, "Change"));

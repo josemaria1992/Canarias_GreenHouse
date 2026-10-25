@@ -14,14 +14,12 @@ import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from importlib import resources
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,11 +35,11 @@ from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
+from . import pages
 from .service import SimulationService
 
 COOKIE = "aquacrop_session"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
-WEB_DIR = resources.files("aquacrop") / "web"
 # Bounded readers (ADR-0008, WAL): every user query ends in one short read transaction.
 AUDIT_EXPORT_MAX_ROWS = 200000
 ANALYTICS_MAX_DAYS = 31
@@ -57,6 +55,11 @@ def _is_loopback(host: str | None) -> bool:
 
 class Body(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class LayoutChoiceIn(Body):
+    digest: str = Field(pattern="^[0-9a-f]{64}$")
+    note: str = Field(default="", max_length=500)
 
 
 class LoginIn(Body):
@@ -221,6 +224,10 @@ class UserUpdateIn(Body):
     disabled: bool | None = None
 
 
+class PasswordResetIn(Body):
+    new_password: str = Field(max_length=256)
+
+
 class RetentionConfirmIn(Body):
     cutoff_utc: str = Field(min_length=20, max_length=40)   # the cutoff shown by GET /api/retention
 
@@ -239,6 +246,13 @@ class QuarantineReviewIn(Body):
     quarantine_id: str = Field(min_length=3, max_length=40, pattern="^q_[0-9a-f]{16}$")
     disposition: Literal["KEEP", "RELEASE"]
     reason: str = Field(min_length=3, max_length=500)
+
+
+def safe_validation_response(exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's 422 echoes the rejected input, which cannot be encoded when it is NaN or infinite (the server would
+    fail instead of refusing): answer with where and why only."""
+    return JSONResponse({"detail": [{k: e[k] for k in ("type", "loc", "msg") if k in e} for e in exc.errors()]},
+                        status_code=422)
 
 
 def _escape_csv(v):
@@ -309,13 +323,23 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         task = asyncio.create_task(svc.run_forever()) if is_sim else None
         if not is_sim:
             svc.start()
+            if app.state.live_engine is not None:
+                app.state.live_engine.start()      # comes up in RECOVERY: nothing runs until approved
         watcher = asyncio.create_task(watch_edges())
+
+        async def publish_twin_feed():           # the twin reads this snapshot; it never writes back here
+            while True:
+                with contextlib.suppress(Exception):
+                    await run_in_threadpool(app.state.publish_snapshot)
+                await asyncio.sleep(30)
+        feeder = asyncio.create_task(publish_twin_feed())
         hist.event("PROCESS_STARTED", {"session_id": session_id, "config_id": cfg.config_id,
                                        "profile": cfg.profile.value, "version": __version__}, actor="system")
         try:
             yield
         finally:
             watcher.cancel()
+            feeder.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watcher
             if task is not None:
@@ -323,6 +347,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
             else:
+                if app.state.live_engine is not None:
+                    await run_in_threadpool(app.state.live_engine.stop)
                 await run_in_threadpool(svc.stop)   # releases ports; sends nothing
             # Shutdown issues no output commands; it only records the event and closes storage.
             hist.event("PROCESS_STOPPING", {"session_id": session_id}, actor="system")
@@ -342,6 +368,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             return JSONResponse({"detail": "chunked bodies not accepted"}, status_code=411)
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers[pages.VERSION_HEADER] = __version__
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -361,7 +388,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         if request.url.path == "/api/recipes/draft":
             from ..control.recipes import field_errors
             return JSONResponse({"detail": _draft_problems(field_errors(exc.errors()))}, status_code=422)
-        return await request_validation_exception_handler(request, exc)
+        return safe_validation_response(exc)
 
     def _draft_problems(fields: list[dict]) -> dict:
         return {"message": f"{len(fields)} setting(s) need changing; each is shown beside its field", "fields": fields}
@@ -452,18 +479,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     # ------------------------------------------------------------------ static UI
     @app.get("/", include_in_schema=False)
     def index():
-        return Response((WEB_DIR / "index.html").read_bytes(), media_type="text/html; charset=utf-8")
+        return pages.page("index.html")
 
     @app.get("/static/{name}", include_in_schema=False)
-    def static(name: str):
-        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png"}
-        ext = Path(name).suffix
-        if "/" in name or ".." in name or ext not in allowed:
-            raise HTTPException(404)
-        f = WEB_DIR / name
-        if not f.is_file():
-            raise HTTPException(404)
-        return Response(f.read_bytes(), media_type=allowed[ext])
+    def static(name: str, request: Request):
+        return pages.static(name, request)
 
     # ------------------------------------------------------------------ auth routes
     @app.post("/api/auth/login")
@@ -482,7 +502,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=secure, path="/",
                             max_age=sec.session_absolute_hours * 3600)
         hist.event("LOGIN", {"client": client}, actor=p.username)
-        return {"username": p.username, "role": p.role.value, "commissioning": p.commissioning,
+        return {"username": p.username, "role": p.role.value, "commissioning": p.has_commissioning,
                 "csrf_token": accounts.csrf_for(p.session_hash), "must_change_password": p.must_change_password}
 
     @app.post("/api/auth/logout")
@@ -496,7 +516,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.get("/api/auth/session")
     async def session(p: Principal = Depends(require(Perm.READ))):
-        return {"username": p.username, "role": p.role.value, "commissioning": p.commissioning,
+        return {"username": p.username, "role": p.role.value, "commissioning": p.has_commissioning,
                 "csrf_token": accounts.csrf_for(p.session_hash), "must_change_password": p.must_change_password,
                 "permissions": [x.value for x in Perm if p.can(x)]}
 
@@ -760,6 +780,156 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             body, mt = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), "application/x-yaml"
         hist.event("IO_ASSIGNMENTS_EXPORTED", {"format": fmt, "counts": doc["counts"]}, actor=p.username)
         return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'})
+
+    # ------------------------------------------------------------------ equipment (0.5.0)
+    from ..equipment.store import EquipmentStore
+    from . import equipment as equipment_routes
+    equipment = EquipmentStore(hist, cfg, assignments)
+    app.state.equipment = equipment
+    equipment_routes.register(app, require, equipment, _samples, edges)
+
+    # ------------------------------------------------------------------ module commissioning and discovery (0.5.0)
+    from . import commissioning as commissioning_routes
+    wizard = None
+    if not is_sim:
+        import os
+        from ..commissioning.wizard import Wizard
+        wizard = Wizard(hist, cfg, state_dir=state_dir, lock_root=Path(os.environ.get("AQUACROP_LOCK_DIR", state_dir)),
+                        probe_destination=svc.probe)
+        wizard.startup()
+    app.state.wizard = wizard
+    commissioning_routes.register(app, require, wizard, None if is_sim else svc)
+
+    # ------------------------------------------------------------------ programs and the twin feed (0.5.0)
+    import os
+    from ..programs.store import ProgramStore
+    from ..twin import feed as twin_feed
+    from . import programs as program_routes
+    programs = ProgramStore(hist)
+    equipment.dependents = programs.dependents
+    app.state.programs = programs
+    feed_dir = Path(os.environ["AQUACROP_FEED_DIR"]) if os.environ.get("AQUACROP_FEED_DIR") else None
+    twin_url = os.environ.get("AQUACROP_TWIN_URL")
+
+    def publish():
+        if feed_dir is None:
+            return None
+        try:
+            return twin_feed.publish_snapshot(feed_dir, cfg=cfg, equipment=equipment, programs=programs, hist=hist,
+                                              software_version=__version__,
+                                              layout=layout_mod.canonical(layouts.current()[0]))
+        except OSError as e:
+            hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
+            return None
+    app.state.publish_snapshot = publish
+    from .. import layout as layout_mod
+    layouts = layout_mod.LiveLayouts(state_dir / "layout")
+    handoff_key = None
+    if feed_dir is not None:
+        with contextlib.suppress(OSError):
+            handoff_key = twin_feed.write_handoff_key(feed_dir)
+    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
+
+    # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
+    from . import operation as operation_routes
+    live_engine = None
+    if not is_sim and cfg.bench_tests.enabled:
+        from ..programs.live import LiveEngineHost
+        live_engine = LiveEngineHost(svc, hist, equipment, programs, session_id)
+    app.state.live_engine = live_engine
+    operation_routes.register(app, require, live_engine, programs, equipment, cfg)
+
+    @app.get("/api/twin-link")
+    def twin_link(p: Principal = Depends(require(Perm.READ))):
+        return {"url": twin_url, "feed": feed_dir is not None,
+                "note": ("The digital twin is a separate service with its own database and virtual modules. "
+                         "Opening or running it never affects the real system.")}
+
+    @app.post("/api/twin-link/ticket")
+    def twin_ticket(p: Principal = Depends(require(Perm.READ))):
+        """A one-time, 60-second ticket that opens the twin as this user without a second login (0.5.5)."""
+        if handoff_key is None or not twin_url:
+            raise HTTPException(409, "the twin is not configured on this controller")
+        hist.event("TWIN_HANDOFF", {}, actor=p.username)
+        return {"url": twin_url, "ticket": twin_feed.issue_ticket(handoff_key, p.username)}
+
+    # ------------------------------------------------------------------ the installation diagram (0.5.6)
+    def can_accept_layout(p: Principal) -> bool:
+        # owner decision 2026-10-24: administrators, and operators with commissioning
+        return p.can(Perm.EQUIPMENT_EDIT) and p.has_commissioning
+
+    from . import changes as changes_routes
+    changes_routes.register(app, require, equipment, programs, feed_dir, state_dir, hist, can_accept_layout, publish)
+
+    def live_readings() -> dict:
+        from ..equipment.definitions import ItemBody, TypeBody
+        from ..programs.engine import ItemView
+        types = {(t["type_id"], t["version"]): TypeBody.model_validate(t["body"]) for t in equipment.types()}
+        binds = equipment.bindings()
+        views = {}
+        for it in equipment.items(include_retired=False):
+            tb = types.get((it["type_id"], it["type_version"]))
+            if tb is None:
+                continue
+            mine = {r: b for (iid, r), b in binds.items() if iid == it["item_id"]}
+            views[it["item_id"]] = ItemView(it["item_id"], it["name"], tb, ItemBody.model_validate(it["body"]),
+                                            {r: b["point"] for r, b in mine.items()},
+                                            {r: b["status"] == "VERIFIED" for r, b in mine.items()})
+        eng = app.state.live_engine
+        cmd = {}
+        if eng is not None:
+            with contextlib.suppress(Exception):
+                cmd = {iid: eng.engine.item_state(iid).get("commanded", False) for iid in views}
+        return layout_mod.item_readings(views, dict(_samples()), commanded=cmd)
+
+    @app.get("/api/layout")
+    def layout_view(p: Principal = Depends(require(Perm.READ))):
+        lay, meta = layouts.current()
+        items = {i["item_id"]: i for i in equipment.items(include_retired=False)}
+        props = []
+        if feed_dir is not None:
+            for r in layout_mod.read_proposals(feed_dir)[:10]:
+                if r["digest"] == meta.get("digest"):
+                    continue
+                new = layout_mod.parse(r["layout"])
+                props.append({k: r[k] for k in ("digest", "by", "note", "written_utc", "twin_run")}
+                             | {"changes": layout_mod.summary(lay, new), "issues": layout_mod.issues(new, items),
+                                "layout": r["layout"]})
+        prev = layouts.get(meta["previous"]) if meta.get("previous") else None
+        return {"layout": layout_mod.canonical(lay), "meta": meta, "readings": live_readings(),
+                "issues": layout_mod.issues(lay, items), "proposals": props, "can_accept": can_accept_layout(p),
+                "previous": meta.get("previous") if prev is not None else None}
+
+    def _layout_choice(p: Principal, lay, source: str, note: str) -> dict:
+        if not can_accept_layout(p):
+            raise HTTPException(403, "only administrators and operators with commissioning change the diagram")
+        r = layouts.accept(lay, p.username, source=source, note=note)
+        hist.event("LAYOUT_ACCEPTED", {"digest": r["digest"], "source": source, "previous": r["previous"], "note": note},
+                   actor=p.username)
+        publish()                                   # the twin sees the accepted layout at its next import
+        return r
+
+    @app.post("/api/layout/accept")
+    def layout_accept(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+        rec = next((r for r in (layout_mod.read_proposals(feed_dir) if feed_dir else []) if r["digest"] == body.digest), None)
+        if rec is None:
+            raise HTTPException(404, "no such proposal from the twin")
+        return _layout_choice(p, layout_mod.parse(rec["layout"]), f"twin run {rec.get('twin_run')} by {rec.get('by')}",
+                              body.note)
+
+    @app.post("/api/layout/restore")
+    def layout_restore(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+        lay = layouts.get(body.digest)
+        if lay is None:
+            raise HTTPException(404, "no accepted layout with this digest")
+        return _layout_choice(p, lay, "restored", body.note)
+
+    @app.post("/api/twin-link/publish")
+    def twin_publish(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        r = publish()
+        if r is None:
+            raise HTTPException(409, "no twin feed directory is configured on this controller")
+        return r
 
     @app.get("/api/plant")
     async def plant_view(p: Principal = Depends(require(Perm.READ))):
@@ -1360,6 +1530,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             d["users"] = accounts.list_users()
         return d
 
+    users_lock = threading.Lock()                # handlers run in a thread pool; one process owns the accounts
+
     @app.post("/api/users")
     def create_user(body: UserIn, p: Principal = Depends(require(Perm.USER_ADMIN))):
         try:
@@ -1377,19 +1549,63 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def update_user(username: str, body: UserUpdateIn, p: Principal = Depends(require(Perm.USER_ADMIN))):
         if username == p.username and (body.disabled or (body.role and body.role != Role.ADMIN)):
             raise HTTPException(409, "cannot demote or disable yourself")
-        cur = [u for u in accounts.list_users() if u["username"] == username]
-        if not cur:
-            raise HTTPException(404, "unknown user")
-        if body.role is not None or body.commissioning is not None:
-            accounts.set_role(username, body.role or Role(cur[0]["role"]),
-                              cur[0]["commissioning"] if body.commissioning is None else body.commissioning)
-        if body.disabled is not None:
-            accounts.set_disabled(username, body.disabled)
+        with users_lock:                         # the last-administrator check and the change are one step
+            cur = [u for u in accounts.list_users() if u["username"] == username]
+            if not cur:
+                raise HTTPException(404, "unknown user")
+            if cur[0]["role"] == "admin" and (body.disabled or (body.role and body.role != Role.ADMIN)) \
+                    and not _enabled_admins(exclude=username):
+                raise HTTPException(409, "the last administrator cannot be demoted or disabled")
+            if body.role is not None or body.commissioning is not None:
+                accounts.set_role(username, body.role or Role(cur[0]["role"]),
+                                  cur[0]["commissioning"] if body.commissioning is None else body.commissioning)
+            if body.disabled is not None:
+                accounts.set_disabled(username, body.disabled)
         if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username and \
                 (body.disabled or body.commissioning is False or body.role is not None):
             svc.revoke(f"user changed by {p.username}", p.username)
         hist.event("USER_UPDATED", {"username": username} | body.model_dump(mode="json", exclude_none=True),
                    actor=p.username)
+        return {"ok": True}
+
+    def _enabled_admins(exclude: str | None = None) -> list[str]:
+        return [u["username"] for u in accounts.list_users()
+                if u["role"] == "admin" and not u["disabled"] and u["username"] != exclude]
+
+    @app.get("/api/users/roles")
+    def user_roles(p: Principal = Depends(require(Perm.READ))):
+        from ..security.auth import COMMISSIONING_TEXT, ROLE_TEXT
+        return {"roles": ROLE_TEXT, "commissioning": COMMISSIONING_TEXT}
+
+    @app.post("/api/users/{username}/password")
+    def reset_password(username: str, body: PasswordResetIn, p: Principal = Depends(require(Perm.USER_ADMIN))):
+        if not any(u["username"] == username for u in accounts.list_users()):
+            raise HTTPException(404, "unknown user")
+        if username == p.username:
+            raise HTTPException(409, "change your own password under Change my password")
+        try:
+            accounts.reset_password(username, body.new_password)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
+            svc.revoke(f"password reset by {p.username}", p.username)
+        hist.event("USER_PASSWORD_RESET", {"username": username}, actor=p.username)
+        return {"ok": True, "detail": f"{username} must choose a new password at the next login"}
+
+    @app.delete("/api/users/{username}")
+    def delete_user(username: str, p: Principal = Depends(require(Perm.USER_ADMIN))):
+        with users_lock:
+            cur = [u for u in accounts.list_users() if u["username"] == username]
+            if not cur:
+                raise HTTPException(404, "unknown user")
+            if username == p.username:
+                raise HTTPException(409, "you cannot delete yourself")
+            if cur[0]["role"] == "admin" and not _enabled_admins(exclude=username):
+                raise HTTPException(409, "the last administrator cannot be deleted")
+            if not is_sim and (lease := svc.gate.active()) is not None and lease.username == username:
+                svc.revoke(f"user deleted by {p.username}", p.username)
+            accounts.delete_user(username)
+        hist.event("USER_DELETED", {"username": username}, actor=p.username)
         return {"ok": True}
 
     @app.post("/api/users/{username}/revoke-sessions")

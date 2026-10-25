@@ -90,6 +90,46 @@ def cmd_users_bootstrap(args) -> int:
 
 
 # ------------------------------------------------------------------------------------------ serve
+def cmd_twin_serve(args) -> int:
+    """The twin refuses to run with any serial access of its own: its configuration is made SIMULATED with
+    virtual buses from the live snapshot, and it takes no port lock because it opens no port."""
+    import ipaddress
+
+    import uvicorn
+
+    from .api.twin_app import create_twin_app
+    from .ownership import OwnerLock, OwnershipError, lock_name
+    try:
+        loop = ipaddress.ip_address(args.host).is_loopback
+    except ValueError:
+        loop = args.host == "localhost"
+    if not loop and not args.behind_tls_proxy:
+        print("refusing to bind a non-loopback interface over plain HTTP (see docs/security/remote-access.md)",
+              file=sys.stderr)
+        return 2
+    sd = Path(args.state_dir)
+    sd.mkdir(parents=True, exist_ok=True)
+    try:
+        lock = OwnerLock(sd / lock_name("twin", "service")).acquire()
+    except OwnershipError as e:
+        print(str(e), file=sys.stderr)
+        return 4
+    try:
+        hosts = args.allowed_host or ["127.0.0.1", "localhost"]
+        origins = args.allowed_origin or [f"http://127.0.0.1:{args.port}", f"http://localhost:{args.port}"]
+        try:
+            app = create_twin_app(args.feed_dir, state_dir=sd, allowed_hosts=hosts, allowed_origins=origins,
+                                  bind_host=args.host)
+        except Exception as e:
+            print(f"cannot start the twin: {e}", file=sys.stderr)
+            return 3
+        uvicorn.run(app, host=args.host, port=args.port, workers=1, log_level=args.log_level,
+                    proxy_headers=args.behind_tls_proxy, forwarded_allow_ips="127.0.0.1" if args.behind_tls_proxy else None)
+    finally:
+        lock.release()
+    return 0
+
+
 def cmd_serve(args) -> int:
     import ipaddress
 
@@ -548,6 +588,17 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--generate", action="store_true", help="generate a one-time password (must be changed)")
     b.add_argument("--additional", action="store_true")
     b.set_defaults(fn=cmd_users_bootstrap)
+
+    tw = sub.add_parser("twin-serve", help="the digital twin service: virtual modules, its own database (0.5.0)")
+    tw.add_argument("--feed-dir", required=True, help="where the live service writes its snapshot")
+    tw.add_argument("--state-dir", required=True, help="the twin's own state: database, secret key")
+    tw.add_argument("--host", default="127.0.0.1")
+    tw.add_argument("--port", type=int, default=8001)
+    tw.add_argument("--allowed-host", action="append", default=[], help="host names the browser uses (repeatable)")
+    tw.add_argument("--allowed-origin", action="append", default=[], help="browser origins (repeatable)")
+    tw.add_argument("--behind-tls-proxy", action="store_true")
+    tw.add_argument("--log-level", default="info")
+    tw.set_defaults(fn=cmd_twin_serve)
 
     s = sub.add_parser("serve")
     common(s)

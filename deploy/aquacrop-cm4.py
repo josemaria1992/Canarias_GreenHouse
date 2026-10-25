@@ -7,6 +7,7 @@ the first failure:
     sudo python3 deploy/aquacrop-cm4.py check   --release .            # read-only: is this host ready?
     sudo python3 deploy/aquacrop-cm4.py install --release . --config /etc/aquacrop/hardware-read-only.yaml
     sudo python3 deploy/aquacrop-cm4.py tls     --hostname aquacrop.lan       # TLS proxy for LAN and OpenVPN
+    sudo python3 deploy/aquacrop-cm4.py twin    --hostname aquacrop.lan       # the digital twin beside it (0.5.0)
     sudo python3 deploy/aquacrop-cm4.py upgrade --release /path/to/new/release
     sudo python3 deploy/aquacrop-cm4.py rollback
     sudo python3 deploy/aquacrop-cm4.py status
@@ -289,14 +290,14 @@ def validate_config(host: Host, py: Path, config: str) -> None:
     host.say(f"configuration {config} is valid")
 
 
-def health(host: Host, timeout_s: float = 90.0) -> bool:
+def health(host: Host, timeout_s: float = 90.0, url: str = HEALTH_URL) -> bool:
     if host.dry or host.staging:
-        host.say(f"{'would check' if host.dry else 'skipped in staging root:'} {HEALTH_URL}")
+        host.say(f"{'would check' if host.dry else 'skipped in staging root:'} {url}")
         return True
     end = time.monotonic() + timeout_s
     while time.monotonic() < end:
         try:
-            with urllib.request.urlopen(HEALTH_URL, timeout=3) as r:
+            with urllib.request.urlopen(url, timeout=3) as r:
                 body = json.load(r)
                 host.say(f"health: {json.dumps(body)}")
                 return bool(body.get("ok"))
@@ -386,12 +387,19 @@ def cmd_upgrade(a, host: Host) -> int:
         validate_config(host, dest / "venv" / "bin" / "python", config)
     for u in UNITS:
         host.install_file(rel.dir / "deploy" / u, f"/etc/systemd/system/{u}", 0o644)
+    twin = twin_installed(host)
+    if twin:
+        twin_units(host, dest)
     host.run(["systemctl", "daemon-reload"], system=True)
+    if twin:
+        host.run(["systemctl", "stop", TWIN_SERVICE], system=True)
     host.run(["systemctl", "stop", SERVICE], system=True)
     host.write_file("/opt/aquacrop/previous", old.name + "\n", 0o644)
     host.symlink(dest, "/opt/aquacrop/current")
     host.run(["systemctl", "start", SERVICE], system=True)
     record(host, f"upgrade {old.name} -> {rel.version}")
+    if twin:
+        twin_restart(host, dest)
     if not health(host):
         print(f"\nThe new release did not report healthy. Roll back with:\n  sudo python3 {Path(__file__).name} rollback\n"
               "If it already migrated the database, the old release refuses it: restore the pre-upgrade backup "
@@ -413,17 +421,24 @@ def cmd_rollback(a, host: Host) -> int:
     if not (dest / "venv" / "bin" / "python").exists():
         raise Fail(f"release {target} is not installed under {dest.parent}")
     print(f"Rolling back {cur.name} -> {target}")
+    twin = twin_installed(host)
+    if twin:
+        host.run(["systemctl", "stop", TWIN_SERVICE], system=True)
     host.run(["systemctl", "stop", SERVICE], system=True)
     # the target's own service units: the newer release may have changed a command line or a hardening
     # setting that the older one does not know (install_release keeps each release's deploy folder)
     for u in UNITS:
         if (dest / "deploy" / u).is_file():
             host.install_file(dest / "deploy" / u, f"/etc/systemd/system/{u}", 0o644)
+    if twin:
+        twin_units(host, dest)
     host.run(["systemctl", "daemon-reload"], system=True)
     host.write_file("/opt/aquacrop/previous", cur.name + "\n", 0o644)
     host.symlink(dest, "/opt/aquacrop/current")
     host.run(["systemctl", "start", SERVICE], system=True)
     record(host, f"rollback {cur.name} -> {target}")
+    if twin:
+        twin_restart(host, dest)
     if not health(host):
         print("The previous release did not report healthy. If the newer release migrated the database, the "
               "older one refuses to open it by design: restore the pre-upgrade backup with "
@@ -472,6 +487,99 @@ Next, by hand:
     return 0
 
 
+TWIN_SERVICE = "aquacrop-twin.service"
+TWIN_PORT = 8443
+TWIN_HEALTH_URL = "http://127.0.0.1:8001/api/health"
+
+
+def twin_installed(host: Host) -> bool:
+    return host.p(f"/etc/systemd/system/{TWIN_SERVICE}").is_file()
+
+
+def twin_units(host: Host, dest: Path) -> None:
+    """The twin runs from /opt/aquacrop/current like the live service: it moves with every upgrade and rollback,
+    so the two never run different releases."""
+    if (dest / "deploy" / TWIN_SERVICE).is_file():
+        host.install_file(dest / "deploy" / TWIN_SERVICE, f"/etc/systemd/system/{TWIN_SERVICE}", 0o644)
+
+
+def twin_restart(host: Host, dest: Path) -> None:
+    if not (dest / "deploy" / TWIN_SERVICE).is_file():
+        host.run(["systemctl", "disable", TWIN_SERVICE], system=True, check=False)
+        host.say(f"{dest.name} has no digital twin: the twin stays stopped and disabled")
+        return
+    host.run(["systemctl", "start", TWIN_SERVICE], system=True)
+    if not health(host, url=TWIN_HEALTH_URL):
+        host.say(f"the digital twin did not report healthy on {dest.name}: see systemctl status {TWIN_SERVICE}")
+# 0.5.5: the twin is a path of the live site (one address, one login hand-off); the old port only redirects.
+CADDY_TWIN = """# AquaCrop behind TLS (written by aquacrop-cm4.py twin). LAN and OpenVPN clients only:
+# the host firewall restricts port 443 to those networks (docs/security/remote-access.md).
+{hostname} {{
+    tls internal
+    redir /twin /twin/
+    handle_path /twin/* {{
+        reverse_proxy 127.0.0.1:8001
+    }}
+    handle {{
+        reverse_proxy 127.0.0.1:8000
+    }}
+}}
+
+# The twin's address before 0.5.5.
+{hostname}:{port} {{
+    tls internal
+    redir https://{hostname}/twin/
+}}
+"""
+FEED_DROPIN = """# Written by aquacrop-cm4.py twin: the live service writes its snapshot for the twin and reads the twin's
+# evidence files. It still has no route to the twin's commands and the twin has none to the live ones.
+[Service]
+Environment=AQUACROP_FEED_DIR=/var/lib/aquacrop-feed
+Environment=AQUACROP_TWIN_URL=https://{hostname}/twin/
+ReadWritePaths=/var/lib/aquacrop-feed
+"""
+
+
+def cmd_twin(a, host: Host) -> int:
+    """Install the twin beside the live service: user, directories, unit, TLS site, live drop-in."""
+    name = a.hostname.strip().lower()
+    if not name or "/" in name or " " in name:
+        raise Fail("--hostname is the name in the Caddyfile, such as aquacrop.lan")
+    cur = current_release(host)
+    if cur is None or not (cur / "deploy" / "aquacrop-twin.service").is_file():
+        raise Fail("the current release has no twin service (0.5.0 or later is needed); upgrade first")
+    print(f"Digital twin at https://{name}/twin/ beside https://{name}/")
+    host.run(["useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "--user-group",
+              "aquacrop-twin"], system=True, check=False)
+    host.run(["usermod", "-a", "-G", "aquacrop-twin", "aquacrop"], system=True)   # the live service reads evidence
+    # the snapshot: written by the live user, readable by the twin's group; the evidence: the other way round
+    host.mkdir("/var/lib/aquacrop-feed", 0o2750)
+    host.run(["chown", "aquacrop:aquacrop-twin", "/var/lib/aquacrop-feed"], system=True)
+    host.mkdir("/var/lib/aquacrop-feed/evidence", 0o2750)
+    host.run(["chown", "aquacrop-twin:aquacrop-twin", "/var/lib/aquacrop-feed/evidence"], system=True)
+    host.mkdir("/var/lib/aquacrop-twin", 0o700)
+    host.run(["chown", "aquacrop-twin:aquacrop-twin", "/var/lib/aquacrop-twin"], system=True)
+    env = f"TWIN_ARGS=--allowed-host {name} --allowed-host 127.0.0.1 --allowed-origin https://{name}\n"
+    host.write_file("/etc/aquacrop/twin.env", env, 0o640)       # read by systemd, not by the twin
+    host.install_file(cur / "deploy" / "aquacrop-twin.service", f"/etc/systemd/system/{TWIN_SERVICE}", 0o644)
+    host.write_file(f"/etc/systemd/system/{SERVICE}.d/twin-feed.conf", FEED_DROPIN.format(hostname=name, port=TWIN_PORT),
+                    0o644)
+    host.write_file("/etc/caddy/Caddyfile", CADDY_TWIN.format(hostname=name, port=TWIN_PORT), 0o644)
+    host.run(["systemctl", "daemon-reload"], system=True)
+    host.run(["systemctl", "restart", SERVICE], system=True)
+    if not health(host):
+        raise Fail("the live service did not come back healthy after adding the twin feed")
+    host.run(["systemctl", "enable", "--now", TWIN_SERVICE], system=True)
+    host.run(["systemctl", "reload-or-restart", "caddy"], system=True)
+    record(host, f"twin installed at https://{name}/twin/")
+    print(f"""
+Next, by hand:
+  1. Open https://{name}/ and choose Digital Twin: it opens with your login (the old port {TWIN_PORT} only redirects).
+  2. Clients that bookmarked https://{name}:{TWIN_PORT}/ keep working while that port stays open.
+  3. The twin starts in RECOVERY with its own selector; nothing it does reaches the real modules.""")
+    return 0
+
+
 def cmd_status(a, host: Host) -> int:
     cur = current_release(host)
     rels = sorted(p.name for p in host.p("/opt/aquacrop/releases").glob("*")) if host.p("/opt/aquacrop/releases").is_dir() else []
@@ -503,6 +611,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--to", help="release version to switch back to (default: the previous one)")
     t = sub.add_parser("tls")
     t.add_argument("--hostname", required=True)
+    tw = sub.add_parser("twin")
+    tw.add_argument("--hostname", required=True)
     sub.add_parser("status")
     a = ap.parse_args(argv)
     host = Host(a.root.resolve() if a.root else None, a.dry_run)
@@ -510,7 +620,7 @@ def main(argv: list[str] | None = None) -> int:
         host.root.mkdir(parents=True, exist_ok=True)
     try:
         return {"check": cmd_check, "install": cmd_install, "upgrade": cmd_upgrade, "rollback": cmd_rollback,
-                "tls": cmd_tls, "status": cmd_status}[a.cmd](a, host)
+                "tls": cmd_tls, "twin": cmd_twin, "status": cmd_status}[a.cmd](a, host)
     except Fail as e:
         print(f"STOPPED: {e}", file=sys.stderr)
         return 2

@@ -908,11 +908,52 @@
     S.procs = PR; noteLevels(P);
     mount("v-plant", h("div", { class: "card" }, h("h2", null, "Greenhouse diagram"), diagramView(P, PR, { readOnly: P.read_only }), legend(P)));
   }
+  /** 0.5.6: on the real system the Overview draws the layout accepted from the digital twin, read-only, with
+   * each symbol showing its linked equipment item. Layout proposals from the twin are listed under it; an
+   * administrator, or an operator with commissioning, accepts one (or restores the previous layout). */
   async function hwDiagram() {
-    const P = await api("GET", "/api/plant");
-    noteLevels(P);
-    return h("div", { class: "card" }, h("h2", null, "Installation (read-only)"), diagramView(P, null, { readOnly: true }), legend(P),
-      h("p", { class: "muted" }, "No process control exists on a hardware profile in this release. Each part shows its readings; its page opens from there."));
+    const Lv = await api("GET", "/api/layout"), A = window.AqLayout;
+    const TC = await api("GET", "/api/twin-changes").catch(() => null);
+    const st = S.lay = S.lay || { sel: null, preview: null, msg: {} };
+    const prop = st.preview && Lv.proposals.find(x => x.digest === st.preview);
+    const lay = prop ? prop.layout : Lv.layout;
+    const say = (k, text, bad) => { st.msg[k] = { text, bad }; U.refresh(); };
+    const msg = k => st.msg[k] ? h("span", { class: st.msg[k].bad ? "error small" : "muted small", role: "status" }, st.msg[k].text) : null;
+    const send = async (k, path, body, ok) => { try { await api("POST", path, body); say(k, ok); } catch (e) { say(k, String(e.message || e), true); } };
+    const svg = A.render(lay, Lv.readings, { readOnly: true, selected: st.sel, onSelect: (kind, id) => { st.sel = st.sel === id ? null : id; U.refresh(); } });
+    const n = st.sel && lay.nodes.find(q => q.id === st.sel), r = n && n.item && Lv.readings[n.item];
+    const s = n && ["pump", "valve", "box", "sector"].includes(n.kind) ? A.eqState(Lv.readings, n) : null;
+    const sidePanel = h("div", { class: "card side-panel" }, n ? [h("h3", null, n.label || n.id), h("dl", { class: "kv" },
+        h("dt", null, "Equipment"), h("dd", null, n.item ? (r ? `${r.name} (${n.item})` : `${n.item} (not in the equipment)`) : n.planned ? "planned, not installed yet" : "not linked"),
+        s ? [h("dt", null, "State"), h("dd", null, h("span", { class: "pill " + s.cls }, s.word), " ", h("span", { class: "muted small" }, s.why))] : null,
+        r ? [h("dt", null, "Output read back"), h("dd", null, r.coil), h("dt", null, "Feedback"), h("dd", null, r.feedback)] : null,
+        r ? Object.entries(r.values).flatMap(([k, x]) => [h("dt", null, x.label || k), h("dd", null, x.value == null ? (x.quality === "NO CHANNEL" ? "no channel" : "no reading") : `${typeof x.value === "boolean" ? (x.value ? "on" : "off") : x.value}${x.unit ? " " + x.unit : ""} (${String(x.quality).toLowerCase()})`)]) : null)]
+      : [h("h3", null, "Nothing selected"), h("p", { class: "muted" }, "Select a pump, valve, tank, sensor or sector in the diagram to see its state and readings here.")]);
+    const list = (w, xs) => xs.length ? h("li", null, `${w}: ${xs.slice(0, 8).join(", ")}${xs.length > 8 ? ` and ${xs.length - 8} more` : ""}`) : null;
+    const props = Lv.proposals.map(x => {
+      const c = x.changes, note = h("input", { maxlength: 500, placeholder: "note (optional)", "aria-label": "Note" });
+      return h("div", { class: "card" + (st.preview === x.digest ? " selected-card" : "") },
+        h("strong", null, `From the twin, by ${x.by}, ${fmtTime(x.written_utc)}`), x.note ? h("p", null, x.note) : null,
+        h("ul", { class: "small" }, list("added", c.added), list("removed", c.removed), list("moved", c.moved), list("changed", c.changed),
+          list("pipes added", c.pipes_added), list("pipes removed", c.pipes_removed), list("pipes changed", c.pipes_changed)),
+        x.issues.length ? h("p", { class: "warn small" }, `${x.issues.length} symbol(s) linked to equipment that is not on this system.`) : null,
+        h("div", { class: "row" },
+          h("button", { class: "small ghost", onclick: () => { st.preview = st.preview === x.digest ? null : x.digest; U.refresh(); } }, st.preview === x.digest ? "Show the current layout" : "Preview"),
+          Lv.can_accept ? [note, h("button", { class: "small", onclick: () => { st.preview = null; send("acc-" + x.digest, "/api/layout/accept", { digest: x.digest, note: note.value }, "accepted: the Overview now draws this layout"); } }, "Accept this layout")]
+            : h("span", { class: "muted small" }, "An administrator, or an operator with commissioning, accepts layouts."),
+          msg("acc-" + x.digest)));
+    });
+    const m = Lv.meta;
+    return h("div", { class: "card", id: "overview-layout" },
+      h("div", { class: "row" }, h("h2", null, "Installation (read-only)"), prop ? h("span", { class: "pill warn" }, "PREVIEW of a proposal") : null),
+      TC && TC.pending.length ? h("p", { class: "warn" }, `${TC.pending.length} equipment and program change(s) from the twin wait for approval: `, h("a", { href: "#twin" }, "review them on the Digital Twin page")) : null,
+      h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, svg), sidePanel),
+      A.legend(h),
+      h("p", { class: "muted small" }, m.source === "default" ? "Standard drawing. " : `Layout accepted by ${m.accepted_by} on ${fmtTime(m.accepted_utc)} (${m.source}). `,
+        "The layout is edited in the Digital Twin and accepted here; it changes the drawing only, never equipment, channels or programs. No process control exists on a hardware profile in this release.",
+        Lv.previous && Lv.can_accept ? [" ", h("button", { class: "small ghost", onclick: () => send("restore", "/api/layout/restore", { digest: Lv.previous, note: "restore previous" }, "the previous layout is back") }, "Restore the previous layout"), " ", msg("restore")] : null),
+      Lv.issues.length ? h("details", { class: "small" }, h("summary", null, `${Lv.issues.length} symbol(s) not matching the equipment`), h("ul", null, Lv.issues.map(x => h("li", null, x)))) : null,
+      props.length ? [h("h3", null, "Layouts sent from the twin"), props] : null);
   }
   const TANK_OF = { A: "tank A", B: "tank B", ACID: "the acid tank" };
   /** F-08: preparing a fertiliser or acid tank is a person's confirmation; the simulated fertiliser is added on the

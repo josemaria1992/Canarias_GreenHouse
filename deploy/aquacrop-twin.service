@@ -1,0 +1,49 @@
+# AquaCrop digital twin (0.5.0) — systemd unit. Installed by `aquacrop-cm4.py twin`.
+# The twin runs the user's equipment and programs on virtual modules beside the live service. It runs as its
+# own user, without the dialout group and outside the live service's group, and with no device nodes at all
+# (PrivateDevices), so it cannot open a serial port whatever its code does. It reads the live snapshot from /var/lib/aquacrop-feed and writes only
+# its own state and the evidence directory. CPU, memory and I/O are capped so accelerated simulation cannot
+# starve the live acquisition and safety processing.
+[Unit]
+Description=AquaCrop digital twin (simulated modules, no real outputs)
+After=local-fs.target aquacrop-greenhouse.service
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=exec
+User=aquacrop-twin
+Group=aquacrop-twin
+WorkingDirectory=/var/lib/aquacrop-twin
+EnvironmentFile=-/etc/aquacrop/twin.env
+ExecStart=/opt/aquacrop/current/venv/bin/python -m aquacrop twin-serve --feed-dir /var/lib/aquacrop-feed --state-dir /var/lib/aquacrop-twin --host 127.0.0.1 --port 8001 --behind-tls-proxy --log-level warning $TWIN_ARGS
+# The live snapshot may not exist on the very first boot: start again until it does.
+Restart=always
+RestartSec=15
+TimeoutStopSec=20
+# Bounded: the live service keeps priority.
+Nice=10
+CPUQuota=60%
+MemoryMax=450M
+IOSchedulingClass=idle
+# Hardening: no devices, no serial access, read-only system.
+PrivateDevices=yes
+DevicePolicy=closed
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aquacrop-twin /var/lib/aquacrop-feed/evidence
+ReadOnlyPaths=/var/lib/aquacrop-feed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

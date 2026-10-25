@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-CURRENT_VERSION = 4
+CURRENT_VERSION = 5
 
 MIGRATIONS: dict[int, tuple[str, str]] = {
     1: ("initial AquaCrop v0.2 schema", """
@@ -78,6 +78,43 @@ CREATE TABLE io_checks (seq INTEGER PRIMARY KEY, run_id TEXT NOT NULL, point TEX
     config_version TEXT NOT NULL);
 CREATE INDEX ix_io_checks_point ON io_checks(config_id, point, seq);
 CREATE INDEX ix_commands_target ON commands(target, intent_utc);
+"""),
+    5: ("equipment types and items, channel bindings, programs, occurrences, conflicts, installation mode, "
+        "restart recovery and module commissioning transactions (0.5.0)", """
+CREATE TABLE equipment_types (type_id TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL,
+    name TEXT NOT NULL, digest TEXT NOT NULL, created_utc TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_utc TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY (type_id, version));
+CREATE TABLE equipment_items (item_id TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL,
+    type_id TEXT NOT NULL, type_version INTEGER NOT NULL, name TEXT NOT NULL, icon TEXT NOT NULL,
+    digest TEXT NOT NULL, created_utc TEXT NOT NULL, created_by TEXT NOT NULL, updated_utc TEXT NOT NULL,
+    json TEXT NOT NULL, PRIMARY KEY (item_id, version));
+CREATE TABLE channel_bindings (seq INTEGER PRIMARY KEY, item_id TEXT NOT NULL, role TEXT NOT NULL, point TEXT,
+    status TEXT NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL, note TEXT, evidence_json TEXT NOT NULL,
+    config_id TEXT NOT NULL, config_version TEXT NOT NULL);
+CREATE INDEX ix_channel_bindings_item ON channel_bindings(config_id, item_id, role, seq);
+CREATE INDEX ix_channel_bindings_point ON channel_bindings(config_id, point, seq);
+CREATE TABLE equipment_log (seq INTEGER PRIMARY KEY, utc TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
+    ref TEXT NOT NULL, action TEXT NOT NULL, json TEXT NOT NULL);
+CREATE TABLE programs (program_id TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL,
+    name TEXT NOT NULL, digest TEXT NOT NULL, created_utc TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_utc TEXT NOT NULL, validation_json TEXT, simulation_json TEXT, json TEXT NOT NULL,
+    PRIMARY KEY (program_id, version));
+CREATE TABLE program_activations (seq INTEGER PRIMARY KEY, runtime_id TEXT NOT NULL, program_id TEXT NOT NULL,
+    version INTEGER NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL, json TEXT NOT NULL);
+CREATE TABLE occurrences (occurrence_key TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, program_id TEXT NOT NULL,
+    version INTEGER NOT NULL, scheduled_utc TEXT, state TEXT NOT NULL, created_utc TEXT NOT NULL,
+    started_utc TEXT, ended_utc TEXT, outcome TEXT, json TEXT NOT NULL);
+CREATE INDEX ix_occurrences_program ON occurrences(runtime_id, program_id, scheduled_utc);
+CREATE TABLE conflicts (conflict_id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, state TEXT NOT NULL,
+    opened_utc TEXT NOT NULL, resolved_utc TEXT, resolution TEXT, actor TEXT, json TEXT NOT NULL);
+CREATE TABLE installation_mode (seq INTEGER PRIMARY KEY, runtime_id TEXT NOT NULL, mode TEXT NOT NULL,
+    phase TEXT NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL, reason TEXT, json TEXT NOT NULL);
+CREATE TABLE recovery (seq INTEGER PRIMARY KEY, runtime_id TEXT NOT NULL, process_session_id TEXT NOT NULL,
+    state TEXT NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL, json TEXT NOT NULL);
+CREATE TABLE commissioning_tx (tx_id TEXT PRIMARY KEY, state TEXT NOT NULL, bus_id TEXT NOT NULL,
+    address INTEGER, actor TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, json TEXT NOT NULL);
+CREATE UNIQUE INDEX ux_commissioning_reserved ON commissioning_tx(bus_id, address)
+    WHERE state IN ('RESERVED', 'WRITING', 'UNCERTAIN', 'PREPARED')
 """),
 }
 

@@ -74,6 +74,7 @@ class BenchGate:
     monotonic: Callable[[], float] = time.monotonic
     on_end: Callable[[BenchLease], None] | None = None
     persist_renew: Callable[[BenchLease], None] | None = None
+    program_guard: Callable[[], str | None] | None = None   # the live engine's mode/recovery check, at dispatch
     _lease: BenchLease | None = field(default=None, init=False)
 
     # ------------------------------------------------------------------ arming
@@ -203,7 +204,15 @@ class BenchGate:
             return "no bench lease armed"
         if cmd.lease_id != lease.lease_id:
             return "command does not carry the active lease id"
-        if cmd.origin not in BENCH_ORIGINS:
+        if cmd.origin == CommandOrigin.PROGRAM_BENCH:
+            bt = self.cfg.bench_tests
+            if not bt.enabled:
+                return "scheduled bench tests are not enabled in this configuration"
+            if cmd.target not in bt.allowlist:
+                return f"{cmd.target} is not an approved bench test output"
+            if self.program_guard is not None and cmd.desired and (why := self.program_guard()) is not None:
+                return why
+        elif cmd.origin not in BENCH_ORIGINS:
             return f"origin {cmd.origin.value} cannot write on the bench"
         if cmd.target not in lease.allowlist:
             return f"{cmd.target} is not in the lease allowlist"

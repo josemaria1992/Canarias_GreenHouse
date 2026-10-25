@@ -328,7 +328,7 @@ def test_at_mb_06_arm_requirements(fake_bus):
     be = ModbusBackend(cfg, context=ctx)
     gate, *_ = make_gate(cfg, be, Clock())
     with pytest.raises(BenchRefused, match="commissioning"):
-        gate.arm(principal(commissioning=False, role=Role.ADMIN), confirmation=CONFIRMATION_PHRASE,
+        gate.arm(principal(commissioning=False, role=Role.OPERATOR), confirmation=CONFIRMATION_PHRASE,
                  setup_description="isolated bench xx", allowlist=["relay_A.DO1"], duration_s=600)
     for kw, msg in [({"confirmation": "yes"}, "exact confirmation"),
                     ({"confirmation": CONFIRMATION_PHRASE.lower()}, "exact confirmation"),

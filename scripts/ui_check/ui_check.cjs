@@ -474,6 +474,12 @@ async function main() {
 
 // ------------------------------------------------------------------------------------------------ 0.3.4
 // Owner feedback O-01 to O-05 and the reviewer's corrections R33-01 to R33-03 (simulation only).
+const CONTRAST_ON_WHITE = c => {      // WCAG contrast of white text on colour c
+  const m = /rgba?\((\d+), (\d+), (\d+)/.exec(c); if (!m) return 0;
+  const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const [r, g, b] = m.slice(1).map(Number).map(lin);
+  return 1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05);
+};
 const BLUE = c => { const m = /rgba?\((\d+), (\d+), (\d+)/.exec(c); if (!m) return false; const [r, g, bl] = m.slice(1).map(Number); return bl > r + 40 && bl > g + 20; };
 async function textColours(q) {
   return q.evaluate(() => {
@@ -540,7 +546,9 @@ async function o34run(b, ctx0) {
   const hov = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).backgroundColor]);
   await link.focus(); await p.keyboard.press("Shift+Tab"); await p.keyboard.press("Tab");
   const foc = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).outlineColor, getComputedStyle(a).outlineStyle]);
-  check("O-01 white text instead of blue", !col.some(x => x.startsWith("BAD")) && hov[0] === "rgb(255, 255, 255)" && !BLUE(hov[1]) && foc[0] === "rgb(255, 255, 255)" && foc[2] !== "none",
+  // the Carbon look (owner, 2026-10-24) puts white link text on IBM Blue; O-01 asks for no blue *text* and a
+  // readable link in every state: white on a ground dark enough for 4.5:1
+  check("O-01 white text instead of blue", !col.some(x => x.startsWith("BAD")) && hov[0] === "rgb(255, 255, 255)" && CONTRAST_ON_WHITE(hov[1]) >= 4.5 && foc[0] === "rgb(255, 255, 255)" && foc[2] !== "none",
     col.join(" · ") + ` · hover ${hov.join(" on ")} · focus ${foc.join(", ")}`);
 
   // O-02 / O-04 in Manual mode: the Sector 1 valve from the diagram, through the controller
@@ -928,20 +936,22 @@ async function hardware() {
   await until(p, () => p.evaluate(() => !document.getElementById("nav-inst").classList.contains("hidden")), 10000);
   const nav = (await p.locator("#nav").innerText()).replace(/\s+/g, " ");
   check("HW nav", ["Nutrients & acid", "Main tank", "Watering", "Sector 1", "Sector 2", "Drainage return"].every(t => nav.includes(t)) &&
-    !nav.includes("Recipes") && !/Digital Twin/i.test(nav), nav);
+    !nav.includes("Recipes"), nav);      // 0.5.5: Digital Twin is listed: it opens the twin service at /twin/
   const hwPlain = await p.locator("#status-plain").innerText();
   check("HW status line", /^Real equipment, read only/.test(hwPlain), hwPlain);
   await show(p, "overview");
   await shot(p, "hw-overview");
   const ov = await p.evaluate(() => ({ hot: document.querySelectorAll("#v-overview svg.diagram g.hot").length, label: document.querySelector("#v-overview svg.diagram").getAttribute("aria-label") }));
   check("HW overview diagram", ov.hot >= 40 && /read-only/.test(ov.label), `${ov.hot} parts; ${ov.label}`);
-  await p.locator('#v-overview svg.diagram g.hot[data-key="pump.MP1"]').click();
-  const hwPanel = await until(p, async () => { const t = await p.locator("#v-overview aside.side-panel").innerText(); return /Main pump 1/.test(t) && t; }, 5000);
-  const hwBtns = await p.$$eval("#v-overview aside.side-panel button", bs => bs.map(x => x.textContent).filter(x => x !== "Close" && x !== "Ask for a new reading"));
-  await p.locator('#v-overview svg.diagram g.hot[data-key="tank.MAIN"]').click();
-  await p.locator("#v-overview aside.side-panel a", { hasText: "Open Main tank" }).click();
-  check("HW click-through", /Real equipment, read only: nothing can be operated/.test(hwPanel || "") && hwBtns.length === 0 && await until(p, () => p.evaluate(() => location.hash === "#main-tank")),
-    "a main pump's panel says it is read only and offers no action; the main tank's panel opens #main-tank");
+  // 0.5.6: the real Overview draws the accepted layout (symbols by layout id), read-only, with a side panel
+  await p.locator('#v-overview svg.diagram g.hot[data-id="mp1"]').click();
+  const hwPanel = await until(p, async () => { const t = await p.locator("#v-overview .side-panel").innerText(); return /Main pump 1/.test(t) && t; }, 5000);
+  const hwBtns = await p.$$eval("#v-overview .side-panel button", bs => bs.map(x => x.textContent));
+  await p.locator('#v-overview svg.diagram g.hot[data-id="tank-main"]').click();
+  const hwTank = await until(p, async () => { const t = await p.locator("#v-overview .side-panel").innerText(); return /Main tank/.test(t) && t; }, 5000);
+  const hwHead = await p.locator("#overview-layout h2").first().innerText();
+  check("HW click-through", !!hwPanel && !!hwTank && hwBtns.length === 0 && /read-only/.test(hwHead),
+    "selecting a main pump or the main tank shows its state in the side panel, with no action: the installation is read-only");
   for (const v of ["nutrients", "main-tank", "main-pumps", "sector-S1", "sector-S2", "drainage"]) {
     await show(p, v);
     const t = await visibleText(p);
@@ -964,8 +974,10 @@ async function hardware() {
   await show(p, "board");
   const hb = await p.evaluate(() => ({ t: document.querySelector("#v-board").innerText, sw: [...document.querySelectorAll("#v-board .switch")].map(x => x.disabled) }));
   await shot(p, "hw-board");
-  check("HW I/O board read only", /REAL MODULES/.test(hb.t) && /Real modules, read only/.test(hb.t) && hb.sw.length === 16 && hb.sw.every(Boolean),
-    `${hb.sw.length} output switches, all disabled without a commissioning user and a test session`);
+  // 0.5.4: an administrator has the commissioning right, so the board offers a test session; until one is armed
+  // every output switch stays disabled
+  check("HW I/O board read only", /REAL MODULES/.test(hb.t) && /Start a test session/.test(hb.t) && hb.sw.length === 16 && hb.sw.every(Boolean),
+    `${hb.sw.length} output switches, all disabled until a test session is armed`);
   check("HW page errors", errs.length === 0, errs.join("; ") || "none");
   await b.close();
 }

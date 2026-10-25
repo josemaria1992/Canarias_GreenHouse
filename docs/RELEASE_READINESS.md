@@ -19,9 +19,27 @@ seen during commissioning is a fault with one and expected with the other:
 | Generated bench (`hw make-config`, `safe_state.outputs_off_on` = START, STOP, LEASE_END, MODULE_RETURN) | **only FC05 OFF**: at those four moments, one frame per digital output that reads ON, each followed by an FC01 readback and audited as `SAFE_STATE_OFF`. When every output is OFF, nothing is written | inside a test session: FC05 ON/OFF from a switch or a guided-check step; **All outputs OFF** (FC05 OFF only) at any time |
 | Module setup (`hw setup`, a separate command run with the service stopped) | — | FC06 to the address and mode registers of the one module on the wire, never to broadcast, never the UART register (CP-01 record) |
 
-Nothing ever sends an ON automatically: every ON comes from a person's action inside a test session,
-and safe state accepts OFF only. CP-05 checks this on the wire with a passive monitor for both
-configurations.
+Without `bench_tests`, nothing ever sends an ON automatically: every ON comes from a person's action
+inside a test session, and safe state accepts OFF only. CP-05 checks this on the wire with a passive
+monitor for both configurations.
+
+**The one exception, from 0.5.0 (ADR-0018 §9): scheduled bench tests.** A configuration with
+`bench_tests.enabled` adds a fourth row: an active program may send FC05 **ON** without a person
+acting, on a schedule or a sensor condition. Every such ON passes all of these gates, or it is not sent:
+
+- the output is in `bench_tests.allowlist` (IO 8CH transistor outputs only, approved by name) **and** in
+  the armed test session's allowlist; no session armed, no ON (the occurrence is recorded FAILED);
+- the program version is VALIDATED, activated on the live runtime, and has an accepted twin result for
+  the same digest;
+- the installation is in AUTO (scheduled) or MANUAL (run now), never RECOVERY or STOPPING, checked again
+  under the bus lock just before the frame;
+- every ON is bounded by the program's runtime and the equipment's limits (maximum runtime, minimum off
+  time, starts per hour, maximum volume) and is followed by an FC01 readback.
+
+When the session ends, every operation stops: the program's own OFF and the LEASE_END safe-state OFF.
+An OFF still owed after the session has ended goes out as a safe-state OFF (FC05 OFF only, audited), so a
+retry still reaches the wire once the bus answers again. In CP-05 with this configuration, an FC05 ON is
+expected only to an allowlisted output, only while a session is armed, and only when a program is due.
 
 **0.3.4, 2026-10-19:** the owner's feedback on 0.3.3 (O-01 to O-05) and the reviewer's corrections
 (R33-01 to R33-03, `operator/owner-tour/issues.md`): white-on-green links, one diagram with flow

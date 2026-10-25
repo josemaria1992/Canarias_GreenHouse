@@ -1,5 +1,292 @@
 # Changelog
 
+## 0.6.13 (2026-10-25): twin edits no longer hide newer equipment; the standard drawing stays linked
+
+- An equipment edit made in the twin before the real system changed the same item used to replace the whole item
+  in the twin, so a scaling set later on the real system (Acid level, 4-20 mA to 0-100 cm) was hidden and the
+  twin's sensor read nothing. The twin now keeps what it changed itself and takes everything else from the real
+  system's newer version; an edit left with nothing of its own is dropped.
+- "Start from the standard drawing" links the drawing to the equipment that exists, as the installation starter
+  does, instead of a drawing with no links (no water moved and the tanks' sensors read nothing).
+- After a restart the twin's sensors read the simulated water before the restart checklist is shown.
+
+## 0.6.12 (2026-10-25): scaled sensor readings count as good
+
+- A module channel has no scaling of its own and reports its raw current as "unscaled". When the equipment item
+  has a scaling, the reading it gives (for example 49.5 cm from 11.92 mA) is a fresh, scaled measurement and is now
+  shown as one. The drawing fills the tank instead of marking the reading "(unscaled)" and leaving the tank empty.
+
+## 0.6.11 (2026-10-25): new code after an upgrade, without a hard reload
+
+- The dashboard and the twin page name every script and stylesheet with the software version
+  (`app.js?v=0.6.11`), so a new version is a new address and the browser cannot keep using an old copy. The page
+  itself is never cached. Versioned files may be cached for long; unversioned files (images named in a script)
+  are checked each time.
+- Every answer from the controller says which version answered (`X-AquaCrop-Version`). A page left open across
+  an upgrade notices the new version and reloads itself once, so nobody has to press Ctrl+Shift+R.
+- After an export is approved, the twin no longer lists what the real system now has. At each import, items,
+  retirements and channels that match the real system are dropped from the twin's change set. Before, all 33
+  parts kept showing as "changed".
+- A tank whose level sensor reads in cm draws its water against the top of that sensor's scaling (its 20 mA
+  value) when the tank has no "Full at". Before, a scaled reading such as 43 cm showed an empty tank.
+- Only the latest program version made in the twin can be sent. Once the real system has that version's body,
+  nothing is pending. Before, an older version made in the twin (the first 2-minute fill) was offered instead.
+
+## 0.6.10 (2026-10-25): dismiss an export that can no longer be applied
+
+- Real dashboard, Digital Twin page: an export from the twin that cannot be applied any more shows "Dismiss
+  (cannot be applied)" instead of "Approve and apply". This happens when the real system changed since the twin
+  imported it, for example when the same export was sent twice. Dismissing it removes it from the list and from
+  the Overview's "waiting for approval" note, and nothing on the real system changes. It is recorded with who
+  dismissed it and why. Only administrators and operators with commissioning can dismiss, and an export that
+  can still be applied cannot be dismissed.
+
+## 0.6.9 (2026-10-25): remove a program from the twin
+
+- Digital twin, Programs: "Remove from the twin" (press twice) removes the versions of a program made in the twin.
+  They are deactivated in the twin and are not sent to the real system. The real system's own versions are
+  never touched, and history keeps the removed versions as RETIRED. A practice program no longer blocks an
+  export for lack of proof.
+
+## 0.6.8 (2026-10-25): a lighter twin page
+
+- The twin page's requests are cheaper:
+  - which channels suit each role is worked out once per role, not on every refresh;
+  - the drawing, its comparison with the real system's layout and its issues are recomputed only when the
+    drawing, the snapshot or the equipment change.
+  This leaves the CM4 more time for the simulation while the page is open.
+- Saving the twin's change set retries when Windows briefly holds the file (test runs on Windows).
+
+## 0.6.7 (2026-10-25): the twin page stays live at high speed
+
+- The twin takes its lock per simulation step instead of per batch, and does at most 0.2 s of work per round.
+  At high speed the dashboard's requests used to wait behind back-to-back batches, so the page froze for many
+  seconds. When the controller cannot keep up, the twin runs slower than asked and drops the backlog; the
+  speed label shows what it actually achieves.
+
+## 0.6.6 (2026-10-25): twin water at high speed
+
+- Water now advances every simulation step, not once per batch of steps. Before, at high speed a valve that closed
+  in the middle of a batch counted as closed for the whole batch, so the tanks lost the water of up to 20
+  simulated minutes. The network is traced again only when a valve, pump or tank changes; in between only the
+  levels are added up. That is about 5× cheaper, which matters on the CM4.
+- Timeline pictures keep only the items that show something, and the page fetches at most 600 at a time. A full
+  timeline used to be tens of MB, which froze the page and slowed the simulation.
+
+## 0.6.5 (2026-10-25): twin water keeps a tank's percentage when it is resized
+
+- A tank whose capacity changes in the drawing keeps its percentage, not its litres. Drawings from before 0.6.4
+  had 100 L placeholder tanks, so after the starter set the real sizes their water showed as nearly empty.
+- A test covers the water model: mains filling through open valves, a pump to a sector, gravity drainage, no flow
+  without a running pump, and resizing.
+
+## 0.6.4 (2026-10-25): water in the digital twin (owner request)
+
+- Water moves along the twin's drawing: a water source (new symbol; the mains) fills through open valves, running
+  pumps move water from tank to tank, and sectors drain part back by gravity. Tanks rise and fall; an empty tank
+  stops its pumps, and a full one takes nothing more. Flows are demo numbers.
+- Flow meters and level sensors in the drawing show the simulated values. Sensors with a channel and a scaling
+  also read them, so programs see them.
+- Select a tank to read its water and set its level. Real tank sizes come from the installation model.
+- The starter adds the mains source to existing drawings and starts the dosing pipes at their tanks.
+
+## 0.6.3 (2026-10-25): the starter is all or nothing
+
+- "Create the installation's equipment" checks every name before creating anything. If an existing item already
+  has the name of a part, nothing is created, and the message names each clash ("Main pump 1 (mp1): the name is
+  used by main-pump-1") so it can be renamed or retired first. If any part is refused, the parts already made in
+  that press are taken back.
+
+## 0.6.2 (2026-10-25): the installation starter (owner request)
+
+- New built-in equipment types: pressure transmitter, pH probe, EC probe and temperature transmitter (4-20 mA).
+- Digital twin, Equipment and programs: "Create the installation's equipment" creates every part of the
+  standard installation in one step: 33 parts, namely
+  - the fill and outlet valves, levels, dosing pumps and flow meters of fertiliser A, fertiliser B and acid;
+  - the main tank's fill valve, fill flow, level, pH, EC and temperature;
+  - both main pumps, both sector valves with their flow and pressure;
+  - the drainage tank's level, both return pumps and the return flow.
+- The starter links every symbol and pipe of the drawing to those parts. No channel is assigned: you choose
+  channels afterwards and verify them at the bench. Parts that already exist are left alone, so the button can
+  be pressed again. Everything reaches the real system only through the usual export and layout proposal.
+- Tanks have "Full at (sensor reading)": the reading that means a full tank. Level sensors read in cm, not
+  litres.
+- The starter needs the eight types active on the real system. Otherwise it names the ones to activate.
+- Pipes connect to symbols by drawing (owner request: as intuitive as possible). In the layout editor:
+  - Press Pipe, click the symbol where it starts, click each corner, then click the symbol where it ends; that
+    finishes the pipe.
+  - Dragging a pipe's end onto a pump, valve, tank or sensor attaches it (a dot shows the joint). Moving a symbol
+    moves the pipe ends attached to it.
+  - Attaching fills the pipe's links by itself: a pump or valve makes water move while it runs or is open, and a
+    flow meter shows water only while it measures flow. Links set by hand are kept, and detaching drops only the
+    links that came from that symbol.
+  - The starter attaches the standard pipes the same way.
+
+## 0.6.1 (2026-10-25): twin page fixes from the owner walkthrough
+
+- The speed you choose stays chosen. While the twin runs, a new speed applies at once.
+- "For the real system" refreshes while the program editor is open. The editor is no longer redrawn under you.
+- Channel lists offer only the channels that suit the role: kind, direction and electrical interface.
+- No pop-ups: Reset and "Approve into AUTO/MANUAL" act on a second press ("Press again to …"). Accepting a twin
+  result with failed runs asks for the reason in a field beside the button.
+- The diagram card no longer shows a stray "null".
+
+## 0.6.0 (2026-10-25): from the twin to the real system (owner request)
+
+- Digital twin, "Equipment and programs": add, change or retire equipment, assign channels, and save new
+  program versions in the twin. The twin runs the real system's copy with these changes applied, so it simulates
+  exactly what would be exported. Each change can be undone in the twin, and importing from the real system
+  again keeps them.
+- Send to the real system writes an export with every change, what it replaces on the real system, and the
+  proof: for every program version, the twin runs of exactly that body that ended DONE. A program without such
+  a run cannot be sent. Equipment that no program run used is marked "not exercised in the twin".
+- Real dashboard, Digital Twin page, "Changes from the twin": each export is shown field by field (now / from the
+  twin) for equipment and programs, with its channels, proof and conflicts. The Overview says when one is
+  waiting. An administrator or an operator with commissioning approves it. A note is required when some twin
+  runs did not end DONE. Approving applies it through the usual stores:
+  - equipment gets a new version;
+  - channels arrive as proposed, to be verified at the bench before a physical run;
+  - programs arrive as drafts with the twin proof recorded against them. Validating and activating them stays
+    the normal step.
+- Nothing is applied when the real system changed since the twin imported it: import in the twin and send again.
+  If one step fails, the steps already done are reversed.
+- Undo: the latest applied export can be undone while nothing it touched has changed since. Equipment gets its
+  previous version back (a retired item comes back with its channels as proposed), channels go back, and program
+  versions are retired. An active program version must be deactivated first. History is never deleted.
+
+## 0.5.7 (2026-10-24): review fixes (Codex audit of 0.5.4)
+
+Outputs that could stay ON:
+- A running item's OFF uses the channels it had when it was switched ON: changing or clearing its binding while it
+  runs no longer leaves the original output ON with the operation reported DONE.
+- A sequence OFF step keeps the item in the stop path until its OFF is verified; a failed OFF no longer drops it.
+- After a bench test session ends, an OFF still owed goes out as a safe-state OFF, so retries reach the wire once the
+  bus answers again.
+- A gap between flow readings longer than the meter's freshness limit is uncertain volume, not delivered volume.
+
+Integrity:
+- A VALIDATED program version that fails revalidation becomes INVALID (immutable) and is deactivated everywhere; it
+  is never editable again. Only VALIDATED bodies run.
+- Equipment limits min_off_s, max_starts_per_hour and max_volume_L are enforced across runs and programs.
+- A volume needs a flow-rate meter in L/min; a keep-between sensor must be an analog measurement.
+- KEEP_BETWEEN stops when its weekly window closes.
+- The last-administrator check and the change it guards are one step (no race between two administrators).
+
+Twin:
+- Starts from a configuration with bench tests enabled; follows a live configuration change with a controlled reset;
+  refreshes untouched copies of live drafts; accepts evidence from the current run only; namespaces occurrences per
+  run, so a reset reruns the same windows.
+- A changed or removed live account ends that user's twin sessions.
+- Voltage inputs report mV; inputs must be real channels with finite values; a loop failure pauses the twin and
+  turns its health red. A NaN in any request body is refused with 422 instead of failing the server.
+
+Deployment and documents:
+- Upgrade and rollback move an installed twin with the live service, so both run the same release.
+- RELEASE_READINESS and CP-05 describe the one gated exception to "no automatic ON": scheduled bench tests.
+## 0.5.6 (2026-10-24): the installation diagram in the twin (owner request)
+
+- The diagram is now data (a layout): symbols (tank, pump, valve, sensor, sector, box, text) with positions, and
+  pipes drawn as lines with corners. Each symbol can be linked to an equipment item, and a sensor or tank to one
+  of that item's inputs. The standard layout is the 0.5.5 Overview drawing, so nothing looks different until
+  someone changes it.
+- Digital twin, Installation diagram: the simulation is drawn live. Pumps and valves show Running/Open, Starting…,
+  Stopped/Closed, Fault or Not known from their item's feedback or output readback. Pipes show moving water
+  while their flow meter measures flow or their pump or valve runs. Selecting a symbol shows its item, its state
+  and every input.
+- A timeline under the diagram keeps the last 2,400 pictures of the twin run (four a second while it runs). You
+  can step back and forward, replay, or jump to the moments a program started or stopped. Replaying never
+  changes the simulation.
+- Edit layout (operators and administrators, in the twin only): drag symbols, add or remove symbols and pipes,
+  drag a pipe's corners, link symbols to equipment, mark a symbol as planned, then Save in the twin. You can
+  start again from the real system's layout or from the standard drawing. Removing a symbol changes the
+  drawing only: equipment is still created and retired on the Equipment page.
+- Send to the real system writes a proposal to the feed directory, with the list of what changed. On the real
+  dashboard's Overview, an administrator or an operator with commissioning can preview it and accept it. The
+  Overview then draws it read-only, with each symbol showing its linked item's readings. The previous layout
+  can be restored. A layout never changes equipment, channels or programs.
+
+## 0.5.5 (2026-10-24): the twin inside the real dashboard (owner request)
+
+- The digital twin has moved to https://<controller>/twin/. Digital Twin in the real dashboard's menu opens it as
+  the same user, with no second login. The real dashboard gives the browser a one-time ticket that is valid for
+  60 seconds, signed with a key the live service writes to the feed directory at every start. The twin accepts
+  each ticket once and still checks that the user exists and is enabled in its copy of the accounts. The twin
+  keeps its own sessions, database and virtual modules.
+- The twin page has a "Real system" link back to the dashboard. Its old address (port 8443) now redirects to /twin/.
+- "Copy from the real system" is now called "Import from the real system".
+
+## 0.5.4 (2026-10-24): users and roles (owner feedback)
+
+- An administrator has every right, commissioning included (owner decision; supersedes ADR-0017's rule that an
+  administrator without the flag cannot arm a bench lease). The commissioning flag now matters for operators only.
+- Settings, Users and roles: each user has Save (role, commissioning), Disable or Enable, Reset password (a temporary
+  password the user must change at the next login) and Delete (pressed twice; the name stays in the history). The
+  last administrator cannot be deleted, demoted or disabled, and nobody can delete or demote themselves.
+- Creating a user shows only the chosen role's rights, in plain words, and what Commissioning means.
+
+## 0.5.3 (2026-10-24): a simpler Add module wizard (owner feedback)
+
+- Start opens the adapter and reads the module at once. No confirmation phrase is typed: pressing Start is the
+  user's statement that only the new module is wired to the adapter, and the record says so. The server still
+  refuses when more or fewer than one module answers.
+- One Configuration panel: name, SKU (analog version and range for an AI 8CH) and address, with Suggest and
+  Reserve beside each other. Suggest works before the module is named.
+- Every result and refusal is shown next to the button that caused it, not as a pop-up. Discovery's Scan too.
+- The page starts with the owner's six steps for adding a module.
+
+## 0.5.2 (2026-10-24)
+
+- Equipment: each item has an "Edit details" editor for its properties, analog scaling, alarm limits and twin
+  links (a pump driving a flow meter in the twin). Saving makes a new equipment version.
+
+## 0.5.1 (2026-10-24): fixes found by CI on the 0.5.0 pull request
+
+- The Operation page script had a syntax error, so the page did not load (0.5.0 on the bench CM4 had it). Every
+  packaged browser script is now parsed by a test.
+- The CM4 installer's source no longer names the bench host in a message (installer policy test).
+
+## 0.5.0 (2026-10-24): equipment, programs, the module wizard and a digital twin beside the real dashboard
+
+For the owner's brief of 24 October 2026 and the owner's answers the same day (ADR-0018). Tested on the PC with
+the in-memory RS485 buses, virtual modules and a local browser check. **Owner-performed bench tests are NOT RUN**
+(docs/commissioning/bench-tests-0.5.md). Relay outputs, the drive, pumps, valves and dosing stay out of scope.
+
+### Equipment
+- Equipment types (versioned definitions with channel roles, typed properties, limits, permitted operations and
+  a simulation behaviour), built-in editable templates (pump, valve, level sensor, flow meter, button, test LED),
+  individual equipment with a built-in icon, properties, analog scaling and alarm limits.
+- Channel bindings per role, PROPOSED then VERIFIED with the I/O board's check plus your observation (or citing a
+  VERIFIED I/O assignment); one channel per role; electrical compatibility (relay contact vs transistor sink,
+  analog range) checked; a type upgrade or an item change sends affected channels back for verification.
+
+### Hardware
+- Hardware → Add module: prepares a new module on the controller's USB-to-RS485 adapter as a persisted
+  transaction (read, identity, address reservation, preview, write and verify, move, detect), never touching the
+  installation buses; an unclear write is UNCERTAIN with recovery steps; detection writes a configuration proposal.
+- Discovery: read-only, one address per poll inside each bus's worker, only when the poll has time to spare;
+  KNOWN, NEW, MISSING and CHANGED.
+
+### Programs and operation
+- Program editor: run now, weekly windows (overnight, several per day), measured volume, keep between limits,
+  sensor-triggered runs and ordered sequences with verified steps; immutable versions; validation; next windows.
+- Europe/Stockholm schedules with the owner's daylight-saving policy; missed windows are skipped, never replayed.
+- Installation-level AUTO/MANUAL per runtime, conflicts with an explicit choice, restart recovery with a checklist
+  and approval by an operator or administrator.
+
+### Digital twin
+- `aquacrop twin-serve` and `aquacrop-twin.service`: a second service with virtual buses only, no device nodes,
+  its own database and login cookie, capped CPU and memory; fed one way by a snapshot of the real system; the same
+  logins work; accepted twin results become evidence for exactly the same program version.
+
+### Physical bench tests
+- `bench_tests` in the configuration: programs may switch allowlisted IO 8CH outputs only, only inside an armed
+  bench lease, only for a version that passed in the twin; the lease's end stops them; the engine is checked again
+  under the bus lock before each frame. Without `bench_tests` the read-only profile writes exactly as before.
+
+### Storage
+- Schema 5 (equipment, bindings, programs, activations, occurrences, conflicts, mode, recovery, commissioning
+  transactions), migrated after the usual verified backup.
+
 ## 0.4.0 (2026-10-20): bench bring-up of the CM4 box and the six modules, the I/O board
 
 For the owner's hardware bring-up brief of 2026-10-20 and the owner's answers (ADR-0017). Tested on the in-memory
