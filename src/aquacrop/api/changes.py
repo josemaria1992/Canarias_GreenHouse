@@ -42,6 +42,11 @@ class ApproveIn(_B):
     note: str = Field(default="", max_length=1000)
 
 
+class DismissIn(_B):
+    digest: str = Field(pattern="^[0-9a-f]{64}$")
+    note: str = Field(default="", max_length=1000)
+
+
 class UndoIn(_B):
     digest: str = Field(pattern="^[0-9a-f]{64}$")
     note: str = Field(default="", max_length=1000)
@@ -86,9 +91,25 @@ class Journal:
     def get(self, digest: str) -> dict | None:
         return next((r for r in self.all() if r["digest"] == digest), None)
 
-    def save(self, rec: dict) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path = self.dir / f"{rec['digest'][:16]}.json"
+    def dismissed(self) -> set[str]:
+        """Exports that can no longer be applied and that someone set aside (0.6.10)."""
+        d = self.dir.parent / "dismissed"
+        out = set()
+        if d.is_dir():
+            for f in d.glob("*.json"):
+                try:
+                    out.add(json.loads(f.read_text(encoding="utf-8"))["digest"])
+                except (OSError, ValueError, KeyError):
+                    continue
+        return out
+
+    def dismiss(self, rec: dict) -> None:
+        self.save(rec, folder=self.dir.parent / "dismissed")
+
+    def save(self, rec: dict, folder: Path | None = None) -> None:
+        folder = folder or self.dir
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{rec['digest'][:16]}.json"
         tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(rec, indent=1, sort_keys=True, default=str), encoding="utf-8")
         os.replace(tmp, path)
@@ -184,7 +205,7 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
     @app.get("/api/twin-changes")
     def view(p: Principal = Depends(require(Perm.READ))):
         applied = journal.all()
-        done = {r["digest"] for r in applied}
+        done = {r["digest"] for r in applied} | journal.dismissed()
         pending = [describe(x) for x in (read_exports(feed_dir) if feed_dir else []) if x["digest"] not in done][:10]
         latest = next((r for r in applied if not r.get("undone_utc")), None)
         return {"pending": pending, "can_approve": can_approve(p),
@@ -309,6 +330,22 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                                            "exported_by": pkg["by"]}, actor=p.username)
         publish()
         return {k: rec[k] for k in ("digest", "applied_utc", "summary")}
+
+    @app.post("/api/twin-changes/dismiss")
+    def dismiss(body: DismissIn, p: Principal = Depends(require(Perm.READ))):
+        """Set aside an export that can no longer be applied (the real system changed since, for example the
+        same export sent twice). Nothing on the real system changes; the export stays in the feed directory."""
+        if not can_approve(p):
+            raise HTTPException(403, "only administrators and operators with commissioning dismiss changes from the twin")
+        pkg = package(body.digest)
+        c = conflicts(pkg)
+        if not c:
+            raise HTTPException(409, "this export can still be applied: approve it, or leave it waiting")
+        journal.dismiss({"digest": pkg["digest"], "by": pkg["by"], "dismissed_by": p.username,
+                         "dismissed_utc": _now(), "note": body.note, "conflicts": c})
+        hist.event("TWIN_EXPORT_DISMISSED", {"digest": pkg["digest"], "conflicts": c[:5], "note": body.note},
+                   actor=p.username)
+        return {"digest": pkg["digest"], "dismissed": True}
 
     @app.post("/api/twin-changes/undo")
     def undo(body: UndoIn, p: Principal = Depends(require(Perm.READ))):

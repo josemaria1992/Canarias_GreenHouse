@@ -887,7 +887,9 @@
           diffTable(p.diff), !p.diff ? h("pre", { class: "small mono" }, JSON.stringify(p.body, null, 1)) : null)),
         h("p", { class: "muted small" }, (x.meaning || "") + ". Programs arrive as drafts with this proof; validate and activate them on Programs and Operation as usual."),
         V.can_approve ? h("div", { class: "row" }, note,
-          h("button", { disabled: x.conflicts.length > 0, onclick: () => send("ap-" + x.digest, "/api/twin-changes/approve", { digest: x.digest, note: note.value }, "applied") }, "Approve and apply"), msg("ap-" + x.digest))
+          x.conflicts.length ? h("button", { class: "ghost", onclick: () => send("ap-" + x.digest, "/api/twin-changes/dismiss", { digest: x.digest, note: note.value }, "dismissed") }, "Dismiss (cannot be applied)")
+            : h("button", { onclick: () => send("ap-" + x.digest, "/api/twin-changes/approve", { digest: x.digest, note: note.value }, "applied") }, "Approve and apply"),
+          msg("ap-" + x.digest))
           : h("p", { class: "muted small" }, "An administrator, or an operator with commissioning, approves changes from the twin."));
     });
     const applied = V.applied.length ? h("details", { class: "card" }, h("summary", null, `Applied from the twin (${V.applied.length})`),

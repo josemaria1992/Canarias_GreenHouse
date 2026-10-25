@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.10 (2026-10-25): dismiss an export that can no longer be applied
+
+- Real dashboard, Digital Twin page: an export from the twin that cannot be applied any more shows "Dismiss
+  (cannot be applied)" instead of "Approve and apply". This happens when the real system changed since the twin
+  imported it, for example when the same export was sent twice. Dismissing it removes it from the list and from
+  the Overview's "waiting for approval" note, and nothing on the real system changes. It is recorded with who
+  dismissed it and why. Only administrators and operators with commissioning can dismiss, and an export that
+  can still be applied cannot be dismissed.
+
 ## 0.6.9 (2026-10-25): remove a program from the twin
 
 - Digital twin, Programs: "Remove from the twin" (press twice) removes the versions of a program made in the twin.

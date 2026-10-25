@@ -428,3 +428,23 @@ def test_a_program_made_in_the_twin_can_be_removed_so_it_is_not_sent(live_and_tw
     assert "tryout" not in [p["program_id"] for p in twin.get("/api/twin").json()["programs"]]
     # the real system's program (imported) cannot be removed here
     assert twin.post("/api/twin/programs/remove", json={"program_id": "fill"}, headers=H).status_code == 409
+
+
+def test_an_export_that_can_no_longer_be_applied_can_be_dismissed(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    H = _twin_h(twin, "bench1")
+    lamp = next(t for t in twin.get("/api/twin/changes").json()["types"] if t["type_id"] == "test_lamp")
+    assert twin.post("/api/twin/equipment/save", json={"item_id": "lamp2", "name": "Lamp 2", "type_id": "test_lamp",
+                                                       "type_version": lamp["version"], "icon": "lamp", "body": {}},
+                     headers=H).status_code == 200
+    first = twin.post("/api/twin/export", json={"note": "one"}, headers=H).json()["digest"]
+    second = twin.post("/api/twin/export", json={"note": "two"}, headers=H).json()["digest"]   # sent twice
+    hb = login(live, "bench1", ORIGIN)
+    assert live.post("/api/twin-changes/dismiss", json={"digest": second}, headers=hb).status_code == 409  # still applicable
+    assert live.post("/api/twin-changes/approve", json={"digest": first}, headers=hb).status_code == 200
+    v = live.get("/api/twin-changes", headers=hl).json()
+    assert [x["digest"] for x in v["pending"]] == [second] and v["pending"][0]["conflicts"]
+    assert live.post("/api/twin-changes/dismiss", json={"digest": second}, headers=login(live, "view1", ORIGIN)).status_code == 403
+    hb = login(live, "bench1", ORIGIN)                       # the viewer's login replaced the session cookie
+    assert live.post("/api/twin-changes/dismiss", json={"digest": second, "note": "duplicate"}, headers=hb).status_code == 200
+    assert live.get("/api/twin-changes", headers=hl).json()["pending"] == []
