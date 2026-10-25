@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.13 (2026-10-25): twin edits no longer hide newer equipment; the standard drawing stays linked
+
+- An equipment edit made in the twin before the real system changed the same item used to replace the whole item
+  in the twin, so a scaling set later on the real system (Acid level, 4-20 mA to 0-100 cm) was hidden and the
+  twin's sensor read nothing. The twin now keeps what it changed itself and takes everything else from the real
+  system's newer version; an edit left with nothing of its own is dropped.
+- "Start from the standard drawing" links the drawing to the equipment that exists, as the installation starter
+  does, instead of a drawing with no links (no water moved and the tanks' sensors read nothing).
+- After a restart the twin's sensors read the simulated water before the restart checklist is shown.
+
 ## 0.6.12 (2026-10-25): scaled sensor readings count as good
 
 - A module channel has no scaling of its own and reports its raw current as "unscaled". When the equipment item

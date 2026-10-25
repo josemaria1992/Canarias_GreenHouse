@@ -349,6 +349,7 @@ class EquipmentTwinService:
         self.twin.step(0.0)
         self.engine.start()
         self.step_water(0.0)
+        self.twin.step(0.0)                            # the sensors read the water before the restart checklist
         self._frame()
 
     async def run_forever(self) -> None:

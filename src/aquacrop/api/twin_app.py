@@ -538,7 +538,12 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/layout/start-from")
     def start_from(body: LayoutStartIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
-        lay = live_layout()[0] if body.source == "live" else layout.default_layout()
+        if body.source == "live":
+            lay = live_layout()[0]
+        else:                                           # the standard drawing, linked to the equipment there is (0.6.13)
+            from ..twin import starter as st
+            have = set(svc.items.views())
+            lay = st.link_layout(layout.default_layout(), have)[0]
         save_draft(lay)
         hist.event("TWIN_LAYOUT_RESET", {"source": body.source}, actor=p.username)
         return {"digest": layout.digest(lay)}

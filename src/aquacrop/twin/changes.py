@@ -149,7 +149,8 @@ class TwinChanges:
         if live is not None and live["status"] == "RETIRED":
             raise ChangeRefused(f"{item_id} is retired on the real system: use another id")
         new = {"name": name, "type_id": type_id, "type_version": type_version, "icon": icon,
-               "body": ib.model_dump(mode="json"), "base_version": live["version"] if live else None}
+               "body": ib.model_dump(mode="json"), "base_version": live["version"] if live else None,
+               "base_body": live["body"] if live else None}
         if live is not None and all(live[k] == new[k] for k in ("name", "type_id", "type_version", "icon", "body")):
             self.doc["items"].pop(item_id, None)           # back to what the real system has
         else:
@@ -208,6 +209,12 @@ class TwinChanges:
                 dropped += 1
             elif cur is not None and c.get("base_version") is None:
                 c["base_version"] = cur["version"]     # created meanwhile on the real system: now a change to it
+                c["base_body"] = cur["body"]
+            elif cur is not None and cur["status"] != "RETIRED" and cur["version"] > c["base_version"]:
+                self._rebase(c, cur)
+                if all(cur[k] == c[k] for k in ("name", "type_id", "type_version", "icon", "body")):
+                    del self.doc["items"][iid]
+                dropped += 1
         for iid in list(self.doc["retire"]):
             cur = live.get(iid)
             if cur is None or cur["status"] == "RETIRED":
@@ -224,6 +231,20 @@ class TwinChanges:
         if dropped:
             self.save()
         return dropped
+
+    @staticmethod
+    def _rebase(c: dict, cur: dict) -> None:
+        """The real system changed the item after the twin's edit (0.6.13): keep what the twin changed and take the
+        rest from the real system's newer version, so a scaling set there is not hidden by an older twin edit.
+        Without the version the twin edited from (edits before 0.6.13), only parts the twin left empty are taken."""
+        base = c.get("base_body")
+        body = dict(c["body"])
+        for k, v in cur["body"].items():
+            mine = body.get(k)
+            if (base is not None and mine == base.get(k)) or (base is None and mine in (None, {}, [], "")):
+                body[k] = v
+        c["body"] = body
+        c["base_version"], c["base_body"] = cur["version"], cur["body"]
 
     def revert(self, item_id: str) -> None:
         self.doc["items"].pop(item_id, None)
