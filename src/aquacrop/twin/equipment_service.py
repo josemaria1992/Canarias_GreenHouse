@@ -264,16 +264,24 @@ class EquipmentTwinService:
             self.hist.event("TWIN_RESET", {"start_utc": self.clock.start_utc.isoformat(), "run_id": self.run_id},
                             actor=actor)
 
-    def step(self, n: int) -> None:
-        with self.lock:
-            for _ in range(n):
+    def step(self, n: int, budget_s: float | None = None) -> int:
+        """Advance up to `n` steps; with a budget, stop when it is spent. The lock is taken per step, so the
+        dashboard's requests get through between steps even at high speed. Returns the steps done."""
+        t0, done = time.monotonic(), 0
+        for _ in range(n):
+            with self.lock:
                 self.twin.step(DT_S)
                 self.engine.tick()
                 self.step_water(DT_S, publish=False)  # every step: a valve closing mid-batch counts from then
-            if n:
+            done += 1
+            if budget_s is not None and time.monotonic() - t0 > budget_s:
+                break
+        if done:
+            with self.lock:
                 self.water.publish()
                 self.twin.external = self.water.item_values()
                 self._frame()
+        return done
 
     def _item_on(self, iid: str) -> bool:
         """A pump runs or a valve is open: its twin output is on and its start or travel time has passed."""
@@ -359,7 +367,10 @@ class EquipmentTwinService:
             n = min(n, cap)
             t0 = time.monotonic()
             try:
-                await asyncio.to_thread(self.step, n)
+                done = await asyncio.to_thread(self.step, n, 0.2)   # at most 0.2 s of work per round
+                if done < n:
+                    carry = 0.0                         # behind: drop the backlog instead of piling it up
+                n = done
                 self.loop_error = None
             except Exception as e:                     # supervised: paused, reported by health, never silent
                 self.loop_error = repr(e)

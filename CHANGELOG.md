@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.7 (2026-10-25): the twin page stays live at high speed
+
+- The twin takes its lock per simulation step instead of per batch, and does at most 0.2 s of work per round.
+  At high speed the dashboard's requests used to wait behind back-to-back batches, so the page froze for many
+  seconds. When the controller cannot keep up, the twin runs slower than asked and drops the backlog; the
+  speed label shows what it actually achieves.
+
 ## 0.6.6 (2026-10-25): twin water at high speed
 
 - Water now advances every simulation step, not once per batch of steps. Before, at high speed a valve that closed
