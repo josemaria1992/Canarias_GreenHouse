@@ -174,8 +174,10 @@ class Water:
         self.caps: dict[str, float] = {}            # tank node -> the capacity its level was kept for
         self.state: dict = {"tanks": {}, "pipes": {}, "sensors": {}, "sectors": {}, "sources": {}, "notes": []}
         self._net: tuple[str, Network] | None = None
+        self._flows: tuple | None = None            # (key, inflow, outflow, pipes, sources): reused while nothing changes
 
     def reset(self) -> None:
+        self._flows = None
         self.levels.clear()
         self.caps.clear()
         self.state = {"tanks": {}, "pipes": {}, "sensors": {}, "sectors": {}, "sources": {}, "notes": []}
@@ -192,7 +194,7 @@ class Water:
             self._net = (digest, Network(layout))
         return self._net[1]
 
-    def step(self, dt: float, digest: str, layout: dict, item_on, item_rate) -> None:
+    def step(self, dt: float, digest: str, layout: dict, item_on, item_rate, publish: bool = True) -> None:
         """`item_on(item)` is True/False/None for a pump or valve item; `item_rate(item)` a pump's L/min."""
         net = self.network(digest, layout)
         tanks = {i: n for i, n in net.nodes.items() if n["kind"] == "tank"}
@@ -211,10 +213,24 @@ class Water:
                 return ("pump", bool(n.get("item") and item_on(n["item"])), n.get("item") or node_id)
             return "open"
 
+        notes = []
+        # the flows change only when a valve or pump changes or a tank becomes empty or full: trace the network
+        # then, and in between only integrate the levels (the twin steps water every half second of its time)
+        key = (digest, tuple(sorted((i, bool(n.get("item") and item_on(n["item"]))) for i, n in net.nodes.items()
+                                    if n["kind"] in ("valve", "pump"))),
+               tuple(sorted((i, self.levels.get(i, 0.0) <= 1e-6,
+                             self.levels.get(i, 0.0) >= (n.get("capacity_L") or 1000.0) - 1e-6)
+                            for i, n in tanks.items())))
+        if self._flows is not None and self._flows[0] == key:
+            _, inflow, outflow, pipes, sources = self._flows
+            self._integrate(dt, tanks, inflow, outflow, notes)
+            self._pending = (net, tanks, inflow, outflow, pipes, sources, notes)
+            if publish:
+                self.publish()
+            return
         inflow: dict[str, float] = {}               # tank or sector -> L/min
         outflow: dict[str, float] = {}              # tank -> L/min
         pipes: dict[str, float] = {}
-        notes = []
 
         def full(node):
             n = net.nodes[node]
@@ -272,13 +288,27 @@ class Water:
                 net.reach(pid, 0.0, gate, frozenset(), frozenset(), paths, ())
             back = inflow[sid] * DRAIN_SHARE
             deliver([(node, frozenset(), used) for node, _, used in paths if node != sid], lambda key, b=back: b)
-        # 4. levels
+        self._flows = (key, inflow, outflow, pipes, sources)
+        self._integrate(dt, tanks, inflow, outflow, notes)
+        self._pending = (net, tanks, inflow, outflow, pipes, sources, notes)
+        if publish:
+            self.publish()
+
+    def publish(self) -> None:
+        """Build what the page and the sensors see (once per batch of steps, not every step)."""
+        if getattr(self, "_pending", None) is not None:
+            self._publish(*self._pending)
+            self._pending = None
+
+    def _integrate(self, dt, tanks, inflow, outflow, notes) -> None:
         for tid, n in tanks.items():
             cap = n.get("capacity_L") or 1000.0
             lv = self.levels[tid] + (inflow.get(tid, 0.0) - outflow.get(tid, 0.0)) * dt / 60.0
             if lv <= 0 and outflow.get(tid):
                 notes.append(f"{n.get('label') or tid} is empty: its pumps run dry")
             self.levels[tid] = max(0.0, min(cap, lv))
+
+    def _publish(self, net, tanks, inflow, outflow, pipes, sources, notes) -> None:
         sensors = {}
         for nid, n in net.nodes.items():
             if n["kind"] != "sensor" or not n.get("item"):

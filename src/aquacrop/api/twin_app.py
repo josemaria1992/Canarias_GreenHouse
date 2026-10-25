@@ -505,7 +505,10 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     @app.get("/api/twin/frames")
     def frames(after: float = -1.0, p: Principal = Depends(require(Perm.READ))):
         with svc.lock:
-            return [f for f in svc.frames if f["sim_s"] > after and f["run_id"] == svc.run_id]
+            frames = list(svc.frames)
+            run = svc.run_id
+        # at most 600 pictures a request, the oldest first: the page asks again for the rest
+        return [f for f in frames if f["sim_s"] > after and f["run_id"] == run][:600]
 
     @app.put("/api/twin/layout")
     def put_layout(body: LayoutIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

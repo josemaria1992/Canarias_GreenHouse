@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.6 (2026-10-25): twin water at high speed
+
+- Water now advances every simulation step, not once per batch of steps. Before, at high speed a valve that closed
+  in the middle of a batch counted as closed for the whole batch, so the tanks lost the water of up to 20
+  simulated minutes. The network is traced again only when a valve, pump or tank changes; in between only the
+  levels are added up. That is about 5× cheaper, which matters on the CM4.
+- Timeline pictures keep only the items that show something, and the page fetches at most 600 at a time. A full
+  timeline used to be tens of MB, which froze the page and slowed the simulation.
+
 ## 0.6.5 (2026-10-25): twin water keeps a tank's percentage when it is resized
 
 - A tank whose capacity changes in the drawing keeps its percentage, not its litres. Drawings from before 0.6.4

@@ -269,8 +269,10 @@ class EquipmentTwinService:
             for _ in range(n):
                 self.twin.step(DT_S)
                 self.engine.tick()
+                self.step_water(DT_S, publish=False)  # every step: a valve closing mid-batch counts from then
             if n:
-                self.step_water(n * DT_S)
+                self.water.publish()
+                self.twin.external = self.water.item_values()
                 self._frame()
 
     def _item_on(self, iid: str) -> bool:
@@ -294,13 +296,14 @@ class EquipmentTwinService:
         beh = it.body.simulation or it.type.simulation
         return float(it.body.properties.get("rated_flow_l_min") or beh.demo_flow_L_min or 20.0)
 
-    def step_water(self, dt: float) -> None:
+    def step_water(self, dt: float, publish: bool = True) -> None:
         if self.layout_fn is None:
             return
         try:
             digest, doc = self.layout_fn()
-            self.water.step(dt, digest, doc, self._item_on, self._item_rate)
-            self.twin.external = self.water.item_values()
+            self.water.step(dt, digest, doc, self._item_on, self._item_rate, publish=publish)
+            if publish:
+                self.twin.external = self.water.item_values()
         except Exception as e:                       # a drawing being edited never stops the simulation
             self.water.state["notes"] = [f"water not simulated: {e}"]
 
@@ -311,11 +314,15 @@ class EquipmentTwinService:
                 self.items.load(self.changes.overlay(self.snap) if self.changes is not None else self.snap)
 
     # ------------------------------------------------------------------ the diagram and its timeline (0.5.6)
-    def readings(self) -> dict[str, dict]:
+    def readings(self, compact: bool = False) -> dict[str, dict]:
         with self.lock:
             views = self.items.views()
             cmd = {iid: self.engine.item_state(iid).get("commanded", False) for iid in views}
-            return layout.item_readings(views, self.twin.samples(), commanded=cmd, faults=dict(self.twin.s.faults))
+            r = layout.item_readings(views, self.twin.samples(), commanded=cmd, faults=dict(self.twin.s.faults))
+        if compact:                                   # timeline pictures keep only items that show something
+            r = {i: x for i, x in r.items() if x["coil"] != "NONE" or x["commanded"] or x["fault"]
+                 or any(v["value"] is not None for v in x["values"].values())}
+        return r
 
     def _frame(self) -> None:
         """One picture of every item for the timeline: recorded after each batch of steps (four a second while
@@ -323,7 +330,7 @@ class EquipmentTwinService:
         ops = [{"program_id": o["program_id"], "version": o["version"], "step": o.get("step"), "state": o["state"]}
                for o in self.engine.view()["ops"]]
         self.frames.append({"sim_utc": self.clock.utc().isoformat(), "sim_s": round(self.clock.sim_s, 1),
-                            "run_id": self.run_id, "items": self.readings(), "ops": ops,
+                            "run_id": self.run_id, "items": self.readings(compact=True), "ops": ops,
                             "water": self.water.state})
 
     def start(self) -> None:
