@@ -448,3 +448,42 @@ def test_an_export_that_can_no_longer_be_applied_can_be_dismissed(live_and_twin)
     hb = login(live, "bench1", ORIGIN)                       # the viewer's login replaced the session cookie
     assert live.post("/api/twin-changes/dismiss", json={"digest": second, "note": "duplicate"}, headers=hb).status_code == 200
     assert live.get("/api/twin-changes", headers=hl).json()["pending"] == []
+
+
+def test_pages_name_their_scripts_by_version_and_say_which_version_answers(live_and_twin):
+    from aquacrop import __version__
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    for client, page in ((live, "/"), (twin, "/")):
+        r = client.get(page)
+        assert r.headers["cache-control"].startswith("no-cache") and r.headers["x-aquacrop-version"] == __version__
+        assert f'<meta name="aquacrop-version" content="{__version__}">' in r.text
+        assert f'app.css?v={__version__}"' in r.text and ".js\"" not in r.text      # every script is versioned
+    assert "immutable" in live.get(f"/static/app.js?v={__version__}").headers["cache-control"]
+    assert live.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert live.get("/api/health").headers["x-aquacrop-version"] == __version__
+
+
+def test_after_approval_the_twin_no_longer_lists_what_the_real_system_has(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    H = _twin_h(twin, "bench1")
+    pump = next(t for t in twin.get("/api/twin/changes").json()["types"] if t["type_id"] == "pump")
+    twin.post("/api/twin/equipment/save", json={"item_id": "p9", "name": "Pump 9", "type_id": "pump",
+                                                "type_version": pump["version"], "icon": "pump", "body": {}}, headers=H)
+    twin.post("/api/twin/equipment/bind", json={"item_id": "p9", "role": "start", "point": "relay_A.DO3"}, headers=H)
+    body = {"trigger": {"type": "MANUAL"}, "action": {"type": "RUN_FOR", "item": "p9", "duration_s": 10}}
+    twin.post("/api/twin/programs/draft", json={"program_id": "p9-run", "name": "P9", "body": body}, headers=H)
+    body2 = {"trigger": {"type": "MANUAL"}, "action": {"type": "RUN_FOR", "item": "p9", "duration_s": 20}}
+    twin.post("/api/twin/programs/draft", json={"program_id": "p9-run", "name": "P9", "body": body2}, headers=H)
+    r = twin.post("/api/twin/programs/activate", json={"program_id": "p9-run", "version": 2}, headers=H)
+    assert r.status_code == 200, r.text
+    twin.post("/api/twin/control", json={"action": "step", "steps": 2}, headers=H)
+    twin.post("/api/twin/recovery/approve", json={"target": "MANUAL"}, headers=H)
+    twin.post("/api/twin/run-now", json={"program_id": "p9-run"}, headers=H)
+    twin.post("/api/twin/control", json={"action": "step", "steps": 60}, headers=H)
+    digest = twin.post("/api/twin/export", json={"note": ""}, headers=H).json()["digest"]
+    hb = login(live, "bench1", ORIGIN)
+    assert live.post("/api/twin-changes/approve", json={"digest": digest}, headers=hb).status_code == 200
+    app.state.publish_snapshot()
+    assert twin.post("/api/twin/control", json={"action": "import"}, headers=H).status_code == 200
+    pv = twin.get("/api/twin/changes").json()["preview"]
+    assert pv["empty"] and pv["items"] == [] and pv["bindings"] == [] and pv["programs"] == []   # nothing left over

@@ -39,7 +39,7 @@
     if (v.value == null) return { ok: false, txt: v.quality === "NO CHANNEL" ? "no channel" : "no reading", q: v.quality };
     const ok = v.quality === "GOOD" || v.quality === "OVERRIDDEN";
     const txt = typeof v.value === "boolean" ? (v.value ? "on" : "off") : `${fixed(v.value, Math.abs(v.value) < 10 ? 2 : 1)}${v.unit ? " " + v.unit : ""}`;
-    return { ok, v: v.value, unit: v.unit, q: v.quality, txt: ok ? txt : `${txt} (${String(v.quality).toLowerCase()})` };
+    return { ok, v: v.value, unit: v.unit, q: v.quality, max: v.max, txt: ok ? txt : `${txt} (${String(v.quality).toLowerCase()})` };
   }
   function pipeState(R, p) {
     if (p.flow_item) {
@@ -163,8 +163,9 @@
         g = hot("node", n.id, `${n.label}: ${r.txt}`, () => {
           e("rect", { x, y, width: w, height: hh, rx: 6, class: "tank-bg" });
           if (r.ok && typeof r.v === "number") {
-            // the reading that means full: set on the tank, else 100 % for a percentage, else the capacity in litres
-            const full = n.full_at || (r.unit === "%" ? 100 : r.unit === "L" ? n.capacity_L : null);
+            // the reading that means full: set on the tank, else 100 % for a percentage, else the capacity in litres,
+            // else the top of the level sensor's scaling (its 20 mA)
+            const full = n.full_at || (r.unit === "%" ? 100 : r.unit === "L" ? n.capacity_L : r.max || null);
             const f = full ? Math.max(0, Math.min(1, r.v / full)) : 0;
             e("rect", { x: x + 2, y: y + 2 + (hh - 4) * (1 - f), width: w - 4, height: (hh - 4) * f, class: "water" });
           } else e("rect", { x: x + 3, y: y + 3, width: w - 6, height: hh - 6, class: "unknown" });

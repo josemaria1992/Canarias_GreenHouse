@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.11 (2026-10-25): new code after an upgrade, without a hard reload
+
+- The dashboard and the twin page name every script and stylesheet with the software version
+  (`app.js?v=0.6.11`), so a new version is a new address and the browser cannot keep using an old copy. The page
+  itself is never cached. Versioned files may be cached for long; unversioned files (images named in a script)
+  are checked each time.
+- Every answer from the controller says which version answered (`X-AquaCrop-Version`). A page left open across
+  an upgrade notices the new version and reloads itself once, so nobody has to press Ctrl+Shift+R.
+- After an export is approved, the twin no longer lists what the real system now has. At each import, items,
+  retirements and channels that match the real system are dropped from the twin's change set. Before, all 33
+  parts kept showing as "changed".
+- A tank whose level sensor reads in cm draws its water against the top of that sensor's scaling (its 20 mA
+  value) when the tank has no "Full at". Before, a scaled reading such as 43 cm showed an empty tank.
+- Only the latest program version made in the twin can be sent. Once the real system has that version's body,
+  nothing is pending. Before, an older version made in the twin (the first 2-minute fill) was offered instead.
+
 ## 0.6.10 (2026-10-25): dismiss an export that can no longer be applied
 
 - Real dashboard, Digital Twin page: an export from the twin that cannot be applied any more shows "Dismiss

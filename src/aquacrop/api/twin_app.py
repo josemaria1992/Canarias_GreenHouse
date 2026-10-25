@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import json
 from datetime import datetime, timezone
-from importlib import resources
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -34,6 +33,7 @@ from ..programs.schedule import upcoming
 from ..programs.store import ProgramRefused
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret
 from ..twin import feed
+from . import pages
 from ..equipment.definitions import TypeBody, channel_issues
 from ..twin.changes import ChangeRefused, TwinChanges, preview as changes_preview, program_items, write_export
 from ..twin.equipment_service import EquipmentTwinService, twin_config
@@ -41,7 +41,6 @@ from .app import safe_validation_response
 
 COOKIE = "aquacrop_twin_session"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
-WEB_DIR = resources.files("aquacrop") / "web"
 USER_SYNC_S = 30.0
 
 
@@ -242,6 +241,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             request.state.principal = p
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers[pages.VERSION_HEADER] = __version__
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -267,18 +267,11 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     # ------------------------------------------------------------------ static
     @app.get("/", include_in_schema=False)
     def index():
-        return Response((WEB_DIR / "twin.html").read_bytes(), media_type="text/html; charset=utf-8")
+        return pages.page("twin.html")
 
     @app.get("/static/{name}", include_in_schema=False)
-    def static(name: str):
-        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
-        ext = Path(name).suffix
-        if "/" in name or ".." in name or ext not in allowed:
-            raise HTTPException(404)
-        f = WEB_DIR / name
-        if not f.is_file():
-            raise HTTPException(404)
-        return Response(f.read_bytes(), media_type=allowed[ext])
+    def static(name: str, request: Request):
+        return pages.static(name, request, {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"})
 
     # ------------------------------------------------------------------ auth
     @app.post("/api/auth/login")

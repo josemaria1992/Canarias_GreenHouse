@@ -123,11 +123,24 @@
   function pill(text, cls) { return h("span", { class: "pill " + (cls || "") }, text); }
 
   // ---------------------------------------------------------------- API
+
+  // 0.6.11: a page left open across an upgrade reloads itself (once per version) to run the new code
+  const PAGE_VERSION = (document.querySelector('meta[name="aquacrop-version"]') || {}).content;
+  function checkVersion(r) {
+    const v = r.headers.get("X-AquaCrop-Version");
+    if (!v || !PAGE_VERSION || v === PAGE_VERSION) return;
+    let tried = null;
+    try { tried = sessionStorage.getItem("aquacrop-reloaded-for"); } catch (e) { /* storage blocked */ }
+    if (tried === v) return;                       // never loop if the page still does not match
+    try { sessionStorage.setItem("aquacrop-reloaded-for", v); } catch (e) { /* storage blocked */ }
+    location.reload();
+  }
   async function api(method, path, body) {
     const opts = { method, headers: {}, credentials: "same-origin" };
     if (method !== "GET") { opts.headers["X-CSRF-Token"] = S.csrf || ""; }
     if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
     const r = await fetch(path, opts);
+    checkVersion(r);
     if (r.status === 401) { showLogin(); throw new Error("not authenticated"); }
     const ct = r.headers.get("content-type") || "";
     const data = ct.includes("json") ? await r.json() : await r.text();

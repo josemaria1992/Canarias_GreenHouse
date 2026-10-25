@@ -194,6 +194,37 @@ class TwinChanges:
             self.doc["bindings"][key] = {"point": point or None, "base_point": base}
         self.save()
 
+    def reconcile(self, snap: dict) -> int:
+        """Drop the changes the real system now has itself (after an approved export, or the same edit made
+        there): an item that matches the live one, a retire of an item already retired, a channel already
+        assigned. What is left is still a difference. Returns how many were dropped."""
+        live = self._live_items(snap)
+        binds = {(b["item_id"], b["role"]): b["point"] for b in snap.get("bindings", [])}
+        dropped = 0
+        for iid, c in list(self.doc["items"].items()):
+            cur = live.get(iid)
+            if cur is not None and cur["status"] != "RETIRED"                     and all(cur[k] == c[k] for k in ("name", "type_id", "type_version", "icon", "body")):
+                del self.doc["items"][iid]
+                dropped += 1
+            elif cur is not None and c.get("base_version") is None:
+                c["base_version"] = cur["version"]     # created meanwhile on the real system: now a change to it
+        for iid in list(self.doc["retire"]):
+            cur = live.get(iid)
+            if cur is None or cur["status"] == "RETIRED":
+                del self.doc["retire"][iid]
+                dropped += 1
+        for key, c in list(self.doc["bindings"].items()):
+            iid, role = key.split(".", 1)
+            point = binds.get((iid, role))
+            if point == c["point"]:
+                del self.doc["bindings"][key]
+                dropped += 1
+            else:
+                c["base_point"] = point
+        if dropped:
+            self.save()
+        return dropped
+
     def revert(self, item_id: str) -> None:
         self.doc["items"].pop(item_id, None)
         self.doc["retire"].pop(item_id, None)
@@ -216,10 +247,13 @@ def twin_programs(snap: dict, versions: list[dict]) -> list[dict]:
     live_digests = {(p["program_id"], p["digest"]) for p in snap.get("programs", [])}
     mine: dict[str, dict] = {}
     for v in versions:
-        if v["created_by"] == "live-snapshot" or v["status"] == "RETIRED"                 or (v["program_id"], v["digest"]) in live_digests:
+        if v["created_by"] == "live-snapshot" or v["status"] == "RETIRED":
             continue
         if v["program_id"] not in mine or mine[v["program_id"]]["version"] < v["version"]:
             mine[v["program_id"]] = v
+    # only the latest version made in the twin counts; once the real system has that body, nothing is pending
+    # (an older twin version is never offered in its place)
+    mine = {pid: v for pid, v in mine.items() if (pid, v["digest"]) not in live_digests}
     out = []
     for pid, v in sorted(mine.items()):
         base = live_latest.get(pid)

@@ -25,11 +25,24 @@
     const t = $("toast"); t.textContent = msg; t.classList.remove("hidden"); t.style.background = bad ? "var(--bad)" : "";
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), 5000);
   }
+
+  // 0.6.11: a page left open across an upgrade reloads itself (once per version) to run the new code
+  const PAGE_VERSION = (document.querySelector('meta[name="aquacrop-version"]') || {}).content;
+  function checkVersion(r) {
+    const v = r.headers.get("X-AquaCrop-Version");
+    if (!v || !PAGE_VERSION || v === PAGE_VERSION) return;
+    let tried = null;
+    try { tried = sessionStorage.getItem("aquacrop-reloaded-for"); } catch (e) { /* storage blocked */ }
+    if (tried === v) return;                       // never loop if the page still does not match
+    try { sessionStorage.setItem("aquacrop-reloaded-for", v); } catch (e) { /* storage blocked */ }
+    location.reload();
+  }
   async function api(method, path, body) {
     const o = { method, headers: {}, credentials: "same-origin" };
     if (method !== "GET") { o.headers["X-CSRF-Token"] = S.csrf || ""; o.headers["X-Runtime-Id"] = S.rid || ""; }
     if (body !== undefined) { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(body); }
     const r = await fetch(path, o);
+    checkVersion(r);
     if (r.status === 401) { showLogin(); throw new Error("not signed in"); }
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || r.status);

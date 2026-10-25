@@ -14,7 +14,6 @@ import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from importlib import resources
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -36,11 +35,11 @@ from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
 from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
+from . import pages
 from .service import SimulationService
 
 COOKIE = "aquacrop_session"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
-WEB_DIR = resources.files("aquacrop") / "web"
 # Bounded readers (ADR-0008, WAL): every user query ends in one short read transaction.
 AUDIT_EXPORT_MAX_ROWS = 200000
 ANALYTICS_MAX_DAYS = 31
@@ -369,6 +368,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             return JSONResponse({"detail": "chunked bodies not accepted"}, status_code=411)
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers[pages.VERSION_HEADER] = __version__
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -479,18 +479,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     # ------------------------------------------------------------------ static UI
     @app.get("/", include_in_schema=False)
     def index():
-        return Response((WEB_DIR / "index.html").read_bytes(), media_type="text/html; charset=utf-8")
+        return pages.page("index.html")
 
     @app.get("/static/{name}", include_in_schema=False)
-    def static(name: str):
-        allowed = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png"}
-        ext = Path(name).suffix
-        if "/" in name or ".." in name or ext not in allowed:
-            raise HTTPException(404)
-        f = WEB_DIR / name
-        if not f.is_file():
-            raise HTTPException(404)
-        return Response(f.read_bytes(), media_type=allowed[ext])
+    def static(name: str, request: Request):
+        return pages.static(name, request)
 
     # ------------------------------------------------------------------ auth routes
     @app.post("/api/auth/login")

@@ -156,6 +156,8 @@ class EquipmentTwinService:
             raise ValueError("no snapshot from the real system yet; open the dashboard of the real system once")
         with self.lock:
             self.snap = snap
+            if self.changes is not None:
+                self.changes.reconcile(snap)         # what the real system now has is no longer a change
             self.items.load(self.changes.overlay(snap) if self.changes is not None else snap)
             rebuilt = False
             if f"{snap['config_version']}-twin" != self.cfg.config_version:

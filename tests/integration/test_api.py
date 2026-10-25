@@ -203,7 +203,7 @@ def test_static_ui_is_packaged_and_offline(env):
         src = c.get(f"/static/{js}").text
         assert "innerHTML" not in src and "eval(" not in src
         assert not re.search(r"setAttribute\(\s*[\"']style", src), js   # the CSP blocks style attributes
-    assert '<script src="/static/plant.js">' in idx.text and 'id="v-plant"' in idx.text
+    assert re.search(r'<script src="/static/plant\.js\?v=[^"]+">', idx.text) and 'id="v-plant"' in idx.text   # versioned (0.6.11)
     # the wording is loaded before the pages that use it
     assert idx.text.index('/static/words.js') < idx.text.index('/static/app.js') < idx.text.index('/static/plant.js')
 

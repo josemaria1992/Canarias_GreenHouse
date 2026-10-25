@@ -157,7 +157,9 @@ def item_readings(views: dict, samples: dict, *, commanded: dict[str, bool] | No
                 val = round(sc.apply(float(s.raw_value) / 1000.0), 3) if sc else None
             else:
                 val = None
-            values[r.role] = {"value": val, "unit": r.unit, "quality": q, "label": r.label}
+            sc = it.body.scaling.get(r.role)
+            values[r.role] = {"value": val, "unit": r.unit, "quality": q, "label": r.label,
+                              "max": sc.eng_max if sc else None}     # top of the range: a tank's "full" (0.6.11)
             if fb is not None and r.role == fb.role:
                 feedback = "UNKNOWN" if val is None or q not in ("GOOD", "OVERRIDDEN") else ("ON" if val else "OFF")
         out[iid] = {"name": it.name, "coil": coil, "feedback": feedback, "values": values,
