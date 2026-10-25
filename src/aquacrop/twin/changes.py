@@ -21,6 +21,7 @@ import copy
 import hashlib
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,7 +77,14 @@ class TwinChanges:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(self.doc, indent=1, sort_keys=True), encoding="utf-8")
-        tmp.replace(self.path)
+        for attempt in range(5):                      # Windows may hold the old file for a moment
+            try:
+                tmp.replace(self.path)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
 
     def empty(self) -> bool:
         return not any(self.doc.values())

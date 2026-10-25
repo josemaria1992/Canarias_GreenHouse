@@ -487,8 +487,26 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         hist.event("TWIN_WATER_LEVEL", {"tank": body.node, "pct": body.pct}, actor=p.username)
         return {"ok": True}
 
+    _dia_cache: dict = {}
+
     @app.get("/api/twin/diagram")
     def diagram(p: Principal = Depends(require(Perm.READ))):
+        # the drawing, its comparison with the real system's and its issues change only with the draft, the
+        # snapshot or the equipment: computed once for each, not on every refresh of the page
+        try:
+            mt = draft_path.stat().st_mtime
+        except OSError:
+            mt = None
+        try:
+            smt = (feed_dir / feed.SNAPSHOT).stat().st_mtime    # the real system's layout arrives with its snapshot
+        except OSError:
+            smt = None
+        key = (mt, smt, svc.snapshot_utc, json.dumps(svc.changes.doc, sort_keys=True))
+        if _dia_cache.get("key") != key:
+            _dia_cache.update(key=key, body=_diagram_static())
+        return _dia_cache["body"] | {"readings": svc.readings(), "water": svc.water.state}
+
+    def _diagram_static() -> dict:
         lay, src = draft()
         live, _ = live_layout()
         items = []
@@ -499,8 +517,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                                      if r.direction.value == "INPUT"] if v else []})
         return {"layout": layout.canonical(lay), "source": src, "digest": layout.digest(lay),
                 "live_digest": layout.digest(live), "changes": layout.summary(live, lay),
-                "issues": layout.issues(lay, svc.items.items), "items": items, "readings": svc.readings(),
-                "water": svc.water.state}
+                "issues": layout.issues(lay, svc.items.items), "items": items}
 
     @app.get("/api/twin/frames")
     def frames(after: float = -1.0, p: Principal = Depends(require(Perm.READ))):
@@ -561,6 +578,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 out.append(f"{pid} v{ver}")
         return out
 
+    _all_points = sorted(str(x) for x in cfg.all_points())
+    _fits: dict[str, list[str]] = {}
+
     @app.get("/api/twin/changes")
     def changes_view(p: Principal = Depends(require(Perm.READ))):
         snap = svc.snap or {"equipment": {"types": [], "items": []}, "bindings": [], "programs": []}
@@ -569,10 +589,13 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results)
         else:
             pv = {"items": [], "bindings": [], "programs": [], "missing": [], "empty": True}
-        all_points = sorted(str(x) for x in cfg.all_points())
+        all_points = _all_points
 
         def fitting(role) -> list[str]:          # channels whose kind, direction and interface suit the role
-            return [pt for pt in all_points if not channel_issues(cfg, role, pt, None)]
+            key = role.model_dump_json()
+            if key not in _fits:                   # the configuration does not change while the twin runs
+                _fits[key] = [pt for pt in all_points if not channel_issues(cfg, role, pt, None)]
+            return _fits[key]
         types = []
         for t in snap["equipment"]["types"]:
             if t["status"] not in ("ACTIVE", "SUPERSEDED"):

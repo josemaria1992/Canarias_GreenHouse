@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.8 (2026-10-25): a lighter twin page
+
+- The twin page's requests are cheaper:
+  - which channels suit each role is worked out once per role, not on every refresh;
+  - the drawing, its comparison with the real system's layout and its issues are recomputed only when the
+    drawing, the snapshot or the equipment change.
+  This leaves the CM4 more time for the simulation while the page is open.
+- Saving the twin's change set retries when Windows briefly holds the file (test runs on Windows).
+
 ## 0.6.7 (2026-10-25): the twin page stays live at high speed
 
 - The twin takes its lock per simulation step instead of per batch, and does at most 0.2 s of work per round.
