@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.5 (2026-10-25): twin water keeps a tank's percentage when it is resized
+
+- A tank whose capacity changes in the drawing keeps its percentage, not its litres. Drawings from before 0.6.4
+  had 100 L placeholder tanks, so after the starter set the real sizes their water showed as nearly empty.
+- A test covers the water model: mains filling through open valves, a pump to a sector, gravity drainage, no flow
+  without a running pump, and resizing.
+
 ## 0.6.4 (2026-10-25): water in the digital twin (owner request)
 
 - Water moves along the twin's drawing: a water source (new symbol; the mains) fills through open valves, running

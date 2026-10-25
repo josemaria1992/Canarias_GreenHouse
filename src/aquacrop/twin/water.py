@@ -171,11 +171,13 @@ class Water:
 
     def __init__(self):
         self.levels: dict[str, float] = {}          # tank node -> litres
+        self.caps: dict[str, float] = {}            # tank node -> the capacity its level was kept for
         self.state: dict = {"tanks": {}, "pipes": {}, "sensors": {}, "sectors": {}, "sources": {}, "notes": []}
         self._net: tuple[str, Network] | None = None
 
     def reset(self) -> None:
         self.levels.clear()
+        self.caps.clear()
         self.state = {"tanks": {}, "pipes": {}, "sensors": {}, "sectors": {}, "sources": {}, "notes": []}
 
     def set_level(self, node: str, pct: float, layout: dict) -> None:
@@ -195,7 +197,11 @@ class Water:
         net = self.network(digest, layout)
         tanks = {i: n for i, n in net.nodes.items() if n["kind"] == "tank"}
         for i, n in tanks.items():
-            self.levels.setdefault(i, START_PCT / 100.0 * (n.get("capacity_L") or 1000.0))
+            cap = n.get("capacity_L") or 1000.0
+            self.levels.setdefault(i, START_PCT / 100.0 * cap)
+            if self.caps.get(i, cap) != cap:          # a tank resized in the drawing keeps its percentage
+                self.levels[i] *= cap / self.caps[i]
+            self.caps[i] = cap
 
         def gate(node_id):
             n = net.nodes[node_id]

@@ -388,3 +388,27 @@ def test_the_starter_creates_nothing_when_a_name_is_taken(live_and_twin):
     assert r.status_code == 409 and "Main pump 1 (mp1): the name is used by demo" in r.json()["detail"]
     ids = {i["item_id"] for i in twin.get("/api/twin/changes").json()["items"]}
     assert ids == {"p1", "demo"}                                                  # nothing half-made
+
+
+def test_twin_water_fills_tanks_through_open_valves_and_pumps_move_it():
+    from aquacrop.layout import default_layout
+    from aquacrop.twin.starter import link_layout, parts
+    from aquacrop.twin.water import Water
+    doc = link_layout(default_layout(), {p["item_id"] for p in parts()})[0].model_dump(mode="json")
+    w = Water()
+    on = {"v-fill-a", "v-fill-main"}
+    w.step(60.0, "d", doc, lambda it: it in on, lambda it: 20.0)
+    t = w.state["tanks"]
+    assert t["tank-a"]["in_L_min"] == 30 and t["tank-main"]["in_L_min"] == 30 and t["tank-b"]["in_L_min"] == 0
+    assert w.state["sensors"]["flow-fill-main"]["value"] == 30 and "mains" in w.state["pipes"]
+    on = {"mp1", "v-s1"}                                   # main pump 1 to sector 1; the sector drains back
+    w.step(60.0, "d", doc, lambda it: it in on, lambda it: 20.0)
+    assert t is not w.state["tanks"] and w.state["tanks"]["tank-main"]["out_L_min"] == 20
+    assert w.state["sectors"]["sector-1"] == 20 and w.state["tanks"]["tank-sump"]["in_L_min"] == 6
+    on = {"v-s1"}                                          # no pump: nothing leaves the main tank
+    w.step(60.0, "d", doc, lambda it: it in on, lambda it: 20.0)
+    assert w.state["tanks"]["tank-main"]["out_L_min"] == 0 and not w.state["sectors"]
+    doc["nodes"] = [dict(n, capacity_L=n["capacity_L"] * 2) if n["id"] == "tank-b" else n for n in doc["nodes"]]
+    before = w.state["tanks"]["tank-b"]["pct"]
+    w.step(1.0, "d2", doc, lambda it: False, lambda it: 20.0)
+    assert w.state["tanks"]["tank-b"]["pct"] == before          # resized: same percentage
