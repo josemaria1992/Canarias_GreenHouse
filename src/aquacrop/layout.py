@@ -155,6 +155,8 @@ def item_readings(views: dict, samples: dict, *, commanded: dict[str, bool] | No
             elif s.raw_value is not None:
                 sc = it.body.scaling.get(r.role)
                 val = round(sc.apply(float(s.raw_value) / 1000.0), 3) if sc else None
+                if sc and q == "UNSCALED":
+                    q = "GOOD"          # the channel has no scaling, the item does: a fresh, scaled reading (0.6.12)
             else:
                 val = None
             sc = it.body.scaling.get(r.role)

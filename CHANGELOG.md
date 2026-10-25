@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.12 (2026-10-25): scaled sensor readings count as good
+
+- A module channel has no scaling of its own and reports its raw current as "unscaled". When the equipment item
+  has a scaling, the reading it gives (for example 49.5 cm from 11.92 mA) is a fresh, scaled measurement and is now
+  shown as one. The drawing fills the tank instead of marking the reading "(unscaled)" and leaving the tank empty.
+
 ## 0.6.11 (2026-10-25): new code after an upgrade, without a hard reload
 
 - The dashboard and the twin page name every script and stylesheet with the software version

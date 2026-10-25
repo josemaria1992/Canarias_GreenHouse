@@ -487,3 +487,17 @@ def test_after_approval_the_twin_no_longer_lists_what_the_real_system_has(live_a
     assert twin.post("/api/twin/control", json={"action": "import"}, headers=H).status_code == 200
     pv = twin.get("/api/twin/changes").json()["preview"]
     assert pv["empty"] and pv["items"] == [] and pv["bindings"] == [] and pv["programs"] == []   # nothing left over
+
+
+def test_a_reading_scaled_by_its_item_is_a_good_reading_and_knows_its_top():
+    from types import SimpleNamespace
+    from aquacrop import layout
+    from aquacrop.domain.model import Quality
+    from aquacrop.equipment.definitions import TEMPLATES, ItemBody, TypeBody
+    from aquacrop.programs.engine import ItemView
+    sc = {"raw_min": 4, "raw_max": 20, "raw_unit": "mA", "eng_min": 0, "eng_max": 100, "unit": "cm", "provenance": "PROPOSED"}
+    v = ItemView("lvl", "Level", TypeBody.model_validate(TEMPLATES["level"]["body"]),
+                 ItemBody.model_validate({"scaling": {"level": sc}}), {"level": "analog_A.AI1"}, {"level": False})
+    s = SimpleNamespace(value=None, raw_value=11920, quality=Quality.UNSCALED)   # 11.92 mA from the module
+    got = layout.item_readings({"lvl": v}, {"analog_A.AI1": s})["lvl"]["values"]["level"]
+    assert got == {"value": 49.5, "unit": "cm", "quality": "GOOD", "label": "Level", "max": 100.0}
