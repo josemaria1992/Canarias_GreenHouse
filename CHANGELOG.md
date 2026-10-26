@@ -6,6 +6,20 @@ Owner upgrade brief of 25 October 2026. Simulation and software only: no physica
 release. What each capability is today: `docs/CAPABILITIES-0.7.md`. Upgrading and going back:
 `docs/operations/upgrade-0.7.md`. A tour with screenshots: `docs/operator/walkthrough-0.7.md`.
 
+- **Corrections from the independent review of 26 October (R07-01 to R07-04, ADR-0026 amendment).**
+  - A twin test counts on the real system only for the equipment, channels, settings and water network it was
+    run with. After a rebinding or another such change the program shows "twin test outdated", cannot be
+    activated, and an already active version does not start again until it is tested in the twin again. A run in
+    progress keeps the outputs it switched on.
+  - A block's stop plans now run as written: stopped early by a user, a guard time or a window, a program follows
+    the block's normal stop; after a failure or a stop condition, the block's fault stop, with its waits, each
+    stop verified before the next step. An unverified stop holds the rest of the plan and raises an alarm. The
+    preview says which plan applies when.
+  - Twin water: a pump feeding two branches never gives more than its rated flow in all, also with a booster on
+    one branch (water model `graph-water-2`; earlier graph-model twin results become history).
+  - Changes from the twin: when the change record cannot be written during an apply or its undo, the answer says
+    so and this process keeps the true record; the next start checks every step recorded as done against the real
+    system, so a step already taken back is never reported as applied. Short Windows file locks are retried.
 - **Who sees what (ADR-0023).** The menu follows the account's role and the server refuses everything else.
   Viewers see Overview, Programs and Alarms only; they no longer open history, equipment, modules or the twin.
   Operators build equipment, drawings, blocks and programs, propose channels and request modules; writing a new

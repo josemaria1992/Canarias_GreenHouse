@@ -118,6 +118,12 @@ class Op:
     stop_since: float | None = None
     stopping_items: list[str] = field(default_factory=list)
     last_off_retry: float | None = None
+    stop_plan: list = field(default_factory=list)    # R07-02: the plan this stop follows (Steps), then the rest OFF
+    stop_plan_name: str = "none"                     # normal | fault | none
+    stop_idx: int = 0
+    stop_step_since: float = 0.0
+    stop_sent: set[str] = field(default_factory=set)  # plan OFFs sent in this stop
+    plan_done: bool = False
 
     def public(self, now: float) -> dict:
         return {"op_id": self.op_id, "program_id": self.program_id, "version": self.version, "origin": self.origin,
@@ -648,6 +654,12 @@ class Engine:
             if key:
                 self.store.occurrence_update(key, "FAILED", outcome=why)
             raise Refused(why)
+        # the real system: a program whose twin proof no longer matches its equipment, channels or network never
+        # starts again until it is tested in the new context (R07-01); running operations keep their channels
+        if (why := getattr(self.io, "program_refusal", lambda p, v: None)(pid, ver)) is not None:
+            if key:
+                self.store.occurrence_update(key, "FAILED", outcome=why)
+            raise Refused(f"{pid} v{ver}: {why}")
         need = actuators(body)
         for iid in need:
             it = self._items.get(iid)
@@ -891,21 +903,103 @@ class Engine:
         self.alarm("PROGRAM_OP_FAILED", op.program_id, True, {"op_id": op.op_id, "why": why})
         self._begin_stop(op, why, result="FAILED")
 
+    # Which plan a stop follows (review R07-02). A completed sequence has already run its normal stop as steps.
+    FAULT_RESULTS = ("FAILED", "GUARD_STOPPED", "STOPPED")      # a failure, a stop condition, a stop of everything
+    NORMAL_RESULTS = ("STOPPED_BY_USER", "RUNTIME_GUARD", "WINDOW_ENDED", "CANCELLED", "DONE")
+
+    def _choose_plan(self, op: Op, result: str) -> tuple[str, list]:
+        a = op.body.action
+        if a.type != "SEQUENCE":
+            return "none", []
+        if result in self.FAULT_RESULTS and a.fault_stop:
+            return "fault", list(a.fault_stop)
+        if result in self.NORMAL_RESULTS and a.normal_stop and not (result == "DONE" and op.step >= len(a.steps)):
+            return "normal", list(a.normal_stop)
+        return "none", []
+
     def _begin_stop(self, op: Op, why: str, *, result: str) -> None:
         if op.state != "RUNNING":
             return
         op.state, op.reason, op.result = "STOPPING", why, result
-        op.stop_since = self.clock.mono()
-        op.stopping_items = list(reversed(op.on))
-        self.event("PROGRAM_OP_STOPPING", {"op_id": op.op_id, "why": why, "result": result}, "system")
-        for iid in op.stopping_items:
-            it = self._held(op, iid)
-            if it and it.command_point:
-                self.io.command(it.command_point, False, actor="program", reason=f"stop {op.op_id}: {why}",
-                                priority=Priority.STOP)
+        op.stop_since = op.stop_step_since = self.clock.mono()
+        op.stop_plan_name, op.stop_plan = self._choose_plan(op, result)
+        op.stop_idx, op.stop_sent, op.stopping_items, op.plan_done = 0, set(), [], False
+        self.event("PROGRAM_OP_STOPPING", {"op_id": op.op_id, "why": why, "result": result,
+                                           "plan": op.stop_plan_name}, "system")
         self._advance_stop(op)
 
+    def _off_state(self, op: Op, iid: str) -> tuple[bool, bool | None, bool | None]:
+        """(verified OFF, coil, feedback) of an item this operation holds."""
+        it = self._held(op, iid)
+        if it is None or it.command_point is None:
+            return False, None, None                 # nothing to read it by: never assumed OFF
+        coil = self._digital(it.command_point)
+        fb = it.feedback_role
+        fbv = self._role_value(it, fb.role) if fb else False
+        return coil is False and fbv is False, coil, fbv
+
+    def _run_stop_plan(self, op: Op) -> bool:
+        """Follow the stop plan in order: each OFF is sent once and verified (output and feedback) before the next
+        step; a WAIT holds for its time. An OFF not verified within its timeout holds the rest of the plan, since
+        closing a valve on a pump that may still run is what the plan exists to avoid: the operation reports
+        STOP_UNVERIFIED and sends that OFF again, never an ON. True when the plan is through."""
+        now = self.clock.mono()
+        while op.stop_idx < len(op.stop_plan):
+            s = op.stop_plan[op.stop_idx]
+            if s.do == "WAIT":
+                if now - op.stop_step_since < s.seconds:
+                    return False
+            elif s.item in op.on:                    # only what this operation switched on and still owns
+                it = self._held(op, s.item)
+                if s.item not in op.stop_sent:
+                    op.stop_sent.add(s.item)
+                    op.stop_step_since = now
+                    if it and it.command_point:
+                        self.io.command(it.command_point, False, actor="program",
+                                        reason=f"stop {op.op_id} ({op.stop_plan_name} plan step {op.stop_idx + 1}): "
+                                               f"{op.reason}", priority=Priority.STOP)
+                ok, coil, fbv = self._off_state(op, s.item)
+                if not ok:
+                    if now - op.stop_step_since > s.timeout_s:
+                        detail = [f"{getattr(it, 'name', s.item)}: output "
+                                  f"{'UNKNOWN' if coil is None else 'ON' if coil else 'OFF'}, feedback "
+                                  f"{'UNKNOWN' if fbv is None else 'ON' if fbv else 'OFF'}; "
+                                  f"the rest of the {op.stop_plan_name} stop waits for it"]
+                        if op.state != "STOP_UNVERIFIED":
+                            op.state = "STOP_UNVERIFIED"
+                            self.alarm("PROGRAM_STOP_UNVERIFIED", op.program_id, True, {"op_id": op.op_id, "items": detail})
+                            self.event("PROGRAM_STOP_UNVERIFIED", {"op_id": op.op_id, "items": detail}, "system")
+                        if it and it.command_point and now - (op.last_off_retry or op.stop_step_since) >= STOP_VERIFY_S:
+                            op.last_off_retry = now
+                            self.io.command(it.command_point, False, actor="program",
+                                            reason=f"stop {op.op_id}: not verified, OFF again", priority=Priority.STOP)
+                    return False
+                op.on.remove(s.item)
+                op.off_sent.discard(s.item)
+                if op.held.pop(s.item, None) is not None:
+                    self._mark_off(s.item)
+                if op.state == "STOP_UNVERIFIED":
+                    op.state = "STOPPING"
+                    self.alarm("PROGRAM_STOP_UNVERIFIED", op.program_id, False, {})
+            self.event("PROGRAM_STOP_STEP", {"op_id": op.op_id, "plan": op.stop_plan_name, "step": op.stop_idx + 1,
+                                             "do": s.do, "item": s.item}, "system")
+            op.stop_idx += 1
+            op.stop_step_since = now
+        return True
+
     def _advance_stop(self, op: Op) -> None:
+        if not op.plan_done:
+            if not self._run_stop_plan(op):
+                return
+            # the plan is through (or there is none): whatever is still on goes OFF now, the last one first
+            op.plan_done = True
+            op.stop_since = self.clock.mono()
+            op.stopping_items = list(reversed(op.on))
+            for iid in op.stopping_items:
+                it = self._held(op, iid)
+                if it and it.command_point:
+                    self.io.command(it.command_point, False, actor="program", reason=f"stop {op.op_id}: {op.reason}",
+                                    priority=Priority.STOP)
         pending = []
         for iid in op.stopping_items:
             it = self._held(op, iid)

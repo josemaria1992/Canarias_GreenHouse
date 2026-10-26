@@ -10,7 +10,10 @@ The form is what the operator fills in on the Programs page, in four parts:
   operation through its plan), each a measurement, a comparison, a value with its unit and a persistence.
 
 `compile_form` turns it into a `ProgramBody` the engine runs: a SEQUENCE of the block's startup steps, the endpoint
-(RUN or DELIVER), and the block's normal stop; the engine's stop path is the fault stop. The body carries the form
+(RUN or DELIVER), and the block's normal stop. The block's normal and fault stop plans are also carried as the
+sequence's `normal_stop` and `fault_stop` (review R07-02): the engine follows the normal plan when an operation is
+stopped early by a user, its guard time or its window, and the fault plan after a failure or a stop condition, step
+by step with their waits and verified stops (programs/engine.py). The body carries the form
 itself (`authoring`), so the program reopens in the same form, and its digest covers both. Time is a watering time
 after the startup steps (labelled); the guard bounds the whole operation. A volume needs the block's inline meter,
 in L/min, on the block's path: elapsed time or a pump's rated flow is never a volume.
@@ -189,11 +192,9 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
         steps.append({"do": "RUN", "seconds": e.minutes * 60})
     else:                                               # MANUAL: runs until stopped, within the guard
         steps.append({"do": "RUN", "seconds": e.max_minutes * 60})
-    for s in block.plan.normal_stop:
-        if s.do == "WAIT":
-            steps.append({"do": "WAIT", "seconds": s.seconds})
-        else:
-            steps.append({"do": "OFF", "item": s.node, "timeout_s": s.timeout_s})
+    normal_stop = _stop_plan(block.plan.normal_stop, steps, "normal stop")
+    fault_stop = _stop_plan(block.plan.fault_stop, steps, "fault stop")
+    steps.extend(normal_stop)
     for i, r in enumerate(f.permissives):
         _check_rule(r, views, f"start condition {i + 1}")
     for i, r in enumerate(f.guards):
@@ -216,12 +217,31 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
                                 "from_date": _iso(sch.from_date), "to_date": _iso(sch.to_date)})
             trigger = {"type": "WEEKLY", "entries": entries}
     body = {"description": f.description, "trigger": trigger,
-            "action": {"type": "SEQUENCE", "steps": steps, "max_runtime_s": guard_s},
+            "action": {"type": "SEQUENCE", "steps": steps, "max_runtime_s": guard_s}
+            | ({"normal_stop": normal_stop} if normal_stop else {}) | ({"fault_stop": fault_stop} if fault_stop else {}),
             "permissives": [_cond(r) for r in f.permissives], "guards": [_cond(r) for r in f.guards],
             "authoring": f.model_dump(mode="json"), "basis": "WATERING_AFTER_STARTUP" if e.kind == "TIME" else None}
     if len(steps) > 32:
         raise FormRefused("the block's plan and the watering make more than 32 steps", "block_id")
     return body
+
+
+def _stop_plan(plan, steps: list[dict], name: str) -> list[dict]:
+    """A block's stop plan as engine steps: STOP/CLOSE switch off (verified), WAIT waits; only items its startup
+    switched on, since an operation stops what it owns and never starts anything on the way out."""
+    started = {s["item"] for s in steps if s["do"] == "ON"}
+    out = []
+    for s in plan:
+        if s.do == "WAIT":
+            out.append({"do": "WAIT", "seconds": s.seconds})
+        elif s.do in ("START", "OPEN"):
+            raise FormRefused(f"the block's {name} {s.do.lower()}s {s.node}: a stop plan only stops, closes and waits",
+                              "block_id")
+        elif s.node not in started:
+            raise FormRefused(f"the block's {name} acts on {s.node}, which its startup never switches on", "block_id")
+        else:
+            out.append({"do": "OFF", "item": s.node, "timeout_s": s.timeout_s})
+    return out
 
 
 def _iso(d: date | None) -> str | None:

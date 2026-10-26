@@ -121,6 +121,24 @@ evidence. This brief is the map.
 - **Browser journey.** `scripts/ui_check/run_journey_070.py` + `journey_070.cjs`. It drives headless Chromium with
   real mouse drags and API read-backs, across three roles, at desktop and tablet width, and through the twin.
 
+## Corrections after the independent review of 26 October 2026
+
+The review of head `7132198` asked for changes (R07-01 to R07-04). All four were reproduced from its probes and
+corrected. Each probe is now an expected-correct regression test. The design is recorded in the ADR-0026
+amendment.
+
+| Finding | Correction | Code | Tests |
+|---|---|---|---|
+| R07-01 live activation accepted proof from another binding | One proof-context definition for the twin and the real system. The live side checks it when it lists programs, at activation and at every new start of an active version. A run in progress keeps its held channels | `programs/proof.py`, `api/app.py`, `api/operation.py`, `api/programs.py`, `programs/store.py`, `programs/live.py`, `programs/engine.py` | `tests/hardware/test_proof_context_r07.py` (real twin evidence, rebinding to DO2, activation 409, run-now 409 when already active, zero ON frames; binding, setting, topology and model changes; a moved symbol keeps the proof) |
+| R07-02 the configured fault plan never ran | The block's normal and fault stop plans are compiled into the SEQUENCE and followed step by step with their waits. Each OFF is verified before the next step, and an unverified OFF holds the rest of the plan | `programs/definitions.py`, `programs/authoring.py`, `programs/engine.py`, `api/programs.py`, `web/programs.js` | `tests/unit/test_stop_plans_r07.py` (pump OFF at 0.5 s, valve still open at 9.5 s, closed after 10 s; user stop and runtime guard follow the normal plan; stuck pump holds the valve; no plan: all OFF) |
+| R07-03 shared pump capacity counted twice | Every pump and source is one capacity over all its active paths (max-min fair fill). Model id `graph-water-2` | `twin/graph_water.py` | `tests/unit/test_graph_water_r07.py` (20 L/min main pump: 10 + 10; with a 5 L/min booster: 15 + 5; series; two sources; emptying tank; batch-independent) |
+| R07-04 stale DONE after failed journal writes | Compensation is journaled (COMPENSATING). An unwritable record is kept in memory and reported. Recovery checks every DONE step against the real system and marks steps UNDONE or UNKNOWN; UNKNOWN blocks undo. Windows replace refusals are retried | `api/changes.py`, `twin/feed.py`, `twin/changes.py` | `tests/hardware/test_journal_failures_r07.py` (the review's two-denial probe, a journal that cannot be written at all, a record that cannot be created, an unknown step, a passing lock) |
+
+One behaviour choice needs the owner's confirmation. When a stop plan's OFF cannot be verified (for example a pump
+that keeps running), the engine holds the rest of the plan, so the valve stays open rather than closing on a
+running pump. It sends the OFF again and raises an alarm. Session end still applies the configured LEASE_END
+safe state to every output.
+
 ## Evidence
 
 | What | Result |
@@ -130,6 +148,7 @@ evidence. This brief is the map.
 | Existing UI check | 100/101 on CI before `66ac861` (label only); fixed |
 | Release build + `verify_release.py` with its own Python | 28/28. ZIP sha256 `ee71716f9e93aca14cf821fc91c9eca34c67766f336516e0f5a61f7d909f327b`, 2265 files, built from a clean worktree of `bd6ab4e` |
 | CI on PR #11 | failed on `d3ef78e` (timeline order, UI-01 label); fixed in `66ac861`, re-run pending |
+| After the R07 corrections | 721 passed, 8 skipped, 0 failed (unit, hardware, integration, acceptance, legacy); browser journey and release rebuild NOT RUN (see `docs/RESULTS-0.7.md`) |
 
 **Release ZIP.** It was rebuilt from `bd6ab4e` and includes the `66ac861` fix. The earlier build from `c5ac7cb`
 (`fdd274b4…`) is superseded. The documents inside the ZIP still name the earlier build, because they were

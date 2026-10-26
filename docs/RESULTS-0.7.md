@@ -149,6 +149,30 @@ Playwright for the browser journey. Branch `feat/operator-upgrade-0.7` (base `fe
 - Tank water and pipe flow in the twin were drawn black (no style).
 - The program form's refusal for a missing feedback channel now says what to change.
 
+## After the independent review of 26 October 2026 (R07-01 to R07-04)
+
+Run on Windows 11, Python 3.12, from the working tree with the four corrections (see `docs/REVIEW-0.7.md`). These
+are runs by the author of the corrections, not independent ones.
+
+| Run | Result |
+|---|---|
+| `tests/unit tests/hardware tests/integration` (the review's broad selection) | 596 passed, 8 skipped, 0 failed (604 collected, 734 s) |
+| `tests/acceptance tests/legacy` | 125 passed, 0 failed |
+| New expected-correct tests from the review's probes | 25 passed: `test_proof_context_r07.py` (6), `test_stop_plans_r07.py` (6), `test_graph_water_r07.py` (8), `test_journal_failures_r07.py` (5) |
+| Browser journey (`run_journey_070.py`) | NOT RUN: the Node `playwright` package is not installed on this machine |
+| Release rebuild and `verify_release.py` | NOT RUN after the corrections: the ZIP below predates them and must be rebuilt |
+| CI on PR #11 | pending the push |
+
+The review's broad run hit Windows `os.replace` access-denied errors. They came from a run inside a OneDrive folder.
+This run used a local temporary directory, so it shows that the retry and recovery code works here. It does not
+show behaviour on a synchronised folder. The review's 11 skips and this run's 8 skips come from different
+environments.
+
+Cases affected by the corrections: EQ-05 and TWIN-08 (proof context on the real system), PROG-02 and PROG-04
+(stop plans), TWIN-02, TWIN-03 and TWIN-05 (shared capacities), FB-07, DEP-03 and DEP-04 (journal). Each is
+covered by the tests above in simulation only. The statuses in the table at the top are unchanged until the
+owner's review.
+
 ## Packaged release
 
 `python scripts/build_release.py --out <dir> --windows-runtime download --wheelhouse aarch64:3.11 --wheelhouse aarch64:3.13`

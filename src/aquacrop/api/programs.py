@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..equipment.definitions import TypeBody
 from ..programs.definitions import actuators, errors_text, parse, validate
+from ..programs.proof import refusal as proof_refusal
 from ..programs.schedule import overlap, upcoming
 from ..programs.store import ProgramRefused
 from ..security.auth import Perm, Principal
@@ -72,7 +73,16 @@ def step_words(s: dict, names: dict) -> str:
             "DELIVER": lambda: f"deliver {s['target_L']:g} L measured by {n(s['meter'])} (stop if no flow for {s['no_flow_timeout_s']:g} s)"}[s["do"]]()
 
 
-def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publish, *, blocks=None, views=None) -> None:
+def stop_words(plan: list | None, names: dict, when: str) -> str:
+    rest = "every item still on is switched off, the last one first, and each stop is verified; an alarm says why"
+    if not plan:
+        return f"{when}: {rest}"
+    return (f"{when}: " + ", then ".join(step_words(s, names) for s in plan)
+            + "; each step waits for the previous stop to be verified. Then " + rest.replace("every item", "any other item"))
+
+
+def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publish, *, blocks=None, views=None,
+             proof_context=None) -> None:
     def context():
         items = {i["item_id"]: i for i in equipment.items()}
         types = {(t["type_id"], t["version"]): TypeBody.model_validate(t["body"]) for t in equipment.types()}
@@ -171,8 +181,10 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                             and mine & set(actuators(parse(o["body"])))})
         return {"summary": summary(f, b["name"], nm, cfg.site.timezone, datetime.now(timezone.utc)),
                 "steps": [step_words(s, nm) for s in pbody["action"]["steps"]],
-                "fault_stop": "every item switched on is switched off again, the last one first, and each stop is verified; "
-                              "an alarm says why",
+                # R07-02: the plans the engine follows, in the operator's words (programs/engine.py _choose_plan)
+                "fault_stop": stop_words(pbody["action"].get("fault_stop"), nm, "after a failure or a stop condition"),
+                "interrupted_stop": stop_words(pbody["action"].get("normal_stop"), nm,
+                                               "when someone stops it, or its guard time or window ends"),
                 "resources": [nm.get(i, i) for i in sorted(mine)], "conflicts": conflicts,
                 "issues": logic, "physical_needs": physical, "body": pbody}
 
@@ -213,12 +225,18 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                     words = summary(f, (bl.get(f.block_id) or {}).get("name", f.block_id), nm, cfg.site.timezone, now)
                 except ValidationError:
                     words = None
+            sim = None
+            if v["simulation"]:
+                # R07-01: a passed result counts only in this version's proof context on this system now
+                sim = {k: v["simulation"].get(k) for k in ("passed", "accepted_by", "accepted_utc", "meaning")}
+                if proof_context is not None:
+                    why = proof_refusal(v["simulation"], v["digest"], proof_context(v["program_id"], v["version"]))
+                    sim |= {"current": why is None, "why_not_current": why}
             row = {k: v[k] for k in ("program_id", "version", "status", "name", "digest", "updated_utc")} | {
-                "next": nxt, "form": form, "summary": words, "describe": describe(body),
-                "simulation": {k: (v["simulation"] or {}).get(k) for k in ("passed", "accepted_by", "accepted_utc", "meaning")}
-                if v["simulation"] else None}
+                "next": nxt, "form": form, "summary": words, "describe": describe(body), "simulation": sim}
             if ops:                                  # a viewer reads summaries, not definitions or readiness details
-                row |= {"body": body, "validation": v["validation"], "created_by": v["created_by"], "simulation": v["simulation"]}
+                row |= {"body": body, "validation": v["validation"], "created_by": v["created_by"],
+                        "simulation": None if sim is None else v["simulation"] | sim}
             out.append(row)
         if not ops:
             return {"programs": out, "timezone": cfg.site.timezone, "blocks": [], "readings": [], "items": []}

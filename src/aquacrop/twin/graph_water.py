@@ -6,10 +6,12 @@ Order of one fixed step (the same at every speed and batch size):
    (`topology.validation.paths_from`, computed once per graph digest); a path is active when every valve on it is
    open and every pump on it runs; water leaves a tank only through a running pump, a source pushes by itself (its
    configured supply), and a sector's drain and a tank's overflow run by gravity;
-3. allocation: one rate per driver (the pumps of a path in series give their smallest rate; a source its supply),
-   shared once between its active paths; a source's supply is shared once between everything it feeds; a tank
-   cannot give more than it holds in the step; a full tank takes no more, and what still arrives goes to its
-   overflow path or is counted as spilled;
+3. allocation (review R07-03): every running pump and every source is a capacity (its rated flow, its supply)
+   shared by all the active paths through it; the paths are filled together at the same rate and a path stops
+   growing when any capacity it uses is full (max-min fair, exact, in a stable order). So pumps in series give
+   their smallest rate, a pump feeding two branches never gives more than its rate in all, and a booster on one
+   branch limits that branch only. A tank cannot give more than it holds in the step; a full tank takes no more,
+   and what still arrives goes to its overflow path or is counted as spilled;
 4. integration over the same step: tanks, the drain in transit (a sector returns its drain share after its
    delay), litres delivered to sectors, and every meter's flow;
 5. the ledger: initial stored + supplied = stored + in transit + used by sectors + drained away + spilled. Its
@@ -28,12 +30,39 @@ from dataclasses import dataclass, field
 from ..topology.definitions import Topology, digest as topo_digest
 from ..topology.validation import paths_from
 
-MODEL = "graph-water-1"
+MODEL = "graph-water-2"   # R07-03: shared pump capacities; a changed model is a new proof context
 TOLERANCE_L = 1e-6
 
 
 class ModelError(RuntimeError):
     pass
+
+
+def fill(active: list[int], caps: dict[tuple, tuple[float, list[int]]]) -> dict[int, float]:
+    """Max-min fair rates: every active path grows at the same rate until a capacity it uses is full. Each round
+    fills at least one capacity, so it ends after at most len(caps) rounds; the order is fixed by the sorted keys."""
+    flow = {i: 0.0 for i in active}
+    growing = set(active)
+    keys = sorted(caps)
+    while growing:
+        inc, tight = None, []
+        for k in keys:
+            cap, members = caps[k]
+            n = sum(1 for i in members if i in growing)
+            if not n:
+                continue
+            room = max(0.0, cap - sum(flow[i] for i in members)) / n
+            if inc is None or room < inc - 1e-15:
+                inc, tight = room, [k]
+            elif abs(room - inc) <= 1e-15:
+                tight.append(k)
+        if inc is None:                            # a path without any capacity cannot happen; never loop on it
+            break
+        for i in growing:
+            flow[i] += inc
+        for k in tight:
+            growing -= set(caps[k][1])
+    return flow
 
 
 @dataclass
@@ -168,7 +197,8 @@ class GraphWater:
         self._init(p)
         flows: dict[tuple, float] = {}            # path index -> L/min
         paths = self.paths(t)
-        groups: dict[tuple, list[int]] = {}
+        caps: dict[tuple, tuple[float, list[int]]] = {}   # ("pump"|"source", node) -> (L/min, active paths through it)
+        active: list[int] = []
         for i, path in enumerate(paths):
             frm, kinds = path["frm"], p.kind
             if kinds[frm] == "tank" and (p.capacity.get(frm) is None or self.vol.get(frm, 0.0) <= 1e-12):
@@ -198,22 +228,13 @@ class GraphWater:
                 continue
             if kinds[frm] == "source" and p.supply.get(frm) is None:
                 continue
-            key = (frm, frozenset(pumps)) if pumps else (frm,)
-            groups.setdefault(key, []).append(i)
-        # 3. one rate per driver group, shared once between its active paths
-        for key, idx in groups.items():
-            frm = key[0]
-            rate = min(p.rate[x] for x in key[1]) if len(key) > 1 else p.supply[frm]
-            for i in idx:
-                flows[i] = rate / len(idx)
-        # a source's supply is shared once between everything it feeds
-        for s in [n for n, k in p.kind.items() if k == "source"]:
-            mine = [i for i in flows if paths[i]["frm"] == s]
-            total = sum(flows[i] for i in mine)
-            if p.supply.get(s) is not None and total > p.supply[s] + 1e-12:
-                f = p.supply[s] / total
-                for i in mine:
-                    flows[i] *= f
+            for x in sorted(set(pumps)):
+                caps.setdefault(("pump", x), (p.rate[x], []))[1].append(i)
+            if kinds[frm] == "source":
+                caps.setdefault(("source", frm), (p.supply[frm], []))[1].append(i)
+            active.append(i)
+        # 3. every pump and source is one capacity shared by all its active paths (no capacity counted twice)
+        flows.update(fill(active, caps))
         # a tank cannot give more than it holds in this step
         for tk in [n for n, k in p.kind.items() if k == "tank"]:
             mine = [i for i in flows if paths[i]["frm"] == tk]
@@ -281,6 +302,10 @@ class GraphWater:
                     self.drained_away += share
                 self._mark(x, share * 60.0 / dt if dt > 0 else 0.0)
         self._ledger()
+
+    def pump_loads(self, t: Topology, p: Params) -> dict[str, tuple[float, float | None]]:
+        """Each pump's water this step (all paths through it) and its rated flow: the first never exceeds the second."""
+        return {n: (self.node_flow.get(n, 0.0), p.rate.get(n)) for n, k in p.kind.items() if k == "pump"}
 
     def _overflow(self, tank, excess, dt, p, is_on, paths) -> None:
         routes = [x for x in paths if x["frm"] == tank and x.get("overflow")

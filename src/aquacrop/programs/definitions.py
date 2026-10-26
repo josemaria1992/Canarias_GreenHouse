@@ -17,7 +17,8 @@ Actions
   RUN_FOR         one item ON for a bounded duration (or for the window, bounded by the item's max runtime)
   DELIVER_VOLUME  one item ON until a measured volume, a runtime guard or a no-flow timeout
   KEEP_BETWEEN    one item switched to keep a measurement inside [low, high] with hysteresis and debounce
-  SEQUENCE        ordered steps: ON / OFF with verification, WAIT, RUN, DELIVER; a stop path in reverse
+  SEQUENCE        ordered steps: ON / OFF with verification, WAIT, RUN, DELIVER; optional normal and fault stop
+                  plans (OFF / WAIT) the engine follows step by step when it stops the operation early
 
 Bounds that every program carries: a maximum runtime per operation (never above the item's), a maximum
 number of steps (no loops exist), timeouts on every verification, and a failure path (`on_failure`).
@@ -180,6 +181,27 @@ class Sequence(_M):
     type: Literal["SEQUENCE"]
     steps: tuple[Step, ...] = Field(min_length=1, max_length=MAX_STEPS)
     max_runtime_s: float = Field(gt=0, le=86400)
+    # review R07-02: the process's own ways to stop (OFF and WAIT steps over items the steps switch on). An
+    # interrupted operation (stopped by a user, its runtime guard or its window) stops through `normal_stop`; a
+    # failure, a stop condition or a stop of everything through `fault_stop`. Either one empty: every item still
+    # on is switched off, the last one first. Items a plan does not name are switched off after it, last first.
+    normal_stop: tuple[Step, ...] = Field(default=(), max_length=MAX_STEPS)
+    fault_stop: tuple[Step, ...] = Field(default=(), max_length=MAX_STEPS)
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        return _drop_defaults(handler(self), {"normal_stop": [], "fault_stop": []})
+
+    @model_validator(mode="after")
+    def _v(self):
+        started = {s.item for s in self.steps if s.do == "ON"}
+        for name, plan in (("normal stop", self.normal_stop), ("fault stop", self.fault_stop)):
+            for s in plan:
+                if s.do not in ("OFF", "WAIT"):
+                    raise ValueError(f"the {name} only switches off and waits")
+                if s.do == "OFF" and s.item not in started:
+                    raise ValueError(f"the {name} switches off {s.item}, which the sequence never switches on")
+        return self
 
 
 Action = Union[RunFor, DeliverVolume, KeepBetween, Sequence]

@@ -30,14 +30,13 @@ from ..programs.definitions import digest as program_digest, parse
 from ..programs.engine import Clock, Engine, ItemView
 from ..programs.store import ProgramStore, SqlEngineStore
 from .equipment_twin import EquipmentTwin, SimClock
-from .graph_water import MODEL as GRAPH_MODEL, GraphWater, ModelError, params_from
+from .graph_water import GraphWater, ModelError, params_from
 from .water import Water
 from . import feed
 
 SPEEDS = (1, 10, 60, 600, 3600)
 DT_S = 0.5
 MAX_STEPS_PER_S = 400
-WATER_MODEL = "drawing-water-0.7.0"   # part of every proof context: a changed model is a new test context
 FRAMES = 2400                     # timeline: ten minutes of wall time at four frames a second
 
 
@@ -460,37 +459,18 @@ class EquipmentTwinService:
 
     # ------------------------------------------------------------------ results and evidence
     def context(self, program_id: str, version: int) -> dict:
-        """What a run of this program version tests (0.7.0, F01): its body, and for every item it names the type,
-        the item's settings (scaling, properties, simulation) and its channels, plus the water model and the
-        network it runs on. A result counts as proof only in this same context and in the current twin run. Names
-        and icons are not part of it. Until blocks carry an explicit hydraulic graph (ADR-0024) the water network
-        is the drawing, so a moved pipe is a new context; with the graph, only connection changes are."""
-        from .changes import program_items
+        """What a run of this program version tests (0.7.0, F01): see programs/proof.py, shared with the real
+        system. A result counts as proof only in this same context and in the current twin run."""
+        from ..programs import proof
         try:
             v = self.programs.get(program_id, version)
         except Exception:
             return {"digest": None, "items": []}
-        views = self.items.views()
-        names = sorted(program_items(v["body"]))
-        items = {}
-        for iid in names:
-            it = views.get(iid)
-            items[iid] = None if it is None else {
-                "type": it.type.model_dump(mode="json"), "body": it.body.model_dump(mode="json"),
-                "points": dict(sorted(it.points.items()))}
-        water, model = None, WATER_MODEL
-        g = self.graph()
-        if g is not None:                          # the graph's connections and the numbers it runs with; no drawing
-            from ..topology.definitions import digest as topo_digest
-            p = params_from(g, views)
-            water, model = {"topology": topo_digest(g), "params": p.digest_parts()}, GRAPH_MODEL
-        elif self.layout_fn is not None:
+        g, lay = self.graph(), None
+        if g is None and self.layout_fn is not None:
             with contextlib.suppress(Exception):
-                water = self.layout_fn()[0]
-        doc = {"program": v["digest"], "items": items, "water_network": water, "water_model": model}
-        import hashlib
-        d = hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
-        return {"digest": d, "items": names, "water_network": water, "water_model": model}
+                lay = self.layout_fn()[0]
+        return proof.context(v, self.items.views(), g, lay)
 
     def current_proof(self, program_id: str, version: int) -> list[dict]:
         """Results of this program version from the current twin run in the current context; older ones are history."""
@@ -509,7 +489,8 @@ class EquipmentTwinService:
             raise ValueError("some runs of this version failed in the twin: say why you accept it anyway")
         ev = {"kind": "AQUACROP_TWIN_EVIDENCE", "program_id": program_id, "version": version, "digest": v["digest"],
               "passed": True, "accepted_by": actor, "accepted_utc": datetime.now(timezone.utc).isoformat(),
-              "twin_run_id": self.run_id, "runs": runs[-20:], "note": note,
+              "twin_run_id": self.run_id, "context": self.context(program_id, version)["digest"],
+              "runs": runs[-20:], "note": note,
               "meaning": "logic test on virtual modules with DEMO dynamics; not physical verification"}
         if v["digest"] != program_digest(parse(v["body"]).model_dump(mode="json")):
             raise ValueError("this version's body does not match its digest")

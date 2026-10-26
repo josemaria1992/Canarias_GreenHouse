@@ -27,6 +27,7 @@ from pathlib import Path
 
 from ..equipment.definitions import ICONS, ItemBody, TypeBody, channel_issues, item_issues
 from ..programs.definitions import digest as program_digest, parse as program_parse
+from . import feed
 
 EXPORT_PREFIX = "export-"
 KIND = "AQUACROP_TWIN_EXPORT"
@@ -374,7 +375,7 @@ def write_export(feed_dir: Path, pv: dict, *, by: str, note: str, twin_run: str,
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, default=str), encoding="utf-8")
     os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    feed.replace(tmp, path)
     return {"digest": doc["digest"], "written_utc": doc["written_utc"], "items": len(doc["items"]),
             "bindings": len(doc["bindings"]), "programs": len(doc["programs"])}
 

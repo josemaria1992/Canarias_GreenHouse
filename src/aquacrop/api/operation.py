@@ -50,7 +50,7 @@ class ProgramRefIn(_B):
     accept_overlaps: bool = False
 
 
-def register(app, require, host, programs, equipment, cfg) -> None:
+def register(app, require, host, programs, equipment, cfg, *, proof_context=None) -> None:
     why_not = ("Programs cannot run on this real system: scheduled bench tests are not enabled in its configuration. "
                "They need an approved IO 8CH allowlist and an armed test session (ADR-0018).")
 
@@ -131,7 +131,8 @@ def register(app, require, host, programs, equipment, cfg) -> None:
             raise HTTPException(409, "not ready for a physical test: " + "; ".join(problems))
         return await call(programs.activate, p.username, STORE_ID, body.program_id, body.version,
                           require_simulation=True, overlaps_accepted=body.accept_overlaps,
-                          overlaps=(v["validation"] or {}).get("context", {}).get("overlaps", []))
+                          overlaps=(v["validation"] or {}).get("context", {}).get("overlaps", []),
+                          context=proof_context(body.program_id, body.version) if proof_context else None)
 
     @app.post("/api/operation/deactivate")
     async def deactivate(body: ProgramRefIn, request: Request, p: Principal = Depends(require(Perm.EQUIPMENT_ACTIVATE))):

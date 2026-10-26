@@ -853,10 +853,23 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     def block_dependents(block_id: str) -> list[str]:
         return sorted({v["program_id"] for v in programs.versions() if v["status"] != "RETIRED"
                        and (v["body"].get("authoring") or {}).get("block_id") == block_id})
+    def proof_context(program_id: str, version: int) -> str | None:
+        """The proof context digest of this program version on the real system now (programs/proof.py, R07-01)."""
+        from ..programs import proof
+        try:
+            v = programs.get(program_id, version)
+        except Exception:
+            return None
+        g = blocks.graph()
+        g = g if g.nodes else None
+        lay = None if g is not None else layout_mod.digest(layouts.current()[0])
+        return proof.context(v, design_views(equipment), g, lay)["digest"]
+    app.state.proof_context = proof_context
+
     block_routes.register(app, require, blocks, dependents=block_dependents,
                           legacy_layout=lambda: (layouts.current()[0], "the real system's drawing"))
     program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish, blocks=blocks,
-                            views=lambda: design_views(equipment))
+                            views=lambda: design_views(equipment), proof_context=proof_context)
     from . import runs as run_routes
     run_routes.register(app, require, hist, programs)
 
@@ -866,8 +879,14 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     if not is_sim and cfg.bench_tests.enabled:
         from ..programs.live import LiveEngineHost
         live_engine = LiveEngineHost(svc, hist, equipment, programs, session_id)
+
+        def proof_refusal(program_id: str, version: int) -> str | None:
+            from ..programs.proof import refusal
+            v = programs.get(program_id, version)
+            return refusal(v["simulation"], v["digest"], proof_context(program_id, version))
+        live_engine.proof_refusal = proof_refusal
     app.state.live_engine = live_engine
-    operation_routes.register(app, require, live_engine, programs, equipment, cfg)
+    operation_routes.register(app, require, live_engine, programs, equipment, cfg, proof_context=proof_context)
 
     @app.get("/api/twin-link")
     def twin_link(p: Principal = Depends(require(Perm.OPS_READ))):

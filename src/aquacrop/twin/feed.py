@@ -36,12 +36,25 @@ HANDOFF_KEY = "twin-handoff.key"
 TICKET_S = 60
 
 
+def replace(tmp: Path, path: Path, attempts: int = 20) -> None:
+    """os.replace, retried for about a second when Windows refuses it because a reader (a sync client, an antivirus
+    or another thread listing the directory) has the target open; any other error, or the last refusal, is raised."""
+    for i in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if os.name != "nt" or i == attempts - 1:
+                raise
+            time.sleep(0.05)
+
+
 def _atomic(path: Path, doc: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, default=str), encoding="utf-8")
     os.chmod(tmp, 0o640)              # the services run with umask 077; the other side reads through its group
-    os.replace(tmp, path)
+    replace(tmp, path)
 
 
 def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software_version: str,
@@ -98,7 +111,7 @@ def write_handoff_key(feed_dir: Path) -> bytes:
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_bytes(key.hex().encode())
     os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    replace(tmp, path)
     return key
 
 

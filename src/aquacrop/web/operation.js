@@ -58,8 +58,10 @@
         : h("p", { class: "muted" }, "Nothing is running."));
     const progs = h("div", { class: "card" }, h("h3", null, "Programs for physical tests"),
       Object.values(latest).length ? h("table", { class: "compact" }, h("tbody", null, Object.values(latest).map(p => {
-        const active = v.active[p.program_id] === p.version, passed = p.simulation && p.simulation.passed;
-        return h("tr", null, h("td", null, `${p.name} v${p.version}`), h("td", null, passed ? pill("TWIN PASSED", "ok") : pill("not tested in twin", "warn")),
+        const active = v.active[p.program_id] === p.version, tested = p.simulation && p.simulation.passed;
+        const passed = tested && p.simulation.current !== false;   // a result from another context is history
+        return h("tr", null, h("td", null, `${p.name} v${p.version}`), h("td", null, passed ? pill("TWIN PASSED", "ok")
+          : tested ? h("span", { title: p.simulation.why_not_current || "" }, pill("twin test outdated", "warn")) : pill("not tested in twin", "warn")),
           h("td", null, active ? pill("ACTIVE", "ok") : ""),
           h("td", null, !active ? h("button", { class: "small", disabled: !adm || !passed, onclick: () => send("/api/operation/activate", { program_id: p.program_id, version: p.version }, "active on the real system") }, "Activate")
             : h("button", { class: "small ghost", disabled: !adm, onclick: () => send("/api/operation/deactivate", { program_id: p.program_id, version: p.version }) }, "Deactivate"),

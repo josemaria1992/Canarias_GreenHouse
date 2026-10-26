@@ -265,20 +265,21 @@ class ProgramStore:
         return out
 
     def activate(self, actor: str, runtime_id: str, program_id: str, version: int, *, require_simulation: bool,
-                 overlaps_accepted: bool, overlaps: list[str]) -> dict:
+                 overlaps_accepted: bool, overlaps: list[str], context: str | None = None) -> dict:
+        """`context`: the proof context digest of this version on this system now (programs/proof.py); with
+        `require_simulation` the accepted twin result must have been taken in exactly that context."""
+        from .proof import refusal
         with self._lock:
             v = self.get(program_id, version)
             if v["status"] != "VALIDATED":
                 raise ProgramRefused(f"{program_id} v{version} is not validated")
-            if require_simulation:
-                sim = v["simulation"]
-                if not sim or not sim.get("passed") or sim.get("digest") != v["digest"]:
-                    raise ProgramRefused("this version has no passing twin run; test it in the digital twin first")
+            if require_simulation and (why := refusal(v["simulation"], v["digest"], context)) is not None:
+                raise ProgramRefused(why)
             if overlaps and not overlaps_accepted:
                 raise ProgramRefused("foreseeable overlaps with active programs: " + "; ".join(overlaps[:5]) +
                                      " — accept them to activate (each one raises a conflict you resolve)")
             row = (runtime_id, program_id, version, "ACTIVATED", actor, _now(),
-                   json.dumps({"digest": v["digest"], "overlaps": overlaps}))
+                   json.dumps({"digest": v["digest"], "overlaps": overlaps, "context": context}))
             self.h.submit(lambda c: c.execute("INSERT INTO program_activations(runtime_id, program_id, version, action, "
                                               "actor, utc, json) VALUES(?,?,?,?,?,?,?)", row), wait=True)
             self.h.event("PROGRAM_ACTIVATED", {"program": f"{program_id}@{version}", "runtime": runtime_id}, actor=actor)

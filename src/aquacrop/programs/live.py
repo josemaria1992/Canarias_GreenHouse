@@ -9,7 +9,9 @@ program route says why. When it exists:
 * with no armed lease nothing starts (the occurrence is recorded as FAILED with the reason), and a lease that ends
   (expiry, revocation, logout, restart) stops every operation; the configured LEASE_END safe-state OFF follows;
 * only VERIFIED channel bindings are used: an item with a PROPOSED channel has no point for that role here;
-* activation of a program version needs that version's accepted twin result and no physical validation problem.
+* activation of a program version needs that version's accepted twin result and no physical validation problem;
+  that result must have been taken in the program's current proof context (programs/proof.py), checked again at
+  every new start, so a changed channel, setting or water network never runs on an older test (R07-01).
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ class LiveEngineHost:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last_error: str | None = None
+        self.proof_refusal = None       # (program_id, version) -> why its twin proof does not count now; set by the app
         host = self
 
         class IO:
@@ -61,6 +64,9 @@ class LiveEngineHost:
 
             def module_online(self, uid):
                 return host.svc.backend.health(uid).online
+
+            def program_refusal(self, program_id, version):
+                return host.proof_refusal(program_id, version) if host.proof_refusal is not None else None
 
             def start_refusal(self):
                 lease = host.svc.gate.active()

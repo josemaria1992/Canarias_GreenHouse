@@ -118,6 +118,7 @@
       pv.summary.stop_conditions.length ? h("p", { class: "small" }, "Stops if: ", pv.summary.stop_conditions.join("; or ")) : null,
       h("ol", { class: "small" }, pv.steps.map(s => h("li", null, s))),
       h("p", { class: "small" }, `If something fails: ${pv.fault_stop}`),
+      pv.interrupted_stop ? h("p", { class: "small" }, `If it is stopped early: ${pv.interrupted_stop}`) : null,
       h("p", { class: "small" }, "Equipment it holds while running: ", pv.resources.join(", ") || "none"),
       pv.conflicts.length ? h("p", { class: "warn small" }, "Shares equipment with: ", pv.conflicts.join("; "), ". A conflict is resolved when it happens; nothing is taken over silently.") : null,
       h("p", { class: "muted small" }, `Before it can run on real equipment: ${pv.physical_needs.length ? pv.physical_needs.join("; ") : "nothing more from the program; the bench session and approvals still apply."}`));
@@ -162,13 +163,14 @@
     const open = P0.open[v.program_id];
     return h("div", { class: "card", "data-program": v.program_id },
       h("div", { class: "row" }, h("h3", null, v.name), pill(`${v.status} v${v.version}`, ST[v.status]),
-        sim && sim.passed ? pill("TWIN PASSED", "ok") : pill("NOT TESTED IN TWIN", "warn"),
+        sim && sim.passed && sim.current !== false ? pill("TWIN PASSED", "ok") : sim && sim.passed ? pill("TWIN TEST OUTDATED", "warn") : pill("NOT TESTED IN TWIN", "warn"),
         legacy ? pill("EARLIER DEFINITION", "") : null, v.active_on && v.active_on.length ? pill("ACTIVE", "ok") : null),
       h("p", null, v.summary ? v.summary.text : v.describe),
       v.next && v.next.length ? h("p", { class: "small" }, "Next starts: ", v.next.join(" · ")) : null,
       val.issues && val.issues.length ? h("ul", { class: "bad small" }, val.issues.map(x => h("li", null, x))) : null,
       ctx.physical_needs && ctx.physical_needs.length && can("ops_read") ? h("details", null, h("summary", { class: "small" }, `Before a physical test (${ctx.physical_needs.length})`), h("ul", { class: "small" }, ctx.physical_needs.map(x => h("li", null, x)))) : null,
       sim && sim.passed ? h("p", { class: "muted small" }, `Twin result accepted by ${sim.accepted_by} (${new Date(sim.accepted_utc).toLocaleString()}): ${sim.meaning}.`) : null,
+      sim && sim.passed && sim.current === false ? h("p", { class: "small warn" }, sim.why_not_current) : null,
       can("equipment_edit") ? h("div", { class: "row" },
         !legacy ? h("button", { class: "small", onclick: () => { P0.form = { program_id: v.program_id, name: v.name, version: v.status === "DRAFT" ? v.version : null, status: v.status, form: JSON.parse(JSON.stringify(v.form)) }; P0.preview = null; U.refresh(); } },
           v.status === "DRAFT" ? "Edit" : "Change (new version)") : null,

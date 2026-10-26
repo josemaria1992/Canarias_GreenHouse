@@ -128,7 +128,8 @@ def test_a_program_switches_an_allowlisted_output_only_inside_a_lease(bench):
     assert r.status_code == 409 and "twin" in r.text                       # no twin pass yet
     app.state.programs.record_simulation("blink", 1, {"digest": app.state.programs.get("blink", 1)["digest"],
                                                       "passed": True, "accepted_by": "admin1",
-                                                      "accepted_utc": datetime.now(timezone.utc).isoformat()})
+                                                      "accepted_utc": datetime.now(timezone.utc).isoformat(),
+                                                      "context": app.state.proof_context("blink", 1)})
     assert c.post("/api/operation/activate", json={"program_id": "blink", "version": 1}, headers=H).status_code == 200
     assert c.post("/api/operation/run-now", json={"program_id": "blink"}, headers=H).status_code == 409   # RECOVERY
     wait(lambda: all(x["ok"] for x in c.get("/api/operation", headers=h).json()["checklist"]))
@@ -156,7 +157,8 @@ def test_lease_end_stops_a_running_program_and_the_wrong_runtime_is_refused(benc
     c.post("/api/programs/draft", json={"program_id": "long", "name": "Long", "body": body}, headers=h)
     c.post("/api/programs/validate", json={"program_id": "long", "version": 1}, headers=h)
     app.state.programs.record_simulation("long", 1, {"digest": app.state.programs.get("long", 1)["digest"], "passed": True,
-                                                     "accepted_by": "admin1", "accepted_utc": "x"})
+                                                     "accepted_by": "admin1", "accepted_utc": "x",
+                                                     "context": app.state.proof_context("long", 1)})
     rid = c.get("/api/operation", headers=h).json()["runtime_id"]
     assert c.post("/api/operation/mode", json={"target": "AUTO"}, headers=h | {"X-Runtime-Id": "TWIN:x"}).status_code == 409
     H = h | {"X-Runtime-Id": rid}
