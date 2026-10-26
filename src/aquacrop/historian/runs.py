@@ -67,6 +67,8 @@ def run_detail(hist, op_id: str, programs=None) -> dict | None:
             continue
         timeline.append({"utc": e["utc"], "kind": e["kind"], "actor": e["actor"],
                          "what": _words(e["kind"], p), "sim_utc": p.get("sim_utc")})
+        if e["kind"] == "PROGRAM_OP_STARTED" and p.get("op_id") == op_id:
+            timeline = timeline[-1:]            # recorded before the start in the same instant: not part of this run
     cmds = hist.query("SELECT intent_utc, target, desired, outcome, detail, readback, actor FROM commands "
                       "WHERE reason LIKE ? ORDER BY intent_utc LIMIT 500", (f"%{op_id}%",))
     for c in cmds:

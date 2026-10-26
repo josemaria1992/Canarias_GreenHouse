@@ -102,7 +102,7 @@ async function main() {
   const nav = await until(p, async () => { const t = (await p.locator("#nav").innerText()).replace(/\s+/g, " "); return /Watering/.test(t) && !/\bControl\b/.test(t) && t; }, 5000)
     || (await p.locator("#nav").innerText()).replace(/\s+/g, " ");
   check("UI-01 nav", ["Getting started", "Watering", "Sector 1", "Sector 2", "Main tank", "Nutrients & acid", "Drainage return", "Recipes",
-    "Digital Twin", "History", "Alarms & events"].every(t => nav.includes(t)) && !/\bControl\b|Trends/.test(nav), nav);
+    "Digital Twin", "History", "Alarms & Events"].every(t => nav.includes(t)) && !/\bControl\b|Trends/.test(nav), nav);
   for (const v of PLANT_PAGES.concat(SHARED_PAGES)) {
     await show(p, v);
     const txt = await visibleText(p);
