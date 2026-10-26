@@ -36,3 +36,22 @@ conditions the engine did not yet evaluate.
 * `DONE` still means the endpoint was reached and stopped verified; a guard, a window end or a runtime guard is
   never DONE. A twin pass is a logic test of exactly this version on the tested context (ADR-0026).
 * Tests: `tests/unit/test_programs_070.py`, `tests/unit/test_feedback_070.py`, `tests/integration/test_program_forms_070.py`.
+
+
+## Amendment 0.7.1 (owner decisions of 26 October 2026): form version 2
+
+* **How much** is one endpoint per cycle: water for a time, or deliver litres (measured by the block's inline meter; a
+  litre cycle ends at its measured target, with no second duration). The form never carries a maximum.
+* **The independent runtime bound is the block's safety setting** (`BlockBody.safety.max_runtime_s`), configured once
+  on Blocks, finite, enforced by the engine on every start and followed by the block's normal stop with every stop
+  verified (stop monitoring never ends because the timer elapsed). A program over a block without it, or whose
+  watering time does not fit inside it, is refused with the reason. The software proposes no value. Version 1 forms
+  keep compiling as before (their own maximum, or the block's when it is stricter).
+* **When** is a set of windows (start and finish) on chosen days, an optional date range and the wait after each
+  verified cycle (optionally the most cycles per window). It compiles to `WINDOW_REPEAT`: the first cycle of a window
+  does not wait; at the finish a running cycle is stopped (WINDOW_ENDED; an unmet volume is reported as `unmet_L`,
+  never DONE). A window that follows another requests its own first cycle only after the earlier operation is
+  verified stopped and its equipment is free, without the earlier wait or litres. A window that ends before its first
+  cycle could start is recorded MISSED with what it waited for, and never starts late. Restart, DST and missed-window
+  policy is unchanged. The engine reports each program's state (watering, stopping, stop not verified, waiting with
+  the reason, resting, idle). Tests: `tests/unit/test_windows_071.py`.

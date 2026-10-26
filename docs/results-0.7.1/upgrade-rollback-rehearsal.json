@@ -1,0 +1,40 @@
+{
+ "before": {
+  "schema": "5",
+  "items": 37,
+  "bindings": 9,
+  "programs": 1,
+  "users": 3,
+  "events": 9005,
+  "integrity": "ok"
+ },
+ "migrated": [
+  6,
+  7
+ ],
+ "after_upgrade": {
+  "schema": "7",
+  "items": 37,
+  "bindings": 9,
+  "programs": 1,
+  "users": 3,
+  "events": 9005,
+  "integrity": "ok"
+ },
+ "module_requests": 0,
+ "public_ids": 0,
+ "after_restore": {
+  "schema": "5",
+  "items": 37,
+  "bindings": 9,
+  "programs": 1,
+  "users": 3,
+  "events": 9005,
+  "integrity": "ok"
+ },
+ "old_backup_create_rc": 0,
+ "old_backup_verify_rc": 0,
+ "old_restore_rc": 0,
+ "old_release_on_schema7": "refused at start: database schema 7 is newer than this software (5)",
+ "source": "bench main database, consistent online copy 2026-10-26T23:08:17Z (0.6.12, schema 5); old code = commit 93622e2 (0.6.12); new = working tree 0.7.1"
+}

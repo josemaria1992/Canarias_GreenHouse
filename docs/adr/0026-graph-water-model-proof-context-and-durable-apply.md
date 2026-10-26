@@ -60,3 +60,24 @@ Tests: `tests/hardware/test_proof_context_r07.py`, `tests/unit/test_stop_plans_r
 
 Tests: `tests/unit/test_graph_water.py`, `tests/hardware/test_twin_graph_070.py`, `tests/hardware/test_twin_proof_070.py`,
 `tests/hardware/test_changes_durable_070.py`, `tests/unit/test_feedback_070.py`.
+
+
+## Amendment 0.7.1: independent re-review of 7bc098c (RR-01 to RR-04), and simulated channels
+
+* **RR-01.** An item an operation switched ON and verified OFF stays held, with the channels it was switched on with,
+  until the operation ends. Before every later stop step and before the operation ends it is checked again; if it
+  reads ON or UNKNOWN, the rest of the plan holds (no dependent valve closes), the stop is STOP_UNVERIFIED with an alarm
+  and OFF is sent again, never ON. Once it is OFF again, the current step's wait starts over. During a run, an item the
+  operation switched off that reads ON again fails the operation into its fault plan. Faults and stop conditions during
+  a stop raise their alarms but never release, skip or reorder a step.
+* **RR-02.** A `block_added` step is APPLIED only while the exact version it made exists and is not RETIRED; a version a
+  compensation dropped is UNDONE.
+* **RR-03.** A drawing step journals the graph and drawing identities (before and target) and the revisions it started
+  from. Recovery compares both, fills in the revisions an undo checks, and classifies a save that stopped between the
+  graph and the drawing as PARTIAL (undo restores both). A record written before 0.7.1 that cannot be classified is
+  UNKNOWN, never a false "graph changed".
+* **RR-04.** Listing the journal never writes it. Every save is serialised and carries a revision; a save older than the
+  file is refused (`StaleRecord`). Records kept in memory are written only by the apply, undo and start-up paths, under
+  the apply lock. Tests: `tests/unit/test_stop_plans_r07.py` (RR-01), `tests/hardware/test_journal_rereview_rr.py`.
+* **Simulated channels** (owner decision): a binding to a simulated module stays in the twin; an export leaves it out
+  (listed as "stays in the twin") instead of being refused.

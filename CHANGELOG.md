@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.7.1 (2026-10-27): the owner's approved page structure, editable IDs, windows, one bench application
+
+Owner decisions of 26 October 2026 (`OWNER_APPROVED_DECISIONS.md`) and the independent re-review of `7bc098c`.
+Software and simulation only, plus the bench deployment recorded in `docs/RESULTS-0.7.1.md`; no physical output was
+switched for this release. ADR-0023 to ADR-0026 amended, ADR-0027 new.
+
+- **Review corrections RR-01 to RR-04 (ADR-0026 amendment).** A pump verified OFF during a stop stays the stop's duty:
+  if it runs again before a dependent valve closes, the valve stays open, the stop holds with an alarm and OFF is sent
+  again until it is proven off, then the wait starts over. Changes from the twin: a block version that a compensation
+  took back is reported as undone, never applied; an interrupted drawing change is checked by both its graph and its
+  drawing and keeps what Undo needs (no false "graph changed"); listing the change records never writes them, and a
+  late copy can never overwrite a newer record.
+- **Overview is the installation's drawing.** The drawing exported from the Digital Twin and applied, with each item's
+  state written on it (running, stopped, open, closed, UNKNOWN, fault, INCOMPLETE, PLANNED · UNASSIGNED). The separate
+  "What is happening now", tanks and sectors panels are gone; alarms, modules that do not answer and whether physical
+  writes are possible stay above the details. Until a drawing is applied, the earlier one stays with a note saying how
+  its successor is made.
+- **Equipment** is its own page for operators and administrators: Name then ID (the ID follows the name, `Valve 1` →
+  `Valve_1`, until you change it), type, icon (names start with a capital). IDs keep the case typed and can be changed
+  after creation; a change keeps every channel, block, program, schedule and history entry pointing at the same
+  equipment (ADR-0027). The same for program IDs.
+- **Blocks** associates equipment and holds the safety settings: no drawing editor and no equipment library any more,
+  a read-only drawing to find members, members chosen by type (Valves → Valve_1, Valve_2), and the **maximum runtime**
+  of one operation configured once per block. The stretched, off-centre option circle and the unequal checkboxes are
+  fixed: every checkbox and option circle is the same 18 px square on the text's line, with a visible keyboard focus.
+- **Programs**: how much is *water for* a time or *deliver* litres, once per cycle; when is windows (start and finish)
+  on chosen days with the wait after each cycle. The first cycle of a window does not wait; at the finish the cycle is
+  stopped (an unmet volume is reported as such, never done); the next window starts its own first cycle as soon as the
+  earlier one is verified stopped, without the earlier wait; a window that ends while it waits never starts late. Each
+  program's state is shown (watering, stopping, waiting and why, resting, waiting for its window). Programs written
+  with the 0.7.0 form open as a new draft with windows to review.
+- **Digital Twin is where the installation is drawn**: Import from Overview, New design, Edit, Save in the twin, run it,
+  Export to Overview; the main dashboard approves and applies it, and Undo takes it back. The twin's own equipment form
+  and JSON program editor are gone (equipment is made on Equipment, programs on Programs). Simulated modules are made
+  only in the twin; their channels stay in the twin and never go with an export.
+- **Drawing editor**: aligned equipment gets a straight pipe (ports level when dragged or connected; *Straighten
+  pipes* for an imported drawing; the step in the owner's screenshot is gone), a pipe starts from a free outlet of the
+  selected symbol, free inlets it can feed are green with a ring and the others say why not, Escape cancels, ports can
+  be moved along their symbol, the equipment list is grouped by type.
+- **Add Module** is for real modules: administrators and operators with commissioning prepare one with the address
+  wizard (ADR-0023 amendment); other operators send a request, which is recorded on the bench and followed there
+  (requested, being prepared, waiting for the configuration, added, rejected, closed). Nothing is emailed; a request is
+  Added only when the module is in the running configuration.
+- **One build identity** (ADR-0027): version, source commit and a digest of the web files, in the page header, the
+  health answer and as the browser's cache key, so a page never runs scripts of another build. The main dashboard and
+  the twin each warn when the other runs a different build.
+- Database schema 7 (public IDs and their log, module requests; requests recorded by 0.7.0 are carried over). 0.7.0
+  and 0.6.x refuse a schema 7 database: going back needs the pre-upgrade backup (`docs/operations/upgrade-0.7.md`).
+
 ## 0.7.0 (2026-10-26): blocks, an explicit installation graph, programs from forms
 
 Owner upgrade brief of 25 October 2026. Simulation and software only: no physical result was produced for this

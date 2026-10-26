@@ -154,7 +154,7 @@ output.
 
 **Release ZIP.** It was rebuilt from `bd6ab4e` and includes the `66ac861` fix. The earlier build from `c5ac7cb`
 (`fdd274b4…`) is superseded. The documents inside the ZIP still name the earlier build, because they were
-written before this rebuild. Commits after `bd6ab4e` change documents only.
+written before this rebuild. **Correction (27 October 2026):** an earlier version of this paragraph said that commits after `bd6ab4e` change documents only. That became false with `80bc614` (the R07 code corrections) and later commits: the 0.7.0 ZIP built from `bd6ab4e` does **not** contain the R07 fixes. The corrected and extended release is 0.7.1, built from its own commit (`docs/RESULTS-0.7.1.md`).
 
 ## Not done or not verified
 

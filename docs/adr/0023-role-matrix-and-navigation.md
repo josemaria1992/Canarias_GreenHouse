@@ -39,3 +39,25 @@ administrator-only, enforced by the backend, while routine module registration s
   policy, recorded in the release notes. Their sessions keep working for the remaining pages.
 * An operator with commissioning who used the dashboard wizard needs an administrator for a new module's address.
 * Tests: `tests/integration/test_rbac_070.py` sweeps every GET route as a viewer and checks the matrix.
+
+
+## Amendment 0.7.1 (owner decisions of 26 October 2026)
+
+These owner answers replace points 1 and 4 above where they conflict.
+
+* **Navigation.** Operators and administrators have a top-level **Equipment** page: equipment is created and
+  configured there (`EQUIPMENT_EDIT`, as before), not under Blocks and not in the twin. Equipment types stay an
+  administrator page (`equipment-types`), because activating a type is `EQUIPMENT_ACTIVATE`. The operator's menu is
+  Overview, Equipment, Blocks, Digital Twin, Add Module, Programs, Operation History, Alarms & Events.
+* **Modules.** `MODULE_SETUP` (the address wizard) is for administrators **and operators with the commissioning flag**:
+  it is a commissioning permission again (`COMMISSIONING_PERMS`), checked on the server for every wizard step and for
+  closing or rejecting a request. Operators without the flag send a **module request**. Changing an account's role or
+  flag ends its sessions, so its next request is refused.
+* **Module requests** are a workflow stored on the bench (`module_requests`, schema 7): requester, model, purpose,
+  status (REQUESTED, PREPARING, AWAITING_APPLICATION, ADDED, REJECTED, CLOSED), handler and reason. The requester sees
+  their own requests; handlers see all. ADDED is shown only when the running configuration contains the module; a
+  rejection or a closure never adds anything. Nothing is emailed or sent outside the bench. Applying the configuration
+  proposal stays the existing maintenance step by an administrator.
+* Unchanged: the viewer scope; `IO_ASSIGN` and `BENCH_ARM` need the flag; activating programs and types is an
+  administrator's. Tests: `tests/integration/test_rbac_070.py`, `tests/integration/test_modules_071.py`,
+  `tests/hardware/test_commissioning_api.py`.

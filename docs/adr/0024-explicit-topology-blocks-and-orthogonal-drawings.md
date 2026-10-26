@@ -50,3 +50,27 @@ pipes with horizontal and vertical segments only, automatic routing, draggable s
   and twin proofs that depend on it.
 * The fixed-installation twin (ADR-0013/0014) keeps its own model and drawing; the new graph water model (ADR-0026)
   runs on the explicit graph only.
+
+
+## Amendment 0.7.1 (owner decisions of 26 October 2026)
+
+* **The Digital Twin is where the installation is drawn**, in one card, *Installation design*: Import from Overview
+  (the applied graph and drawing; before any graph exists, the earlier drawing converted by `topology.migrate` into a
+  proposal with every ambiguous and unlinked part listed, nothing saved until the user saves), New design, Edit, Save
+  in the twin, and **Export to Overview** through the existing reviewed export, journal and undo. A twin design that
+  was not exported is replaced by an import only on a second, explicit press. Blocks no longer has a drawing editor or
+  an equipment library: it shows the drawing read-only for orientation (`viewOnly`), which cannot move, connect or
+  remove anything. The 0.5.6 layout in the twin is a read-only reference; its "send to the real system" path is gone.
+* **The Overview draws the applied graph** (`/api/overview/diagram`, readable by every role) with each item's state in
+  words: running/stopped/open/closed, UNKNOWN, a fault, INCOMPLETE, or PLANNED · UNASSIGNED for an item drawn before
+  it has any channel (it never looks ready or running). Passive parts without roles show no state. Until a graph has
+  been applied, the earlier drawing stays the Overview, with a note on how its successor is made: never a blank.
+* **Connection heights align** (the owner's screenshot): ports at 85% of a 120 px tank and at 50% of a 40 px pump can
+  never be level on a 10 px grid, so the editor levels connected port anchors directly: while a symbol is dragged
+  (within 12 px, with a guide line), when a new pipe joins a symbol that has no other pipe, and with *Straighten pipes*
+  for an imported drawing. A deliberate offset beyond the snap distance keeps its bend. Port anchors (side and
+  position along it) can be edited in the symbol's panel; the pipes follow and stay H/V. Alignment and anchors are
+  presentation: they never add, remove or change an edge, so the graph digest and twin proof are unchanged.
+* A pipe can start from a visible free outlet of the selected symbol; compatible free inlets are drawn green with a
+  ring and say so in their accessible label; the others say why not (occupied, wrong direction, same equipment).
+  Escape abandons a pending pipe. Tests: `tests/js/editor_align.test.js`, `tests/hardware/test_twin_design_071.py`.

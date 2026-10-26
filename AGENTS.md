@@ -1,4 +1,4 @@
-# AGENTS.md: AquaCrop greenhouse platform (0.7.x)
+# AGENTS.md: AquaCrop greenhouse platform (0.7.x; 0.7.1)
 
 Guidance for Codex when reviewing this repository, including the stop-time review of a session's
 changes. Read this first; judge every change against the whole system, not the file it touches.
@@ -31,6 +31,7 @@ topology, wiring, VFD interface, calibration, recipes and the safe-state matrix 
 | `security/` | Individual accounts (argon2), sessions, roles and permissions (`auth.py`) |
 | `api/` | FastAPI app and service wiring; hardware routes in `hardware.py` |
 | `web/` | Static browser UI; no build step. `router.js` (orthogonal router, also run by `tests/js`) and `hydraulic-editor.js` (0.7) |
+| `ids.py`, `build.py` | (0.7.1) Editable public IDs over stable keys; the build identity (version, commit, web digest) used as cache key and shown, main/twin mismatch (ADR-0027) |
 | `cli.py`, `launcher.py` | `python -m aquacrop ...` commands and the Windows/desktop launcher |
 
 Also: `src/greenhouse` (v0.1 compatibility launcher, simulation only), `legacy/` (frozen v0.1 with
@@ -69,17 +70,23 @@ fakes), `docs/` (ADRs, model, operations, commissioning, acceptance).
 8c. **Twin proof is bound to its context (0.7, ADR-0026).** Accepted evidence names the twin run and the
    digest of the program, its items, the water network and the model; any of them changing makes it stale.
    An approved export applies step by step through the durable journal and recovers after a restart.
+8d. **IDs (0.7.1, ADR-0027).** Keys (`item_id`, `program_id`) never change and every reference uses them; the public
+   ID people see and edit is separate, unique per kind ignoring case, renamed under a revision check and logged.
+   Never rewrite references, versions or history to rename something.
+8e. **One drawing workspace (0.7.1).** The installation is drawn in the twin and reaches the Overview only through an
+   approved export; Blocks and the Overview draw it read-only. A stop keeps every item it verified OFF as its duty
+   until the operation ends (RR-01).
 
 ## Owner decisions (0.5)
 
 9. **Never switch on unapproved equipment**, and nothing is merged without the owner's approval.
 10. **Daylight saving:** a watering must never be skipped across a DST change, and timing stays
     consistent. Site timezone is `Europe/Stockholm`.
-11. **Roles (ADR-0023, 0.7):** Viewer sees Overview, Programs and Alarms only (no history, equipment, modules
-    or twin). Operator runs daily work, builds equipment, drawings, blocks and programs, proposes channels,
-    requests modules and uses the twin. Administrator has every right, including module preparation
-    (address and modes). Commissioning is an extra flag for operators at the bench (bench arm, I/O assign
-    and channel verification). Restart, mode and conflict approvals: administrator or operator, never
+11. **Roles (ADR-0023, 0.7; amended 0.7.1):** Viewer sees Overview, Programs and Alarms only (no history,
+    equipment, modules or twin). Operator runs daily work, creates equipment (Equipment page), blocks and programs,
+    draws in the twin, proposes channels and sends module requests. Administrator has every right. Commissioning is
+    an extra flag for operators at the bench: module preparation with the address wizard, bench arm, I/O assign and
+    channel verification. Restart, mode and conflict approvals: administrator or operator, never
     viewer. The server enforces every right; the menu only follows it.
 12. **Users:** you cannot delete yourself or remove/demote/disable the last administrator. When
     creating a user, the UI shows only the chosen role's rights.
