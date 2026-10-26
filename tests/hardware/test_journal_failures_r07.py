@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from aquacrop.api import changes
 from aquacrop.api.app import create_app
+from aquacrop.twin import feed
 from tests.hardware.test_changes_durable_070 import _export, _live_state
 from tests.hardware.test_twin_service import ORIGIN, live_and_twin, login  # noqa: F401  (fixture)
 
@@ -106,7 +107,7 @@ def test_r07_04_a_passing_windows_lock_is_retried(live_and_twin, monkeypatch):
             raise PermissionError("[WinError 5] Access is denied (test)")
         return original(src, dst)
     monkeypatch.setattr(changes.os, "replace", once)
-    monkeypatch.setattr(changes.os, "name", "nt")
+    monkeypatch.setattr(feed, "WINDOWS", True)                 # not os.name: pathlib would follow it
     hb = login(live, "bench1", ORIGIN)
     r = live.post("/api/twin-changes/approve", json={"digest": exported}, headers=hb)
     assert r.status_code == 200 and "warning" not in r.json(), r.text

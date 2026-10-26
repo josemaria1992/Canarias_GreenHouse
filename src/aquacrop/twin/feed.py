@@ -34,6 +34,7 @@ EVIDENCE_DIR = "evidence"
 KIND = "AQUACROP_LIVE_SNAPSHOT"
 HANDOFF_KEY = "twin-handoff.key"
 TICKET_S = 60
+WINDOWS = os.name == "nt"                  # where a refused replace is worth retrying
 
 
 def replace(tmp: Path, path: Path, attempts: int = 20) -> None:
@@ -44,7 +45,7 @@ def replace(tmp: Path, path: Path, attempts: int = 20) -> None:
             os.replace(tmp, path)
             return
         except PermissionError:
-            if os.name != "nt" or i == attempts - 1:
+            if not WINDOWS or i == attempts - 1:
                 raise
             time.sleep(0.05)
 
