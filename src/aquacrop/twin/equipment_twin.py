@@ -27,7 +27,7 @@ from ..domain.model import (AcquisitionResult, DeviceHealth, Origin, Outcome, Ou
                             Quality, Sample, WriteResult)
 from ..equipment.definitions import Purpose, SimBehavior
 
-FAULTS = ("NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW", "MODULE_OFFLINE")
+FAULTS = ("NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW", "MODULE_OFFLINE", "TRIP")
 
 
 @dataclass
@@ -144,9 +144,13 @@ class EquipmentTwin:
             self._samples.clear()
 
     # ------------------------------------------------------------------ dynamics
-    def step(self, dt: float) -> None:
+    def step(self, dt: float, prepare=None) -> None:
+        """Advance `dt`, then publish the inputs. `prepare()` runs after the clock advanced and before the inputs are
+        published: the water model integrates the same step there, so the readings belong to this step."""
         with self.lock:
             self.clock.sim_s += dt
+            if prepare is not None:
+                prepare()
             items = self.items()
             self.backend.items_of_point = {it.command_point: iid for iid, it in items.items() if it.command_point}
             values: dict[str, float | bool | None] = {}

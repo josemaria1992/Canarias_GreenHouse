@@ -12,7 +12,7 @@ import pytest
 from aquacrop.control.alarms import AlarmEngine
 from aquacrop.historian.retention import (ProposalMismatch, RetentionTask, apply_retention, create_archive,
                                           evaluate_storage_alarm, prune_expired, storage_alarms, verify_archive)
-from aquacrop.historian.schema import MIGRATIONS, connect, migrate, schema_version
+from aquacrop.historian.schema import CURRENT_VERSION, MIGRATIONS, connect, migrate, schema_version
 from aquacrop.historian.writer import Historian
 from aquacrop.twin.runtime import SimulationRuntime
 from tests.helpers import with_sim_time_recording
@@ -420,8 +420,8 @@ def test_v1_database_migrates_to_v2_backup_first(tmp_path):
     con.execute("INSERT INTO migrations VALUES(1,'2026-10-01T00:00:00+00:00','initial',NULL)")
     con.execute("INSERT INTO events(utc,kind,payload_json) VALUES('2026-10-01T00:00:00+00:00','OLD','{}')")
     con.execute("COMMIT")
-    assert migrate(con, db) == [2, 3, 4, 5]
-    assert schema_version(con) == 5
+    assert migrate(con, db) == list(range(2, CURRENT_VERSION + 1))
+    assert schema_version(con) == CURRENT_VERSION
     row = con.execute("SELECT backup_path FROM migrations WHERE version=2").fetchone()
     assert row[0] and (tmp_path / "backups").exists()
     bk = sqlite3.connect(row[0])
@@ -459,7 +459,7 @@ def test_pre_migration_copy_is_verified_or_nothing_migrates(tmp_path, monkeypatc
     assert schema_version(con) == 1                  # nothing migrated
     assert not [p for p in (tmp_path / "backups").iterdir()]   # no unverified copy left behind
     monkeypatch.setattr(bk, "_table_counts", real)
-    assert migrate(con, tmp_path / "old.sqlite3") == [2, 3, 4, 5]
+    assert migrate(con, tmp_path / "old.sqlite3") == list(range(2, CURRENT_VERSION + 1))
     con.close()
 
 

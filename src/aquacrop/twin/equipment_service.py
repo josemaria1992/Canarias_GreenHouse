@@ -36,6 +36,7 @@ from . import feed
 SPEEDS = (1, 10, 60, 600, 3600)
 DT_S = 0.5
 MAX_STEPS_PER_S = 400
+WATER_MODEL = "drawing-water-0.7.0"   # part of every proof context: a changed model is a new test context
 FRAMES = 2400                     # timeline: ten minutes of wall time at four frames a second
 
 
@@ -113,6 +114,7 @@ class EquipmentTwinService:
         self.water = Water()                      # 0.6.4: water along the drawing's pipes
         self.layout_fn = None                     # () -> (digest, layout doc), set by the app
         self.loop_error: str | None = None
+        self._op_context: dict[str, str] = {}     # op -> the context digest it started in
         self.engine = self._engine()
 
     @property
@@ -142,8 +144,14 @@ class EquipmentTwinService:
         def on_event(kind, payload, actor):
             self.hist.event(kind, payload | {"runtime": self.runtime_id, "sim_utc": self.clock.utc().isoformat()},
                             actor=actor)
+            if kind == "PROGRAM_OP_STARTED":
+                self._op_context[payload["op_id"]] = self.context(payload["program"], payload["version"])["digest"]
             if kind == "PROGRAM_OP_ENDED":
-                self.results.append(payload | {"twin_run_id": self.run_id})
+                # the proof belongs to the context the run started in, and only if nothing semantic changed during it
+                start = self._op_context.pop(payload["op_id"], None)
+                end = self.context(payload["program_id"], payload["version"])["digest"]
+                self.results.append(payload | {"twin_run_id": self.run_id, "context": start if start == end else None,
+                                               "context_changed": start != end})
                 del self.results[:-500]
         return Engine(self.store_id, self.cfg.site.timezone, IO(), Clock(self.clock.utc, self.clock.mono), self.store,
                       resolve=self.items.views, programs=lambda: self.programs.active(self.store_id),
@@ -271,19 +279,25 @@ class EquipmentTwinService:
         dashboard's requests get through between steps even at high speed. Returns the steps done."""
         t0, done = time.monotonic(), 0
         for _ in range(n):
+            # One fixed step in a causal order that does not depend on the batch size (0.7.0, F04): the clock
+            # advances with the outputs committed so far, the water moves for that step, the inputs (with the
+            # water's readings of this step) are published, then the programs act on them for the next step.
             with self.lock:
-                self.twin.step(DT_S)
+                self.twin.step(DT_S, prepare=lambda: self._water_observed(DT_S))
                 self.engine.tick()
-                self.step_water(DT_S, publish=False)  # every step: a valve closing mid-batch counts from then
             done += 1
             if budget_s is not None and time.monotonic() - t0 > budget_s:
                 break
         if done:
             with self.lock:
-                self.water.publish()
-                self.twin.external = self.water.item_values()
+                self.water.publish()                  # the page's picture: once per batch
                 self._frame()
         return done
+
+    def _water_observed(self, dt: float) -> None:
+        self.step_water(dt, publish=False)
+        if self.layout_fn is not None:
+            self.twin.external = self.water.observe()
 
     def _item_on(self, iid: str) -> bool:
         """A pump runs or a valve is open: its twin output is on and its start or travel time has passed."""
@@ -385,13 +399,47 @@ class EquipmentTwinService:
                 await asyncio.sleep(0.05)              # leave the event loop and the CPU to the dashboard
 
     # ------------------------------------------------------------------ results and evidence
+    def context(self, program_id: str, version: int) -> dict:
+        """What a run of this program version tests (0.7.0, F01): its body, and for every item it names the type,
+        the item's settings (scaling, properties, simulation) and its channels, plus the water model and the
+        network it runs on. A result counts as proof only in this same context and in the current twin run. Names
+        and icons are not part of it. Until blocks carry an explicit hydraulic graph (ADR-0024) the water network
+        is the drawing, so a moved pipe is a new context; with the graph, only connection changes are."""
+        from .changes import program_items
+        try:
+            v = self.programs.get(program_id, version)
+        except Exception:
+            return {"digest": None, "items": []}
+        views = self.items.views()
+        names = sorted(program_items(v["body"]))
+        items = {}
+        for iid in names:
+            it = views.get(iid)
+            items[iid] = None if it is None else {
+                "type": it.type.model_dump(mode="json"), "body": it.body.model_dump(mode="json"),
+                "points": dict(sorted(it.points.items()))}
+        water = None
+        if self.layout_fn is not None:
+            with contextlib.suppress(Exception):
+                water = self.layout_fn()[0]
+        doc = {"program": v["digest"], "items": items, "water_network": water, "water_model": WATER_MODEL}
+        import hashlib
+        d = hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+        return {"digest": d, "items": names, "water_network": water, "water_model": WATER_MODEL}
+
+    def current_proof(self, program_id: str, version: int) -> list[dict]:
+        """Results of this program version from the current twin run in the current context; older ones are history."""
+        ctx = self.context(program_id, version)["digest"]
+        return [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version
+                and r.get("twin_run_id") == self.run_id and ctx is not None and r.get("context") == ctx]
+
     def accept(self, actor: str, program_id: str, version: int, note: str) -> dict:
         v = self.programs.get(program_id, version)
-        runs = [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version
-                and r.get("twin_run_id") == self.run_id]       # evidence from this run only, never an earlier one
+        runs = self.current_proof(program_id, version)          # this run and this context only
         passed = [r for r in runs if r.get("result") == "DONE"]
         if not passed:
-            raise ValueError(f"no operation of {program_id} v{version} ended DONE in this twin run")
+            raise ValueError(f"no operation of {program_id} v{version} ended DONE in this twin run with the current "
+                             "equipment, channels and drawing")
         if any(r.get("result") in ("FAILED", "STOP_UNVERIFIED") for r in runs) and not note.strip():
             raise ValueError("some runs of this version failed in the twin: say why you accept it anyway")
         ev = {"kind": "AQUACROP_TWIN_EVIDENCE", "program_id": program_id, "version": version, "digest": v["digest"],

@@ -14,11 +14,20 @@ Programs pages would use:
 Nothing is applied when the real system changed since the twin imported it (a conflict): import in the twin and
 export again. Each applied package keeps an undo journal; the latest one can be undone while nothing it touched
 has changed since. Undo never removes history: items get a new version, programs are retired.
+
+Durability (0.7.0, FB-07). The stores commit each step separately, so an apply is not one database transaction.
+Instead the journal is written before anything changes (state APPLYING) and records each step's intent before it
+is made and its result after; one approval at a time holds the apply lock, and a package already journaled in any
+state cannot be applied again. A failure undoes the steps made, and the answer says "nothing was changed" only when
+every undo worked; otherwise the record is PARTIAL with each problem. After a restart a record left APPLYING or
+UNDOING is INTERRUPTED: each step whose result was not recorded is checked against what the real system has
+(done / not done), shown to the approver, and can be undone. Nothing is resumed automatically.
 """
 from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -117,6 +126,7 @@ class Journal:
 
 def register(app, require, equipment, programs, feed_dir: Path | None, state_dir: Path, hist, can_approve, publish):
     journal = Journal(Path(state_dir) / "twin-changes")
+    apply_lock = threading.Lock()                 # one apply or undo at a time, across every session
 
     def live_items() -> dict[str, dict]:
         return {i["item_id"]: i for i in equipment.items()}
@@ -203,59 +213,147 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
         return pkg
 
     @app.get("/api/twin-changes")
-    def view(p: Principal = Depends(require(Perm.READ))):
+    def view(p: Principal = Depends(require(Perm.OPS_READ))):
         applied = journal.all()
-        done = {r["digest"] for r in applied} | journal.dismissed()
+        done = {r["digest"] for r in applied if r.get("state") != "FAILED_NOTHING_CHANGED"} | journal.dismissed()
         pending = [describe(x) for x in (read_exports(feed_dir) if feed_dir else []) if x["digest"] not in done][:10]
-        latest = next((r for r in applied if not r.get("undone_utc")), None)
+        latest = next((r for r in applied if not r.get("undone_utc") and r.get("state") != "FAILED_NOTHING_CHANGED"),
+                      None)
         return {"pending": pending, "can_approve": can_approve(p),
                 "applied": [{k: r.get(k) for k in ("digest", "by", "approved_by", "applied_utc", "note", "undone_utc",
-                                                    "undone_by", "summary")} for r in applied[:10]],
+                                                    "undone_by", "summary", "error", "undo_problems", "interrupted")}
+                            | {"state": r.get("state", "APPLIED")} for r in applied[:10]],
+                "attention": [{"digest": r["digest"], "state": r["state"], "interrupted": r.get("interrupted"),
+                               "problems": r.get("undo_problems")} for r in applied
+                              if r.get("state") in ("INTERRUPTED", "PARTIAL")],
                 "undo_digest": latest["digest"] if latest else None}
 
     # ------------------------------------------------------------------ apply
-    def apply(pkg: dict, actor: str) -> list[dict]:
-        steps: list[dict] = []
+    def apply(pkg: dict, actor: str, rec: dict) -> list[dict]:
+        """Each step is journaled as INTENT before it is made and DONE (with what it produced) after."""
+        steps: list[dict] = rec["steps"]
         tag = f"twin export {pkg['digest'][:12]}"
+
+        def intent(step: dict) -> dict:
+            step["state"] = "INTENT"
+            steps.append(step)
+            journal.save(rec)
+            fail_point("intent", step)
+            return step
+
+        def done(step: dict, **result) -> None:
+            fail_point("before_done", step)
+            step.update(result, state="DONE")
+            journal.save(rec)
         try:
             for i in pkg["items"]:
                 if i["op"] in ("create", "update"):
+                    st = intent({"op": "item_" + ("created" if i["op"] == "create" else "updated"),
+                                 "item_id": i["item_id"], "before": i.get("before"), "base_version": i["base_version"],
+                                 "target": {k: i[k] for k in ("name", "type_id", "type_version", "icon", "body")}})
                     it = equipment.save_item(actor, i["item_id"], i["name"], i["type_id"], i["type_version"], i["icon"],
                                              i["body"], expected_version=i["base_version"])
-                    steps.append({"op": "item_" + ("created" if i["op"] == "create" else "updated"),
-                                  "item_id": i["item_id"], "before": i.get("before"), "version_after": it["version"]})
+                    done(st, version_after=it["version"])
             for b in pkg["bindings"]:
                 before = live_point(b["item_id"], b["role"])
                 if before != b["point"]:
+                    st = intent({"op": "bound", "item_id": b["item_id"], "role": b["role"], "before": before,
+                                 "after": b["point"]})
                     equipment.bind(actor, b["item_id"], b["role"], b["point"], note=tag)
-                    steps.append({"op": "bound", "item_id": b["item_id"], "role": b["role"], "before": before,
-                                  "after": b["point"]})
+                    done(st)
             for p in pkg["programs"]:
+                cur = latest_program(p["program_id"])
+                st = intent({"op": "program_added", "program_id": p["program_id"], "digest": p["digest"],
+                             "version_before": cur["version"] if cur else None})
                 v = programs.save_draft(actor, p["program_id"], p["name"], p["body"])
+                st["version"] = v["version"]
                 if v["digest"] != p["digest"]:
                     raise ProgramRefused(f"{p['program_id']}: the saved body differs from the exported one")
                 programs.record_simulation(p["program_id"], v["version"], {
                     "kind": "AQUACROP_TWIN_EVIDENCE", "program_id": p["program_id"], "version": v["version"],
                     "digest": p["digest"], "passed": True, "accepted_by": pkg["by"], "accepted_utc": pkg["written_utc"],
                     "twin_run_id": pkg["twin_run"], "runs": p.get("runs", []), "note": pkg["note"],
-                    "meaning": pkg.get("meaning"), "export": pkg["digest"], "twin_version": p["twin_version"]})
-                steps.append({"op": "program_added", "program_id": p["program_id"], "version": v["version"]})
+                    "meaning": pkg.get("meaning"), "export": pkg["digest"], "twin_version": p["twin_version"],
+                    "context": [r.get("context") for r in p.get("runs", [])][-1:]})
+                done(st, version=v["version"])
             for i in pkg["items"]:
                 if i["op"] == "retire":
                     binds = {r: b["point"] for r, b in equipment.bindings(i["item_id"]).items()}
+                    st = intent({"op": "item_retired", "item_id": i["item_id"], "before": i["before"], "bindings": binds,
+                                 "base_version": i["base_version"]})
                     it = equipment.retire_item(actor, i["item_id"], tag)
-                    steps.append({"op": "item_retired", "item_id": i["item_id"], "before": i["before"],
-                                  "bindings": binds, "version": it["version"]})
-        except (EquipmentRefused, ProgramRefused, ValueError) as e:
-            undo_steps(steps, actor, f"{tag} failed")
+                    done(st, version=it["version"])
+        except (EquipmentRefused, ProgramRefused, ValueError, OSError) as e:
+            settle(steps)                             # a step that failed midway: was it made or not?
+            problems = undo_steps([x for x in steps if x["state"] == "DONE"], actor, f"{tag} failed")
+            rec["error"] = str(e)
+            rec["undo_problems"] = problems
+            rec["state"] = "FAILED_NOTHING_CHANGED" if not problems else "PARTIAL"
+            journal.save(rec)
+            hist.event("TWIN_EXPORT_APPLY_FAILED", {"digest": pkg["digest"], "error": str(e), "problems": problems},
+                       actor=actor)
+            if problems:
+                raise HTTPException(409, f"the export failed ({e}) and could not be fully undone: " + "; ".join(problems)
+                                    + ". The real system is partly changed; see Changes from the twin.")
             raise HTTPException(409, f"nothing was changed: {e}")
         return steps
+
+    def fail_point(where: str, step: dict) -> None:
+        """Failure injection for the durability tests only (app.state.changes_fail_point)."""
+        fn = getattr(app.state, "changes_fail_point", None)
+        if fn is not None:
+            fn(where, step)
+
+    def settle(steps: list[dict]) -> None:
+        """Decide, from what the real system has now, whether each step left at INTENT was made."""
+        items = live_items()
+        for s in steps:
+            if s.get("state") != "INTENT":
+                continue
+            made = False
+            if s["op"] in ("item_created", "item_updated"):
+                cur = items.get(s["item_id"])
+                made = (cur is not None and cur["status"] != "RETIRED" and cur["version"] != s.get("base_version")
+                        and all(cur[k] == s["target"][k] for k in s["target"]))
+                if made:
+                    s["version_after"] = cur["version"]
+            elif s["op"] == "bound":
+                made = live_point(s["item_id"], s["role"]) == s["after"]
+            elif s["op"] == "program_added":
+                cur = latest_program(s["program_id"])
+                made = (cur is not None and cur["digest"] == s["digest"]
+                        and (cur["version"] or 0) > (s.get("version_before") or 0))
+                if made:
+                    s["version"] = cur["version"]
+            elif s["op"] == "item_retired":
+                cur = items.get(s["item_id"])
+                made = cur is not None and cur["status"] == "RETIRED" and cur["version"] != s.get("base_version")
+                if made:
+                    s["version"] = cur["version"]
+            s["state"] = "DONE" if made else "NOT_DONE"
+            s["settled"] = "checked against the real system after an interruption or failure"
+
+    def recover() -> None:
+        """At start: a journal left APPLYING or UNDOING was interrupted. Record what actually happened."""
+        for rec in journal.all():
+            if rec.get("state") in ("APPLYING", "UNDOING"):
+                was = rec["state"]
+                settle(rec.get("steps", []))
+                rec["state"] = "INTERRUPTED"
+                rec["interrupted"] = {"during": was, "found_utc": _now(),
+                                      "done": [f"{s['op']} {s.get('item_id') or s.get('program_id')}"
+                                               for s in rec.get("steps", []) if s.get("state") == "DONE"]}
+                journal.save(rec)
+                hist.event("TWIN_EXPORT_INTERRUPTED", {"digest": rec["digest"], "during": was,
+                                                       "done": rec["interrupted"]["done"]}, actor="system")
 
     def undo_blockers(steps: list[dict]) -> list[str]:
         """Undo only what is still as the export left it."""
         problems = []
         items = live_items()
         for s in steps:
+            if s.get("state", "DONE") != "DONE":
+                continue
             if s["op"] in ("item_created", "item_updated"):
                 cur = items.get(s["item_id"])
                 if cur is None or cur["version"] != s["version_after"] or cur["status"] == "RETIRED":
@@ -275,6 +373,8 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
     def undo_steps(steps: list[dict], actor: str, why: str) -> list[str]:
         problems = []
         for s in reversed(steps):
+            if s.get("state", "DONE") != "DONE":      # never made: nothing to undo
+                continue
             try:
                 if s["op"] == "item_retired":
                     b = s["before"]
@@ -296,7 +396,8 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                                         expected_version=cur)
                 elif s["op"] == "item_created":
                     equipment.retire_item(actor, s["item_id"], why)
-            except (EquipmentRefused, ProgramRefused, ValueError) as e:
+                s["state"] = "UNDONE"
+            except (EquipmentRefused, ProgramRefused, ValueError, OSError) as e:
                 problems.append(f"{s['op']} {s.get('item_id') or s.get('program_id')}: {e}")
         return problems
 
@@ -308,11 +409,21 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                 f"{len(pkg['bindings'])} channel(s); {len(pkg['programs'])} program version(s)")
 
     @app.post("/api/twin-changes/approve")
-    def approve(body: ApproveIn, p: Principal = Depends(require(Perm.READ))):
+    def approve(body: ApproveIn, p: Principal = Depends(require(Perm.OPS_READ))):
         if not can_approve(p):
             raise HTTPException(403, "only administrators and operators with commissioning approve changes from the twin")
-        if journal.get(body.digest):
-            raise HTTPException(409, "this export was applied already")
+        if not apply_lock.acquire(blocking=False):
+            raise HTTPException(409, "another approval or undo is being applied now; look again in a moment")
+        try:
+            return _approve(body, p)
+        finally:
+            apply_lock.release()
+
+    def _approve(body: ApproveIn, p: Principal):
+        prev = journal.get(body.digest)
+        if prev and prev.get("state", "APPLIED") != "FAILED_NOTHING_CHANGED":
+            raise HTTPException(409, "this export was applied already" if prev.get("state", "APPLIED") == "APPLIED"
+                                else f"this export has a {prev['state']} record: resolve it first")
         pkg = package(body.digest)
         c = conflicts(pkg)
         if c:
@@ -322,9 +433,11 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
             raise HTTPException(409, "a program in this export has no twin run that ended DONE")
         if any(x.get("failed") for x in pkg["programs"]) and not body.note.strip():
             raise HTTPException(409, "some twin runs of these programs did not end DONE: say why you approve anyway")
-        steps = apply(pkg, p.username)
         rec = {"digest": pkg["digest"], "by": pkg["by"], "approved_by": p.username, "applied_utc": _now(),
-               "note": body.note, "steps": steps, "summary": summary(pkg), "twin_run": pkg["twin_run"]}
+               "note": body.note, "steps": [], "summary": summary(pkg), "twin_run": pkg["twin_run"], "state": "APPLYING"}
+        journal.save(rec)                             # before anything changes
+        apply(pkg, p.username, rec)
+        rec["state"] = "APPLIED"
         journal.save(rec)
         hist.event("TWIN_EXPORT_APPLIED", {"digest": pkg["digest"], "summary": rec["summary"], "note": body.note,
                                            "exported_by": pkg["by"]}, actor=p.username)
@@ -332,7 +445,7 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
         return {k: rec[k] for k in ("digest", "applied_utc", "summary")}
 
     @app.post("/api/twin-changes/dismiss")
-    def dismiss(body: DismissIn, p: Principal = Depends(require(Perm.READ))):
+    def dismiss(body: DismissIn, p: Principal = Depends(require(Perm.OPS_READ))):
         """Set aside an export that can no longer be applied (the real system changed since, for example the
         same export sent twice). Nothing on the real system changes; the export stays in the feed directory."""
         if not can_approve(p):
@@ -348,22 +461,37 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
         return {"digest": pkg["digest"], "dismissed": True}
 
     @app.post("/api/twin-changes/undo")
-    def undo(body: UndoIn, p: Principal = Depends(require(Perm.READ))):
+    def undo(body: UndoIn, p: Principal = Depends(require(Perm.OPS_READ))):
         if not can_approve(p):
             raise HTTPException(403, "only administrators and operators with commissioning undo changes from the twin")
+        if not apply_lock.acquire(blocking=False):
+            raise HTTPException(409, "another approval or undo is being applied now; look again in a moment")
+        try:
+            return _undo(body, p)
+        finally:
+            apply_lock.release()
+
+    def _undo(body: UndoIn, p: Principal):
         rec = journal.get(body.digest)
-        if rec is None or rec.get("undone_utc"):
+        if rec is None or rec.get("undone_utc") or rec.get("state") == "FAILED_NOTHING_CHANGED":
             raise HTTPException(404, "no applied export to undo with this digest")
-        latest = next((r for r in journal.all() if not r.get("undone_utc")), None)
+        latest = next((r for r in journal.all() if not r.get("undone_utc")
+                       and r.get("state") != "FAILED_NOTHING_CHANGED"), None)
         if latest["digest"] != rec["digest"]:
             raise HTTPException(409, "undo the most recent export first")
         blockers = undo_blockers(rec["steps"])
         if blockers:
             raise HTTPException(409, "cannot undo: " + "; ".join(blockers))
+        was = rec.get("state", "APPLIED")
+        rec["state"] = "UNDOING"
+        journal.save(rec)
         problems = undo_steps(rec["steps"], p.username, f"undo of twin export {rec['digest'][:12]}")
-        rec.update(undone_utc=_now(), undone_by=p.username, undo_note=body.note, undo_problems=problems)
+        rec.update(undone_utc=_now(), undone_by=p.username, undo_note=body.note, undo_problems=problems,
+                   state="UNDONE" if not problems else "PARTIAL", undone_from=was)
         journal.save(rec)
         hist.event("TWIN_EXPORT_UNDONE", {"digest": rec["digest"], "problems": problems, "note": body.note},
                    actor=p.username)
         publish()
         return {"digest": rec["digest"], "problems": problems}
+
+    recover()

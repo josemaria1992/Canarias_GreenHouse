@@ -328,6 +328,8 @@ def test_api_quarantine_is_admin_only_audited_and_flags_charts_and_exports(tmp_p
     h.close()
     with TestClient(app := _app(tmp_path, cfg48), base_url=ORIGIN) as c:
         login(c, "view1", PW["view1"])
+        assert c.get("/api/history/quarantine").status_code == 403       # 0.7.0: administrators only
+        login(c, "admin1", PW["admin1"])
         st = c.get("/api/history/quarantine").json()
         prop = st["proposal"]
         assert prop["needed"] and prop["counts"]["samples"] == 1 and st["clock_epoch"] == 0

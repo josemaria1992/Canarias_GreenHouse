@@ -1,0 +1,91 @@
+"""0.7.0 role matrix (UI_UX_SPECIFICATION, ADR-0023): exact navigation per role and backend enforcement.
+RBAC-01/02/03 through the real app; hidden navigation is never the only protection."""
+import re
+
+import pytest
+from fastapi.testclient import TestClient
+
+from aquacrop.security.auth import NAVIGATION, Perm, Principal, Role
+from tests.integration.test_api_installation import ORIGIN, _app, icfg, login  # noqa: F401  (fixture)
+
+VIEWER_READS = {"/api/auth/session", "/api/status", "/api/layout", "/api/plant", "/api/plant/reading", "/api/twin",
+                "/api/controller", "/api/processes", "/api/alarms", "/api/operation", "/api/programs", "/api/health",
+                "/api/version", "/api/auth/logout", "/api/auth/login", "/api/auth/password", "/api/auth/ticket"}
+
+
+def test_rbac01_navigation_is_exactly_the_specified_pages(tmp_path, icfg):
+    assert NAVIGATION["operator"] == ["overview", "blocks", "twin", "hw-add", "programs", "history", "alarms"]
+    assert NAVIGATION["viewer"] == ["overview", "programs", "alarms"]
+    assert set(NAVIGATION["operator"]) < set(NAVIGATION["admin"])
+    with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
+        for user, role in (("view1", "viewer"), ("oper1", "operator"), ("admin1", "admin")):
+            h = login(c, user)
+            assert c.get("/api/auth/session", headers=h).json()["navigation"] == NAVIGATION[role]
+
+
+def test_rbac02_a_viewer_reads_only_overview_programs_and_alarms(tmp_path, icfg):
+    app = _app(tmp_path, icfg)
+    with TestClient(app, base_url=ORIGIN) as c:
+        h = login(c, "view1")
+        checked = 0
+        for r in app.routes:
+            path = getattr(r, "path", "")
+            if not path.startswith("/api/") or "GET" not in getattr(r, "methods", set()):
+                continue
+            url = re.sub(r"\{[^}]+\}", "x", path)
+            got = c.get(url, headers=h).status_code
+            if path in VIEWER_READS:
+                assert got != 403, path
+            else:
+                assert got in (401, 403, 404, 422), (path, got)
+                if got == 422:          # parameter validation ran first: ask again with a valid-looking request
+                    assert c.get(url + "?points=x&point=x&signal=x", headers=h).status_code in (403, 404, 422), path
+            checked += 1
+        assert checked > 30
+        for path in ("/api/events", "/api/export.csv", "/api/trends?points=x", "/api/equipment", "/api/settings",
+                     "/api/twin-link", "/api/commissioning", "/api/discovery", "/api/bench", "/api/twin-changes"):
+            assert c.get(path, headers=h).status_code == 403, path
+        assert c.post("/api/twin-link/ticket", headers=h).status_code == 403
+        assert c.post("/api/processes/IRRIGATION/state", json={"target": "MANUAL"}, headers=h).status_code == 403
+        assert c.post("/api/alarms/acknowledge", json={"rule_id": "x", "target": "y"}, headers=h).status_code in (403, 404, 405)
+        for ok in ("/api/status", "/api/alarms", "/api/programs", "/api/processes"):
+            assert c.get(ok, headers=h).status_code == 200, ok
+
+
+def test_rbac02_operator_and_admin_reads(tmp_path, icfg):
+    with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
+        h = login(c, "oper1")
+        for ok in ("/api/events", "/api/equipment", "/api/twin-changes", "/api/commissioning", "/api/discovery"):
+            assert c.get(ok, headers=h).status_code == 200, ok
+        for admin_only in ("/api/settings", "/api/backup", "/api/retention", "/api/users/roles"):
+            assert c.get(admin_only, headers=h).status_code == 403, admin_only
+        h = login(c, "admin1")
+        for ok in ("/api/settings", "/api/backup", "/api/users/roles"):
+            assert c.get(ok, headers=h).status_code == 200, ok
+
+
+def test_rbac03_physical_module_setup_is_for_administrators_only_even_with_commissioning():
+    op = Principal("bench", Role.OPERATOR, True, "x", False)
+    admin = Principal("vicente", Role.ADMIN, False, "y", False)
+    assert not op.can(Perm.MODULE_SETUP) and admin.can(Perm.MODULE_SETUP)
+    assert op.can(Perm.MODULE_REGISTER) and op.can(Perm.IO_ASSIGN) and op.can(Perm.BENCH_ARM)
+    plain = Principal("op", Role.OPERATOR, False, "z", False)
+    assert plain.can(Perm.MODULE_REGISTER) and not plain.can(Perm.IO_ASSIGN) and not plain.can(Perm.BENCH_ARM)
+
+
+def test_rbac03_old_wizard_routes_refuse_a_commissioning_operator(tmp_path, icfg):
+    app = _app(tmp_path, icfg)
+    app.state.accounts.create_user("bench9", "bench password 999", Role.OPERATOR, commissioning=True)
+    from tests.integration import test_api_installation as t
+    t.PW["bench9"] = "bench password 999"
+    with TestClient(app, base_url=ORIGIN) as c:
+        h = login(c, "bench9")
+        for path, body in (("/api/commissioning/open", {"adapter": "/dev/ttyUSB0", "bus_id": "rs485_a", "read": True}),
+                           ("/api/commissioning/x/reserve", {}), ("/api/commissioning/x/commit", {})):
+            r = c.post(path, json=body, headers=h)
+            assert r.status_code in (403, 422), (path, r.status_code)
+            if r.status_code == 422:
+                assert c.post(path, json={}, headers=h).status_code in (403, 422)
+        r = c.post("/api/commissioning/open", json={"adapter": "/dev/ttyUSB0", "bus_id": "rs485_a", "read": True},
+                   headers=h)
+        assert r.status_code == 403

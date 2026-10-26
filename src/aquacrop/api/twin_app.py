@@ -284,6 +284,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             token, p = accounts.login(body.username, body.password, request.client.host if request.client else "-")
         except AuthError:
             raise HTTPException(401, "login failed")
+        if not p.can(Perm.OPS_READ):                 # 0.7.0 role matrix: no twin for viewers (ADR-0023)
+            accounts.revoke(p.session_hash, "viewer: no digital twin")
+            raise HTTPException(403, "the digital twin is for operators and administrators; a viewer account sees the Overview, Programs and Alarms of the real system")
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
                             secure=request.url.scheme == "https" or not loopback, path="/",
                             max_age=sec.session_absolute_hours * 3600)
@@ -306,6 +309,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             token, p = accounts.open_session(user, request.client.host if request.client else "-")
         except AuthError:
             raise HTTPException(401, "your login has not reached the twin yet; try again in 30 seconds")
+        if not p.can(Perm.OPS_READ):
+            accounts.revoke(p.session_hash, "viewer: no digital twin")
+            raise HTTPException(403, "the digital twin is for operators and administrators; a viewer account sees the Overview, Programs and Alarms of the real system")
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
                             secure=request.url.scheme == "https" or not loopback, path="/",
                             max_age=sec.session_absolute_hours * 3600)
@@ -332,7 +338,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     # ------------------------------------------------------------------ the twin
     @app.get("/api/twin")
-    def twin_view(p: Principal = Depends(require(Perm.READ))):
+    def twin_view(p: Principal = Depends(require(Perm.OPS_READ))):
         v = svc.view()
         v["programs"] = _programs()
         v["checklist"] = svc.engine.checklist() if svc.engine.mode == "RECOVERY" else None
@@ -489,7 +495,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     _dia_cache: dict = {}
 
     @app.get("/api/twin/diagram")
-    def diagram(p: Principal = Depends(require(Perm.READ))):
+    def diagram(p: Principal = Depends(require(Perm.OPS_READ))):
         # the drawing, its comparison with the real system's and its issues change only with the draft, the
         # snapshot or the equipment: computed once for each, not on every refresh of the page
         try:
@@ -519,7 +525,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 "issues": layout.issues(lay, svc.items.items), "items": items}
 
     @app.get("/api/twin/frames")
-    def frames(after: float = -1.0, p: Principal = Depends(require(Perm.READ))):
+    def frames(after: float = -1.0, p: Principal = Depends(require(Perm.OPS_READ))):
         with svc.lock:
             frames = list(svc.frames)
             run = svc.run_id
@@ -586,11 +592,11 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     _fits: dict[str, list[str]] = {}
 
     @app.get("/api/twin/changes")
-    def changes_view(p: Principal = Depends(require(Perm.READ))):
+    def changes_view(p: Principal = Depends(require(Perm.OPS_READ))):
         snap = svc.snap or {"equipment": {"types": [], "items": []}, "bindings": [], "programs": []}
         eff = svc.changes.overlay(snap) if svc.snap else snap
         if svc.snap:
-            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results)
+            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof)
         else:
             pv = {"items": [], "bindings": [], "programs": [], "missing": [], "empty": True}
         all_points = _all_points
@@ -733,7 +739,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         if svc.snap is None:
             raise HTTPException(409, "no snapshot from the real system yet")
-        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results)
+        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof)
         try:
             r = write_export(feed_dir, pv, by=p.username, note=body.note, twin_run=svc.run_id,
                              snapshot_utc=svc.snapshot_utc)
@@ -745,7 +751,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         return r
 
     @app.get("/api/twin/events")
-    def events(p: Principal = Depends(require(Perm.READ))):
+    def events(p: Principal = Depends(require(Perm.OPS_READ))):
         rows = hist.query("SELECT utc, kind, actor, payload_json FROM events ORDER BY id DESC LIMIT 200")
         return [dict(r) for r in rows]
 

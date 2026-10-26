@@ -66,6 +66,12 @@ class MemoryEngineStore:
     def recovery_save(self, state, actor, doc):
         self.recovery.append({"state": state, "actor": actor} | doc)
 
+    def usage_load(self):
+        return {k: dict(v) for k, v in getattr(self, "usage", {}).items()}
+
+    def usage_save(self, item_id, doc):
+        self.__dict__.setdefault("usage", {})[item_id] = dict(doc)
+
 
 class SqlEngineStore:
     def __init__(self, hist, runtime_id: str, process_session_id: str, *, key_prefix: str | None = None):
@@ -73,6 +79,7 @@ class SqlEngineStore:
         same scenario date runs its windows again, while a restart within a run still deduplicates)."""
         self.h, self.rt, self.sess = hist, runtime_id, process_session_id
         self.prefix = f"{key_prefix}:" if key_prefix else ""
+        self._usage_rt = f"{runtime_id}:{key_prefix}" if key_prefix else runtime_id   # a twin reset is a new scenario
 
     def mode_load(self):
         rows = self.h.query("SELECT mode, phase, actor, utc, reason FROM installation_mode WHERE runtime_id=? "
@@ -134,6 +141,17 @@ class SqlEngineStore:
         row = (self.rt, self.sess, state, actor, _now(), json.dumps(doc, default=str))
         self.h.submit(lambda c: c.execute("INSERT INTO recovery(runtime_id, process_session_id, state, actor, utc, json) "
                                           "VALUES(?,?,?,?,?,?)", row), wait=True)
+
+    def usage_load(self) -> dict:
+        """Starts and the last verified OFF per item (schema 6), so a restart is not a limit reset."""
+        rows = self.h.query("SELECT item_id, json FROM equipment_usage WHERE runtime_id=?", (self._usage_rt,))
+        return {r["item_id"]: json.loads(r["json"]) for r in rows}
+
+    def usage_save(self, item_id: str, doc: dict) -> None:
+        row = (self._usage_rt, item_id, _now(), json.dumps(doc))
+        self.h.submit(lambda c: c.execute("INSERT INTO equipment_usage(runtime_id, item_id, updated_utc, json) "
+                                          "VALUES(?,?,?,?) ON CONFLICT(runtime_id, item_id) DO UPDATE SET "
+                                          "updated_utc=excluded.updated_utc, json=excluded.json", row), wait=True)
 
     def occurrences(self, limit: int = 100) -> list[dict]:
         rows = self.h.query("SELECT * FROM occurrences WHERE runtime_id=? ORDER BY created_utc DESC LIMIT ?",

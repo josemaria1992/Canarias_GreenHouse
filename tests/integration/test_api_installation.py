@@ -45,6 +45,8 @@ def test_status_and_processes(tmp_path, icfg):
         pr = c.get("/api/processes", headers=h).json()
         assert pr["recipe"]["physical_readiness"] and pr["stocks"]["A"]["status"] == "NOT_PREPARED"
         assert c.post("/api/processes/IRRIGATION/state", json={"target": "AUTO"}, headers=h).status_code == 403
+        assert c.get("/api/scenarios", headers=h).status_code == 403      # 0.7.0: twin scenarios are for operators
+        h = login(c, "oper1")
         names = {s["name"] for s in c.get("/api/scenarios", headers=h).json()}
         assert "irrigation_alternation" in names
 
@@ -89,7 +91,7 @@ def test_recipe_roles_validation_and_persistence(tmp_path, icfg):
         assert c.post("/api/stocks/B/acknowledge", json={"note": "prepared"}, headers=ha).status_code == 200
     # restart: recipes, activation log and stock readiness persist; every process starts STOPPED
     with TestClient(_app(tmp_path, icfg, users=False), base_url=ORIGIN) as c:
-        h = login(c, "view1")
+        h = login(c, "oper1")                          # 0.7.0: recipes are an operator's page
         rec = c.get("/api/recipes", headers=h).json()
         assert rec["active"] == "site@v1"
         assert [a["action"] for a in rec["activations"]] == ["ACTIVATE", "ACTIVATE"]
@@ -145,7 +147,7 @@ def test_plant_view_needs_the_installation_topology(tmp_path, cfg48):
 
 def test_recipe_form_offers_choices_for_enumerated_fields(tmp_path, icfg):
     with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
-        login(c, "view1")
+        login(c, "oper1")
         form = c.get("/api/recipes").json()["form"]
         opts = {r["path"]: r["options"] for r in form if r["options"]}
         assert set(opts) == {"refill.endpoint_mode", "refill.nutrient_mode", "return.duty_policy"}, opts

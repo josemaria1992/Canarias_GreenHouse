@@ -455,22 +455,24 @@
     return false;
   }
   /** Sends the operation through the controller: stop (and wait for it), Manual mode, then the bounded operation. */
-  async function runAction(e, on, op) {
+  async function runAction(e, on, op, shown) {
     const pid = e.proc, w = W.proc(pid);
     const pend = S.diagPend = { key: e.key, on, at: Date.now(), step: "Sending the request…", sent: [] };
     const send = async (path, body, step) => { pend.step = step; U.refresh(); pend.sent.push(path); return api("POST", path, body); };
     try {
       if (S.stale) throw new Error("Connection stale: nothing was sent");
       let PR = await api("GET", "/api/processes"), pv = PR.processes[pid];
-      if (!on) await send(`/api/processes/${pid}/state`, { target: "STOPPED" }, `Asking ${w.name.toLowerCase()} to stop…`);
+      // R34-01 (0.7.0): act only on the situation the user saw; the server refuses too if it changed meanwhile
+      if (shown && pv.state !== shown) throw new Error(`${w.name} changed from ${W.state(shown).toLowerCase()} to ${W.state(pv.state).toLowerCase()} since you looked; nothing was sent. Look again and confirm`);
+      if (!on) await send(`/api/processes/${pid}/state`, { target: "STOPPED", expect: pv.state }, `Asking ${w.name.toLowerCase()} to stop…`);
       else {
         if (pv.state === "AUTO") {
-          await send(`/api/processes/${pid}/state`, { target: "STOPPED" }, `Stopping automatic ${w.name.toLowerCase()}…`);
+          await send(`/api/processes/${pid}/state`, { target: "STOPPED", expect: "AUTO" }, `Stopping automatic ${w.name.toLowerCase()}…`);
           if (!await waitState(pid, x => x.state === "STOPPED" && !x.stopping, 60000)) throw new Error(`${w.name} did not finish stopping within 60 s; nothing more was sent`);
           pv = (await api("GET", "/api/processes")).processes[pid];
         }
-        if (pv.state === "STOPPED") await send(`/api/processes/${pid}/state`, { target: "MANUAL" }, `Switching ${w.name.toLowerCase()} to Manual mode…`);
-        await send(`/api/processes/${pid}/manual`, { op }, "Sending the operation…");
+        if (pv.state === "STOPPED") await send(`/api/processes/${pid}/state`, { target: "MANUAL", expect: "STOPPED" }, `Switching ${w.name.toLowerCase()} to Manual mode…`);
+        await send(`/api/processes/${pid}/manual`, { op, expect: "MANUAL" }, "Sending the operation…");
       }
       pend.step = "sent"; pend.sentAt = Date.now();
     } catch (err) {
@@ -518,16 +520,22 @@
       const go = () => {
         const op = on ? opOf(e, P, PR, S.diagForm && S.diagForm.key === e.key ? S.diagForm.v : {}).op : null;
         if (op && Object.values(op).some(x => typeof x === "number" && !isFinite(x))) { toast("Set the amount first.", true); return; }
-        S.diagConfirm = null; runAction(e, on, op);
+        const shown = S.diagConfirm && S.diagConfirm.key === e.key ? S.diagConfirm.state : pv && pv.state;
+        S.diagConfirm = null; runAction(e, on, op, shown);
       };
-      const conf = S.diagConfirm && S.diagConfirm.key === e.key && S.diagConfirm.on === on ? S.diagConfirm : null;
+      let conf = S.diagConfirm && S.diagConfirm.key === e.key && S.diagConfirm.on === on ? S.diagConfirm : null;
+      if (conf && pv && conf.state !== pv.state) {      // R34-01: another session changed it while this was open
+        S.diagConfirm = null; conf = null;
+        S.diagPend = { key: e.key, on, at: Date.now(), step: "refused", sent: [],
+          msg: `${w.name} changed to ${W.state(pv.state).toLowerCase()} while you were confirming; nothing was sent. Look again.` };
+      }
       if (pl.refuse) kids.push(h("p", { class: "warn-t", "data-refusal": "" }, pl.refuse));
       else if (conf) kids.push(h("div", { class: "confirm", role: "alertdialog", "aria-label": pl.confirm }, h("p", null, h("strong", null, pl.confirm)), h("p", null, pl.body), fields,
         h("div", { class: "row" }, h("button", { class: "ghost", "data-act": "cancel", onclick: () => { S.diagConfirm = null; U.refresh(); } }, "Cancel"),
           h("button", { class: on ? "" : "danger", "data-act": "confirm", onclick: go }, pl.yes))));
       else kids.push(h("p", { class: "muted small" }, pl.direct ? pl.tell : `${W.cap(w.name)} is ${W.state(pv.state).toLowerCase()}: you will be asked to confirm first.`), pl.direct ? fields : null,
         h("div", { class: "row" }, h("button", { class: "cmd" + (on ? "" : " danger"), "data-act": "equip", "data-on": on ? "1" : "0",
-          onclick: () => { if (pl.direct) go(); else { S.diagConfirm = { key: e.key, on }; U.refresh(); } } }, label)));
+          onclick: () => { if (pl.direct) go(); else { S.diagConfirm = { key: e.key, on, state: pv && pv.state }; U.refresh(); } } }, label)));
     }
     kids.push(pendingBox(P, PR, e));
     kids.push(h("div", { class: "row" }, h("a", { href: e.page, onclick: () => { if (e.tab) S.stockTab = e.tab; } }, `Open ${pageName(e.page)}`),

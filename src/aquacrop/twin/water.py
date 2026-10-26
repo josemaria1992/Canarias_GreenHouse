@@ -214,10 +214,13 @@ class Water:
             return "open"
 
         notes = []
-        # the flows change only when a valve or pump changes or a tank becomes empty or full: trace the network
-        # then, and in between only integrate the levels (the twin steps water every half second of its time)
+        # the flows change only when a valve or pump changes, a pump's rate changes, or a tank becomes empty or
+        # full: trace the network then, and in between only integrate the levels (every half second of twin time).
+        # The rate is part of the key (0.7.0, F05): a changed pump rate with the same gates is a new flow.
         key = (digest, tuple(sorted((i, bool(n.get("item") and item_on(n["item"]))) for i, n in net.nodes.items()
                                     if n["kind"] in ("valve", "pump"))),
+               tuple(sorted((i, float(item_rate(n["item"]))) for i, n in net.nodes.items()
+                            if n["kind"] == "pump" and n.get("item"))),
                tuple(sorted((i, self.levels.get(i, 0.0) <= 1e-6,
                              self.levels.get(i, 0.0) >= (n.get("capacity_L") or 1000.0) - 1e-6)
                             for i, n in tanks.items())))
@@ -308,7 +311,7 @@ class Water:
                 notes.append(f"{n.get('label') or tid} is empty: its pumps run dry")
             self.levels[tid] = max(0.0, min(cap, lv))
 
-    def _publish(self, net, tanks, inflow, outflow, pipes, sources, notes) -> None:
+    def _sensors(self, net, tanks, pipes) -> dict:
         sensors = {}
         for nid, n in net.nodes.items():
             if n["kind"] != "sensor" or not n.get("item"):
@@ -322,6 +325,19 @@ class Water:
                 tank = next((t for t in tanks.values() if t.get("item") == n["item"]), None)
                 if tank:
                     sensors[nid] = dict(self._level_reading(tank), item=n["item"])
+        return sensors
+
+    def observe(self) -> dict[str, float]:
+        """What the sensor items read after the latest step (0.7.0, F04): every step, not only after a batch, so the
+        programs never see a fresh timestamp on a value from before the batch. The page's state stays batched."""
+        pend = getattr(self, "_pending", None)
+        if pend is None:
+            return self.item_values()
+        net, tanks, _, _, pipes, _, _ = pend
+        return {s["item"]: s["value"] for s in self._sensors(net, tanks, pipes).values()}
+
+    def _publish(self, net, tanks, inflow, outflow, pipes, sources, notes) -> None:
+        sensors = self._sensors(net, tanks, pipes)
         self.state = {
             "tanks": {tid: {"L": round(self.levels[tid], 1), "capacity_L": n.get("capacity_L") or 1000.0,
                             "pct": round(100.0 * self.levels[tid] / (n.get("capacity_L") or 1000.0), 1),

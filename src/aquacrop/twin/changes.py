@@ -285,19 +285,25 @@ def twin_programs(snap: dict, versions: list[dict]) -> list[dict]:
     return out
 
 
-def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dict]) -> dict:
-    """What an export would carry now, with its proof and what is missing."""
+def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dict], proof=None) -> dict:
+    """What an export would carry now, with its proof and what is missing. `proof(program_id, version)` gives the
+    results that count (0.7.0, F01: the current twin run, in the current equipment/channel/drawing context); the
+    others stay visible as history and never count. Without `proof` nothing counts."""
     live_items = TwinChanges._live_items(snap)
     progs = twin_programs(snap, versions)
+
+    def counted(pid, ver):
+        return proof(pid, ver) if proof is not None else []
     for p in progs:
-        runs = [r for r in results if r.get("program_id") == p["program_id"] and r.get("version") == p["twin_version"]]
+        runs = counted(p["program_id"], p["twin_version"])
+        every = [r for r in results if r.get("program_id") == p["program_id"] and r.get("version") == p["twin_version"]]
         p["runs"] = runs[-20:]
         p["passed"] = any(r.get("result") == "DONE" for r in runs)
         p["failed"] = sum(1 for r in runs if r.get("result") != "DONE")
+        p["history_runs"] = len(every) - len(runs)  # earlier twin runs or another context: history, not proof
     exercised: dict[str, list[str]] = {}
     for v in versions:
-        if any(r.get("program_id") == v["program_id"] and r.get("version") == v["version"] and r.get("result") == "DONE"
-               for r in results):
+        if any(r.get("result") == "DONE" for r in counted(v["program_id"], v["version"])):
             for iid in program_items(v["body"]):
                 exercised.setdefault(iid, []).append(f"{v['program_id']} v{v['version']}")
     items = []
@@ -312,7 +318,10 @@ def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dic
                       "before": {k: live[k] for k in ("name", "type_id", "type_version", "icon", "body")}, "exercised_by": []})
     binds = [{"item_id": k.split(".", 1)[0], "role": k.split(".", 1)[1], "point": c["point"], "base_point": c["base_point"]}
              for k, c in sorted(ch.doc["bindings"].items())]
-    missing = [f"{p['name']} (v{p['twin_version']} in the twin) has no run that ended DONE in this twin run" for p in progs if not p["passed"]]
+    missing = [f"{p['name']} (v{p['twin_version']} in the twin) has no run that ended DONE in this twin run with the "
+               "current equipment, channels and drawing" + (" (earlier runs are history only: run it again)"
+                                                             if p["history_runs"] else "")
+               for p in progs if not p["passed"]]
     missing += [f"{p['name']} (v{p['twin_version']}) is not validated in the twin" for p in progs if p["status"] != "VALIDATED"]
     return {"items": items, "bindings": binds, "programs": progs, "missing": missing,
             "empty": not (items or binds or progs)}

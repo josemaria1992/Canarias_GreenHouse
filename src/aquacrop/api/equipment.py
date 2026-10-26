@@ -77,7 +77,7 @@ def register(app, require, store, samples, edges) -> None:
         raise HTTPException(409, str(e))
 
     @app.get("/api/equipment")
-    def equipment_view(p: Principal = Depends(require(Perm.READ))):
+    def equipment_view(p: Principal = Depends(require(Perm.OPS_READ))):
         items = store.items()
         return {"types": store.types(), "items": items, "icons": list(ICONS),
                 "templates": {k: v["name"] for k, v in TEMPLATES.items()},
@@ -120,7 +120,7 @@ def register(app, require, store, samples, edges) -> None:
 
     @app.get("/api/equipment/items/{item_id}/upgrade")
     def item_upgrade_preview(item_id: str, to_version: int | None = Query(None, ge=1),
-                             p: Principal = Depends(require(Perm.READ))):
+                             p: Principal = Depends(require(Perm.OPS_READ))):
         try:
             return store.upgrade_preview(item_id, to_version)
         except EquipmentRefused as e:
@@ -157,7 +157,7 @@ def register(app, require, store, samples, edges) -> None:
             refused(e)
 
     @app.get("/api/equipment/export")
-    def export(p: Principal = Depends(require(Perm.READ))):
+    def export(p: Principal = Depends(require(Perm.OPS_READ))):
         return store.export()
 
     @app.post("/api/equipment/import")

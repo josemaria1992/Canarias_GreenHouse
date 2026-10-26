@@ -175,8 +175,12 @@ def test_api_reports_six_modules_and_transistor_outputs(tmp_path):
     cfg = load_config(ROOT / 'configs' / 'installation-80.yaml')
     app = create_app(cfg, state_dir=tmp_path, bind_host='127.0.0.1')
     app.state.accounts.create_user('viewer1', 'viewer test password', Role.VIEWER)
+    app.state.accounts.create_user('oper9', 'operator test password', Role.OPERATOR)
     with TestClient(app, base_url='http://127.0.0.1:8000') as client:
         assert client.post('/api/auth/login', json={'username': 'viewer1', 'password': 'viewer test password'},
+                           headers={'Origin': 'http://127.0.0.1:8000'}).status_code == 200
+        assert client.get('/api/points').status_code == 403        # 0.7.0: channels are not a viewer's page
+        assert client.post('/api/auth/login', json={'username': 'oper9', 'password': 'operator test password'},
                            headers={'Origin': 'http://127.0.0.1:8000'}).status_code == 200
         data = client.get('/api/points').json()
         assert len(data['devices']) == 6 and sum(len(d['points']) for d in data['devices']) == 80

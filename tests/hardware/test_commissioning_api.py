@@ -41,7 +41,10 @@ def test_the_wizard_needs_the_commissioning_flag_and_writes_only_on_the_adapter(
     assert ov["available"] and ov["adapters"][0]["selectable"] and "not into this PC" in ov["where"]
     assert c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).status_code == 403
     c.post("/api/auth/logout", headers=h)
-    h = login(c, "bench1")
+    h = login(c, "bench1")                                 # 0.7.0: the commissioning flag no longer writes modules
+    assert c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).status_code == 403
+    c.post("/api/auth/logout", headers=h)
+    h = login(c, "admin1")
     v = c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).json()
     tx = v["tx_id"]
     assert v["state"] == "READ"                              # Start reads the module at once (owner, 2026-10-24)

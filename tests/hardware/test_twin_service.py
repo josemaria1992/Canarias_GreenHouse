@@ -62,15 +62,17 @@ def test_twin_config_has_only_virtual_buses_and_its_own_database(live_and_twin):
     assert twin_app.state.hist.db_path != app.state.hist.db_path and cfg.config_id.endswith("-twin")
 
 
-def test_every_login_works_in_the_twin_with_the_same_password(live_and_twin):
+def test_operator_and_admin_logins_work_in_the_twin_with_the_same_password_a_viewer_is_refused(live_and_twin):
     twin = live_and_twin[3]
-    for u in ("admin1", "bench1", "view1"):
+    for u in ("admin1", "bench1"):
         login(twin, u, TWIN_ORIGIN)
-    h = login(twin, "view1", TWIN_ORIGIN)
+    r = twin.post("/api/auth/login", json={"username": "view1", "password": PW["view1"]}, headers={"Origin": TWIN_ORIGIN})
+    assert r.status_code == 403 and "operators and administrators" in r.json()["detail"]     # 0.7.0, ADR-0023
+    h = login(twin, "bench1", TWIN_ORIGIN)
     rid = twin.get("/api/auth/session").json()["runtime_id"]
     assert rid.startswith("TWIN:")
-    r = twin.post("/api/twin/control", json={"action": "run"}, headers=h | {"X-Runtime-Id": rid})
-    assert r.status_code == 403                               # viewers watch, operators run
+    r = twin.post("/api/twin/control", json={"action": "pause"}, headers=h | {"X-Runtime-Id": rid})
+    assert r.status_code == 200, r.text                       # operators run the twin
 
 
 def test_a_program_runs_in_the_twin_and_its_evidence_reaches_the_live_version(live_and_twin):
@@ -208,9 +210,9 @@ def test_layout_is_edited_in_the_twin_and_accepted_on_the_real_system(live_and_t
 
 def test_a_live_password_change_ends_the_users_twin_sessions(live_and_twin):
     app, live, twin_app, twin, bus, hl = live_and_twin
-    login(twin, "view1", TWIN_ORIGIN)
+    login(twin, "bench1", TWIN_ORIGIN)
     assert twin.get("/api/auth/session").status_code == 200
-    app.state.accounts.reset_password("view1", "a brand new password 99")
+    app.state.accounts.reset_password("bench1", "a brand new password 99")
     assert live.post("/api/twin-link/publish", headers=hl).status_code == 200
     twin_app.state.svc.sync_users(twin_app.state.accounts)
     assert twin.get("/api/auth/session").status_code == 401

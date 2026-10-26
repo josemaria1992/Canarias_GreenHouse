@@ -60,8 +60,9 @@ def test_simulation_routes_are_unavailable(hw, path):
     h = login(c, "oper1")
     assert c.post(path, json={}, headers=h).status_code == 409
     assert c.get("/api/twin").status_code == 409
-    for shared in ("/api/commands/history", "/api/alarms", "/api/events", "/api/trends?points=relay_A.DI1", "/api/settings", "/api/bench"):
+    for shared in ("/api/commands/history", "/api/alarms", "/api/events", "/api/trends?points=relay_A.DI1", "/api/bench"):
         assert c.get(shared).status_code == 200, shared
+    assert c.get("/api/settings").status_code == 403          # 0.7.0: settings are for administrators
 
 
 def test_operator_without_commissioning_cannot_arm_but_an_admin_can(hw):

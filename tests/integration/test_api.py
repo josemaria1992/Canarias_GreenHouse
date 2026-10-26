@@ -142,7 +142,7 @@ def test_get_routes_do_not_change_state(env):
     before = (rt.state_hash(), len(rt.journal))
     for path in ["/api/status", "/api/points", "/api/twin", "/api/scenarios", "/api/controller", "/api/alarms",
                  "/api/events", "/api/commands/history", "/api/trends?points=analog_A.AI1", "/api/export.csv",
-                 "/api/analytics", "/api/settings", "/api/auth/session"]:
+                 "/api/analytics", "/api/auth/session"]:
         assert c.get(path).status_code == 200, path
     assert (rt.state_hash(), len(rt.journal)) == before
 
@@ -246,7 +246,7 @@ def test_op03_year_range_chart_is_aggregated_and_export_pages_are_complete(env):
     from datetime import datetime, timedelta, timezone
     from urllib.parse import quote
     app, c = env
-    login(c, "view1", PW["view1"])
+    login(c, "oper1", PW["oper1"])                     # 0.7.0: history is an operator's page
     end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     start = end - timedelta(days=363)
     hole = (start + timedelta(days=100), start + timedelta(days=110))
@@ -376,25 +376,27 @@ def test_retention_hold_is_released_by_an_admin_confirmation_not_by_an_alarm_ack
     con.close()
     with TestClient(app := _app(tmp_path, cfg48), base_url=ORIGIN) as c:
         op = login(c, "oper1", PW["oper1"])
+        assert c.get("/api/retention").status_code == 403            # 0.7.0: storage is an administrator's page
+        a = TestClient(app, base_url=ORIGIN)                         # the administrator's own browser
+        adm = login(a, "admin1", PW["admin1"])
         end = time.monotonic() + 5
-        while c.get("/api/retention").json()["held"] is None and time.monotonic() < end:
+        while a.get("/api/retention").json()["held"] is None and time.monotonic() < end:
             time.sleep(0.05)
-        st = c.get("/api/retention").json()
+        st = a.get("/api/retention").json()
         assert st["held"]["code"] == "UNVERIFIED_DOWNTIME" and st["proposal"]["cutoff_utc"]
         cutoff = st["proposal"]["cutoff_utc"]
         assert c.post("/api/alarms/ack", json={"rule_id": "RETENTION_HELD", "target": "historian"},
                       headers=op).status_code == 200
         time.sleep(0.2)
-        assert c.get("/api/retention").json()["held"] is not None          # ack records only the ack
+        assert a.get("/api/retention").json()["held"] is not None          # ack records only the ack
         assert c.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff}, headers=op).status_code == 403
-        adm = login(c, "admin1", PW["admin1"])
-        assert c.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff},
+        assert a.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff},
                       headers={"Origin": ORIGIN}).status_code == 403        # CSRF token required
-        r = c.post("/api/retention/confirm-clock", json={"cutoff_utc": "2020-01-01T00:00:00+00:00"}, headers=adm)
+        r = a.post("/api/retention/confirm-clock", json={"cutoff_utc": "2020-01-01T00:00:00+00:00"}, headers=adm)
         assert r.status_code == 409 and r.json()["detail"]["proposal"]["cutoff_utc"]
-        r = c.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff}, headers=adm)
+        r = a.post("/api/retention/confirm-clock", json={"cutoff_utc": cutoff}, headers=adm)
         assert r.status_code == 200 and r.json()["released"] is True
-        assert c.get("/api/retention").json()["held"] is None
+        assert a.get("/api/retention").json()["held"] is None
         app.state.hist.wait_idle()
         ev = app.state.hist.query("SELECT actor FROM events WHERE kind='RETENTION_CLOCK_CONFIRMED'")
         assert [e[0] for e in ev] == ["admin1"]
@@ -403,6 +405,8 @@ def test_retention_hold_is_released_by_an_admin_confirmation_not_by_an_alarm_ack
 def test_backup_state_shows_off_device_unconfigured_and_restore_drill_due(env):
     app, c = env
     login(c, "view1", PW["view1"])
+    assert c.get("/api/backup").status_code == 403     # 0.7.0: backups are an administrator's page
+    login(c, "admin1", PW["admin1"])
     st = c.get("/api/backup").json()
     assert st["off_device"].startswith("NOT ACTIVATED") and st["keep"] == 7
     assert st["restore_drill"] is None and st["restore_drill_due"] is True and st["local_count"] == 0

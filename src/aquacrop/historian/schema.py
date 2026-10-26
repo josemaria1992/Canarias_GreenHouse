@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-CURRENT_VERSION = 5
+CURRENT_VERSION = 6
 
 MIGRATIONS: dict[int, tuple[str, str]] = {
     1: ("initial AquaCrop v0.2 schema", """
@@ -115,6 +115,11 @@ CREATE TABLE commissioning_tx (tx_id TEXT PRIMARY KEY, state TEXT NOT NULL, bus_
     address INTEGER, actor TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, json TEXT NOT NULL);
 CREATE UNIQUE INDEX ux_commissioning_reserved ON commissioning_tx(bus_id, address)
     WHERE state IN ('RESERVED', 'WRITING', 'UNCERTAIN', 'PREPARED')
+"""),
+    6: ("equipment usage across restarts (starts, last verified OFF), functional blocks, explicit hydraulic "
+        "topology and layout revisions, twin run records and durable change journal (0.7.0)", """
+CREATE TABLE equipment_usage (runtime_id TEXT NOT NULL, item_id TEXT NOT NULL, updated_utc TEXT NOT NULL,
+    json TEXT NOT NULL, PRIMARY KEY (runtime_id, item_id))
 """),
 }
 

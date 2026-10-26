@@ -634,6 +634,8 @@ def test_api_shows_state_and_policy_confirmation_is_admin_only(tmp_path, cfg48):
     from tests.integration.test_api import ORIGIN, PW, _app, login
     with TestClient(app := _app(tmp_path, cfg48), base_url=ORIGIN) as c:
         login(c, "view1", PW["view1"])
+        assert c.get("/api/offsite").status_code == 403                  # 0.7.0: administrators only
+        login(c, "admin1", PW["admin1"])
         v = c.get("/api/offsite").json()
         assert v["enabled"] is False and "Not activated" in v["activation"]["note"]
         assert c.get("/api/backup").json()["off_device"].startswith("NOT ACTIVATED")

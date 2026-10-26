@@ -33,7 +33,7 @@ from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
 from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
-from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
+from ..security.auth import NAVIGATION, Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
 from ..twin.clock import SPEEDS
 from . import pages
 from .service import SimulationService
@@ -115,10 +115,12 @@ class ActuatorFaultIn(Body):
 
 class ProcessStateIn(Body):
     target: ControllerState
+    expect: ControllerState | None = None   # 0.7.0 (R34-01): the state the user's preview showed; refused if changed
 
 
 class ManualOpIn(Body):
     op: dict[str, str | float | int]
+    expect: ControllerState | None = None
 
 
 class ReasonIn(Body):
@@ -518,7 +520,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     async def session(p: Principal = Depends(require(Perm.READ))):
         return {"username": p.username, "role": p.role.value, "commissioning": p.has_commissioning,
                 "csrf_token": accounts.csrf_for(p.session_hash), "must_change_password": p.must_change_password,
-                "permissions": [x.value for x in Perm if p.can(x)]}
+                "permissions": [x.value for x in Perm if p.can(x)], "navigation": NAVIGATION[p.role.value]}
 
     @app.post("/api/auth/password")
     def change_password(body: PasswordIn, request: Request, response: Response):
@@ -534,7 +536,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"ok": True, "detail": "password changed; all sessions revoked, log in again"}
 
     @app.get("/api/openapi.json", include_in_schema=False)
-    def openapi(p: Principal = Depends(require(Perm.READ))):
+    def openapi(p: Principal = Depends(require(Perm.ADMIN_READ))):
         return app.openapi()
 
     # ------------------------------------------------------------------ health / status
@@ -646,7 +648,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "cycle_id": s.cycle_id, "sequence": s.sequence}
 
     @app.get("/api/points")
-    async def points(p: Principal = Depends(require(Perm.READ))):
+    async def points(p: Principal = Depends(require(Perm.OPS_READ))):
         samples = _samples()
         groups = []
         for d in cfg.devices:
@@ -673,7 +675,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return hist.read(run)
 
     @app.get("/api/board")
-    def board(p: Principal = Depends(require(Perm.READ))):
+    def board(p: Principal = Depends(require(Perm.OPS_READ))):
         """Everything the I/O board draws, in one answer: each module with its channels, the latest reading,
         the last output command (asked) beside the coil readback (reported), the input changes seen and
         the channel's assignment record. On the simulation the modules are virtual."""
@@ -732,11 +734,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return out
 
     @app.get("/api/assignments")
-    def assignment_list(p: Principal = Depends(require(Perm.READ))):
+    def assignment_list(p: Principal = Depends(require(Perm.OPS_READ))):
         return {"assignments": assignments.current(), "signals": assignments.options()}
 
     @app.get("/api/assignments/history")
-    def assignment_history(point: str = Query(..., max_length=64), p: Principal = Depends(require(Perm.READ))):
+    def assignment_history(point: str = Query(..., max_length=64), p: Principal = Depends(require(Perm.OPS_READ))):
         return assignments.history(point)
 
     @app.post("/api/assignments")
@@ -766,11 +768,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             raise HTTPException(409, str(e))
 
     @app.get("/api/iochecks")
-    def iocheck_list(p: Principal = Depends(require(Perm.READ))):
+    def iocheck_list(p: Principal = Depends(require(Perm.OPS_READ))):
         return channel_checks.latest()
 
     @app.get("/api/assignments/export")
-    def assignment_export(fmt: str = Query("yaml", pattern="^(yaml|json)$"), p: Principal = Depends(require(Perm.READ))):
+    def assignment_export(fmt: str = Query("yaml", pattern="^(yaml|json)$"), p: Principal = Depends(require(Perm.OPS_READ))):
         doc = assignments.export(__version__, channel_checks.latest())
         name = f"aquacrop-io-assignments-{cfg.config_id}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         if fmt == "json":
@@ -840,13 +842,13 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     operation_routes.register(app, require, live_engine, programs, equipment, cfg)
 
     @app.get("/api/twin-link")
-    def twin_link(p: Principal = Depends(require(Perm.READ))):
+    def twin_link(p: Principal = Depends(require(Perm.OPS_READ))):
         return {"url": twin_url, "feed": feed_dir is not None,
                 "note": ("The digital twin is a separate service with its own database and virtual modules. "
                          "Opening or running it never affects the real system.")}
 
     @app.post("/api/twin-link/ticket")
-    def twin_ticket(p: Principal = Depends(require(Perm.READ))):
+    def twin_ticket(p: Principal = Depends(require(Perm.OPS_READ))):
         """A one-time, 60-second ticket that opens the twin as this user without a second login (0.5.5)."""
         if handoff_key is None or not twin_url:
             raise HTTPException(409, "the twin is not configured on this controller")
@@ -910,7 +912,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return r
 
     @app.post("/api/layout/accept")
-    def layout_accept(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+    def layout_accept(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.OPS_READ))):
         rec = next((r for r in (layout_mod.read_proposals(feed_dir) if feed_dir else []) if r["digest"] == body.digest), None)
         if rec is None:
             raise HTTPException(404, "no such proposal from the twin")
@@ -918,7 +920,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                               body.note)
 
     @app.post("/api/layout/restore")
-    def layout_restore(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+    def layout_restore(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.OPS_READ))):
         lay = layouts.get(body.digest)
         if lay is None:
             raise HTTPException(404, "no accepted layout with this digest")
@@ -1026,7 +1028,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "mapping": [m.model_dump() | {"provenance": "SIMULATED"} for m in cfg.virtual_mapping]}
 
     @app.get("/api/scenarios")
-    async def scenarios(p: Principal = Depends(require(Perm.READ))):
+    async def scenarios(p: Principal = Depends(require(Perm.OPS_READ))):
         # what loading one does besides starting the model again (O-03): read from its own script
         def effects(sc) -> list[str]:
             kinds = {k for _, k, _ in sc.steps}
@@ -1172,11 +1174,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.post("/api/processes/{pid}/state")
     async def process_state(pid: str, body: ProcessStateIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
-        return _ok(_guard(lambda: irt().process_request(p.username, pid, body.target)))
+        return _ok(_guard(lambda: irt().process_request(p.username, pid, body.target, expect=body.expect)))
 
     @app.post("/api/processes/{pid}/manual")
     async def process_manual(pid: str, body: ManualOpIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
-        return _ok(_guard(lambda: irt().process_manual(p.username, pid, body.op)))
+        return _ok(_guard(lambda: irt().process_manual(p.username, pid, body.op, expect=body.expect)))
 
     @app.post("/api/processes/{pid}/reset")
     async def process_reset(pid: str, p: Principal = Depends(require(Perm.LOCKOUT_RESET))):
@@ -1219,7 +1221,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return _guard(call)
 
     @app.get("/api/recipes")
-    async def recipes(p: Principal = Depends(require(Perm.READ))):
+    async def recipes(p: Principal = Depends(require(Perm.OPS_READ))):
         from ..control.recipes import form_schema
         r = irt()
         a = r.recipes.active()
@@ -1288,7 +1290,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return s.astimezone(timezone.utc).isoformat(), e.astimezone(timezone.utc).isoformat()
 
     @app.get("/api/events")
-    def events(p: Principal = Depends(require(Perm.READ)), start: str | None = None, end: str | None = None,
+    def events(p: Principal = Depends(require(Perm.OPS_READ)), start: str | None = None, end: str | None = None,
                kind: str | None = None, limit: int = Query(500, ge=1, le=5000)):
         s, e = _range(start, end, 120)
         sql = "SELECT id, utc, kind, actor, run_id, sim_s, payload_json FROM events WHERE utc>=? AND utc<=?"
@@ -1306,7 +1308,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"events": out, "truncated": len(rows) > limit, "recent_runtime": rt().events[-50:] if is_sim else []}
 
     @app.get("/api/commands/history")
-    def command_history(p: Principal = Depends(require(Perm.READ)), limit: int = Query(200, ge=1, le=2000)):
+    def command_history(p: Principal = Depends(require(Perm.OPS_READ)), limit: int = Query(200, ge=1, le=2000)):
         rows = hist.query("SELECT rowid AS seq, request_id, actor, target, desired, origin, reason, intent_utc, outcome, "
                           "detail, readback, outcome_utc, backend FROM commands ORDER BY intent_utc DESC LIMIT ?", (limit,))
         reg = hist.quarantines
@@ -1316,7 +1318,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     trend_cache = TrendCache()       # final buckets of year-long charts (historian/trends.py)
 
     @app.get("/api/trends")
-    def trends(p: Principal = Depends(require(Perm.READ)), points: str = Query(..., max_length=2000),
+    def trends(p: Principal = Depends(require(Perm.OPS_READ)), points: str = Query(..., max_length=2000),
                start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000),
                basis: str | None = Query(None, pattern="^(WALL|SIMULATION_TIME|LEGACY_UNKNOWN)$"),
                max_points: int = Query(2000, ge=100, le=20000)):
@@ -1384,7 +1386,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "display_timezone": cfg.site.timezone}
 
     @app.get("/api/export.csv")
-    def export_csv(p: Principal = Depends(require(Perm.READ)), points: str | None = None, start: str | None = None,
+    def export_csv(p: Principal = Depends(require(Perm.OPS_READ)), points: str | None = None, start: str | None = None,
                    end: str | None = None, after_id: int = 0, limit: int = Query(100000, ge=1, le=200000),
                    display_tz: str | None = None):
         # Bounded reader: at most 200 000 rows (one short read transaction) per page; continue with after_id.
@@ -1464,7 +1466,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         headers={"Content-Disposition": "attachment; filename=aquacrop-audit.csv"})
 
     @app.get("/api/analytics")
-    def analytics(p: Principal = Depends(require(Perm.READ)), start: str | None = None, end: str | None = None):
+    def analytics(p: Principal = Depends(require(Perm.OPS_READ)), start: str | None = None, end: str | None = None):
         """Runtime / delivered-volume estimates per origin with coverage disclosure. Origins are never summed.
         Bounded reader: at most ANALYTICS_MAX_DAYS per request and ANALYTICS_MAX_ROWS_PER_POINT rows a point."""
         s, e = _range(start, end, 60)
@@ -1510,7 +1512,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 **{k: kinds.count(k) for k in ("AI", "DI", "DO")}}
 
     @app.get("/api/settings")
-    async def settings(p: Principal = Depends(require(Perm.READ))):
+    async def settings(p: Principal = Depends(require(Perm.ADMIN_READ))):
         import platform
         import sys
         from ..release import release_info
@@ -1573,7 +1575,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 if u["role"] == "admin" and not u["disabled"] and u["username"] != exclude]
 
     @app.get("/api/users/roles")
-    def user_roles(p: Principal = Depends(require(Perm.READ))):
+    def user_roles(p: Principal = Depends(require(Perm.ADMIN_READ))):
         from ..security.auth import COMMISSIONING_TEXT, ROLE_TEXT
         return {"roles": ROLE_TEXT, "commissioning": COMMISSIONING_TEXT}
 
@@ -1618,7 +1620,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     # ------------------------------------------------------------------ retention hold / confirmation
     @app.get("/api/retention")
-    def retention_state(p: Principal = Depends(require(Perm.READ))):
+    def retention_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """Retention state; while held, also the proposed cutoff and the rows it would delete."""
         v = svc.retention.view()
         if v["held"] is not None:
@@ -1642,7 +1644,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     # ------------------------------------------------------------------ timestamp quarantine (ADR-0011)
     @app.get("/api/history/quarantine")
-    def quarantine_state(p: Principal = Depends(require(Perm.READ))):
+    def quarantine_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """Quarantines in force and, when records are stamped later than the current clock, the proposal
         an administrator can confirm. Read-only."""
         from ..historian.quarantine import propose, review_due
@@ -1727,7 +1729,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"started": True, "destination": "sd_card" if cfg.offsite_backup.enabled else str(state_dir / "backups")}
 
     @app.get("/api/backup")
-    def backup_state(p: Principal = Depends(require(Perm.READ))):
+    def backup_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """Local backups, the latest restore drill and the off-device copy (an owner decision)."""
         from ..historian.backup import latest_drill, list_backups
         dest = state_dir / "backups"
@@ -1749,7 +1751,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                                 "not survive loss of this device")}
 
     @app.get("/api/offsite")
-    def offsite_state(p: Principal = Depends(require(Perm.READ))):
+    def offsite_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """SD-card backups, upload queue, cloud copies, restore drills and the copy policy (ADR-0012).
         Read from state files; nothing is contacted."""
         return offsite.view()
@@ -1767,7 +1769,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")
-    async def bench_state(p: Principal = Depends(require(Perm.READ))):
+    async def bench_state(p: Principal = Depends(require(Perm.OPS_READ))):
         if is_sim:
             return {"available": False, "reason": "SIMULATED profile: bench writes do not exist here"}
         from ..control.bench import CONFIRMATION_PHRASE, MAX_LEASE_S, MIN_LEASE_S
@@ -1810,7 +1812,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return lease.public(svc._mono())
 
     @app.post("/api/bench/lease/revoke")
-    async def bench_revoke(p: Principal = Depends(require(Perm.READ))):
+    async def bench_revoke(p: Principal = Depends(require(Perm.OPS_READ))):
         # Any signed-in user may end a lease early: ending only stops further writes and sends nothing.
         return {"revoked": svc.revoke(f"revoked by {p.username}", p.username)}
 

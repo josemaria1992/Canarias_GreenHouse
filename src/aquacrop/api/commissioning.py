@@ -67,7 +67,7 @@ def register(app, require, wizard, svc) -> None:
             raise HTTPException(409, str(e))
 
     @app.get("/api/commissioning")
-    async def overview(p: Principal = Depends(require(Perm.READ))):
+    async def overview(p: Principal = Depends(require(Perm.OPS_READ))):
         if wizard is None:
             return {"available": False, "reason": "the simulation has no USB adapter; the wizard runs on the controller"}
         return {"available": True, "adapters": await run_in_threadpool(wizard.adapters),
@@ -81,7 +81,7 @@ def register(app, require, wizard, svc) -> None:
                           "the dashboard is a web page and cannot see adapters on the computer showing it.")}
 
     @app.get("/api/commissioning/{tx_id}")
-    async def tx_view(tx_id: str, p: Principal = Depends(require(Perm.READ))):
+    async def tx_view(tx_id: str, p: Principal = Depends(require(Perm.OPS_READ))):
         return await step(need().view, tx_id)
 
     @app.post("/api/commissioning/open")
@@ -128,13 +128,13 @@ def register(app, require, wizard, svc) -> None:
         return await step(need().detect, p.username, tx_id)
 
     @app.get("/api/discovery")
-    def discovery(p: Principal = Depends(require(Perm.READ))):
+    def discovery(p: Principal = Depends(require(Perm.OPS_READ))):
         if svc is None or not hasattr(svc, "discovery"):
             return {"available": False, "reason": "discovery reads real buses; the simulation's modules are virtual"}
         return {"available": True, "buses": svc.discovery.view(lambda uid: svc.backend.health(uid).online)}
 
     @app.post("/api/discovery/sweep")
-    def discovery_sweep(body: SweepIn, p: Principal = Depends(require(Perm.MODULE_SETUP))):
+    def discovery_sweep(body: SweepIn, p: Principal = Depends(require(Perm.MODULE_REGISTER))):
         if svc is None or not hasattr(svc, "discovery"):
             raise HTTPException(409, "discovery reads real buses only")
         try:

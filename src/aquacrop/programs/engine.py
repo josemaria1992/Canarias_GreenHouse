@@ -21,6 +21,10 @@ Rules that the tests hold it to:
   operation keeps all its limits; the conflict expires when the waiting window ends.
 * A missing, stale or bad reading is UNKNOWN, never OFF: a verification waiting for it times out and fails;
   a volume being measured stops, and the quantity it did not see is reported as uncertain, not delivered.
+* The equipment's limits (minimum OFF time, starts per hour) are checked immediately before every ON, including
+  later ON steps of a sequence, and the usage behind them survives a restart (0.7.0, F02).
+* A FAULT input that reads fault, or that is required and unknown, prevents a start and the re-arm after a
+  restart; during a run it stops the operation and holds a persistent EQUIPMENT_FAULT alarm (0.7.0, F03).
 """
 from __future__ import annotations
 
@@ -127,6 +131,7 @@ class EngineStore(Protocol):
     def conflict_open(self, conflict_id: str, doc: dict) -> None: ...
     def conflict_close(self, conflict_id: str, resolution: str, actor: str) -> None: ...
     def recovery_save(self, state: str, actor: str, doc: dict) -> None: ...
+    # optional (0.7.0): usage_load() -> {item: {"off_utc": iso | None, "starts_utc": [iso]}}; usage_save(item, doc)
 
 
 class Engine:
@@ -149,11 +154,13 @@ class Engine:
         self._items: dict[str, ItemView] = {}
         self.last_tick_utc: datetime | None = None
         self._pending_stop: str | None = None
+        self._faults: dict[str, str] = {}        # item -> fault inputs while its EQUIPMENT_FAULT alarm is raised
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> dict:
         """Every start is a recovery: nothing that was running continues."""
         with self._lock:
+            self._load_usage()
             interrupted = self.store.interrupt_running()
             prev = self.store.mode_load()
             self.mode = "RECOVERY"
@@ -205,6 +212,9 @@ class Engine:
                 v = self._role_value(it, fb.role)
                 out.append({"check": f"{it.name}: {fb.label} reads OFF", "ok": v is False,
                             "detail": "UNKNOWN" if v is None else ("ON" if v else "OFF")})
+            for label, v in self._fault_state(it):
+                out.append({"check": f"{it.name}: {label} reads no fault", "ok": v is False,
+                            "detail": "UNKNOWN" if v is None else ("FAULT" if v else "no fault")})
             for r in it.type.roles:
                 if r.purpose == Purpose.MEASUREMENT and r.role in it.points:
                     v = self._analog(it, r.role)
@@ -454,6 +464,7 @@ class Engine:
                                 self.event("PROGRAM_OCCURRENCE_MISSED", {"key": w.key, "why": "clock jump"}, "system")
             self.last_tick_utc = now_utc
             self._items = self.resolve()
+            self._faults_tick()
             if self._pending_stop is not None:
                 why, self._pending_stop = self._pending_stop, None
                 for o in list(self.ops.values()):
@@ -654,19 +665,100 @@ class Engine:
         caps = [v.type.limits.max_volume_L for v in views if v.type.limits.max_volume_L]
         return min(caps) if caps else None
 
-    def _limit_refusal(self, body: ProgramBody, need) -> str | None:
-        """The equipment type's limits, per item and across every operation and manual run of this runtime."""
+    # ------------------------------------------------------------------ usage (limits) across restarts
+    def _load_usage(self) -> None:
+        """Usage is kept as UTC instants in the store and on the monotonic clock in memory. A restart is not a
+        limit reset: a start or OFF from before it still counts (a backward clock step counts it as recent)."""
+        load = getattr(self.store, "usage_load", None)
+        if load is None:
+            return
+        now_u, now_m = self.clock.utc(), self.clock.mono()
+
+        def mono_of(iso: str) -> float:
+            return now_m - max(0.0, (now_u - datetime.fromisoformat(iso)).total_seconds())
+        for iid, doc in (load() or {}).items():
+            use = self._usage.setdefault(iid, {"off": None, "starts": []})
+            if doc.get("off_utc"):
+                off = mono_of(doc["off_utc"])
+                use["off"] = off if use["off"] is None else max(use["off"], off)
+            use["starts"] = sorted(set(use["starts"]) | {mono_of(t) for t in doc.get("starts_utc", [])})
+
+    def _save_usage(self, iid: str) -> None:
+        save = getattr(self.store, "usage_save", None)
+        if save is None:
+            return
+        use = self._usage.get(iid) or {}
+        now_u, now_m = self.clock.utc(), self.clock.mono()
+
+        def utc_of(m: float) -> str:
+            return (now_u - timedelta(seconds=now_m - m)).isoformat()
+        save(iid, {"off_utc": utc_of(use["off"]) if use.get("off") is not None else None,
+                   "starts_utc": [utc_of(t) for t in use.get("starts", []) if now_m - t < 3600]})
+
+    def _mark_off(self, iid: str) -> None:
+        self._usage.setdefault(iid, {"off": None, "starts": []})["off"] = self.clock.mono()
+        self._save_usage(iid)
+
+    def _item_refusal(self, iid: str) -> str | None:
+        """Why this item may not be switched ON now: its limits, or a fault input. Checked before every ON."""
+        it = self._items[iid]
+        lim = it.type.limits
         mono = self.clock.mono()
+        use = self._usage.get(iid, {})
+        if lim.min_off_s and use.get("off") is not None and mono - use["off"] < lim.min_off_s:
+            return (f"{it.name} must stay OFF for {lim.min_off_s:g} s between runs "
+                    f"({mono - use['off']:.0f} s so far)")
+        if lim.max_starts_per_hour:
+            recent = [t for t in use.get("starts", []) if mono - t < 3600]
+            if len(recent) >= lim.max_starts_per_hour:
+                return f"{it.name} has started {len(recent)} times this hour (limit {lim.max_starts_per_hour})"
+        return self._fault_refusal(it)
+
+    # ------------------------------------------------------------------ fault inputs
+    def _fault_state(self, it: ItemView) -> list[tuple[str, bool | None]]:
+        """Each FAULT role of the item: True = fault, False = no fault, None = unknown (stale, bad, or a required
+        role with no channel). Inversion is the role's own."""
+        out = []
+        for r in it.type.roles:
+            if r.purpose != Purpose.FAULT:
+                continue
+            if r.role not in it.points:
+                if r.required:
+                    out.append((r.label, None))
+                continue
+            out.append((r.label, self._role_value(it, r.role)))
+        return out
+
+    def _fault_refusal(self, it: ItemView) -> str | None:
+        for label, v in self._fault_state(it):
+            if v is True:
+                return f"{it.name}: {label} reports a fault"
+            if v is None:
+                return f"{it.name}: {label} is UNKNOWN (missing, stale or not connected), so it cannot show the item is healthy"
+        return None
+
+    def _faults_tick(self) -> None:
+        """Persistent EQUIPMENT_FAULT alarms follow every item's fault inputs, running or not. An input that can no
+        longer be read does not clear the alarm: only every input reading no fault does."""
+        for iid, it in self._items.items():
+            st = self._fault_state(it)
+            active = [label for label, v in st if v is True]
+            if active and iid not in self._faults:
+                self._faults[iid] = ", ".join(active)
+                self.alarm("EQUIPMENT_FAULT", iid, True, {"item": it.name, "inputs": active,
+                                                          "message": f"{it.name}: {', '.join(active)} reports a fault"})
+                self.event("EQUIPMENT_FAULT", {"item_id": iid, "inputs": active}, "system")
+            elif iid in self._faults and st and all(v is False for _, v in st):
+                self._faults.pop(iid)
+                self.alarm("EQUIPMENT_FAULT", iid, False, {})
+                self.event("EQUIPMENT_FAULT_CLEARED", {"item_id": iid}, "system")
+
+    def _limit_refusal(self, body: ProgramBody, need) -> str | None:
+        """The equipment type's limits and fault inputs, per item and across every operation and manual run of
+        this runtime."""
         for iid in need:
-            lim = self._items[iid].type.limits
-            use = self._usage.get(iid, {})
-            if lim.min_off_s and use.get("off") is not None and mono - use["off"] < lim.min_off_s:
-                return (f"{self._items[iid].name} must stay OFF for {lim.min_off_s:g} s between runs "
-                        f"({mono - use['off']:.0f} s so far)")
-            if lim.max_starts_per_hour:
-                recent = [t for t in use.get("starts", []) if mono - t < 3600]
-                if len(recent) >= lim.max_starts_per_hour:
-                    return f"{self._items[iid].name} has started {len(recent)} times this hour (limit {lim.max_starts_per_hour})"
+            if (why := self._item_refusal(iid)) is not None:
+                return why
         cap = self._volume_cap(self._items[i] for i in need)
         a = body.action
         asked = (a.target_L if a.type == "DELIVER_VOLUME" else
@@ -681,10 +773,18 @@ class Engine:
         return op.held.get(iid) or self._items.get(iid)
 
     def _switch_on(self, op: Op, iid: str) -> bool:
-        it = self._items[iid]
+        it = self._items.get(iid)
+        if it is None or it.command_point is None:
+            self._fail(op, f"{iid} has no command channel")
+            return False
+        if (why := self._item_refusal(iid)) is not None:     # before every ON, also a later step of a sequence
+            self._faults_tick()
+            self._fail(op, why)
+            return False
         op.held[iid] = it
         use = self._usage.setdefault(iid, {"off": None, "starts": []})
         use["starts"] = [t for t in use["starts"] if self.clock.mono() - t < 3600] + [self.clock.mono()]
+        self._save_usage(iid)                        # an attempted start counts, confirmed or not
         rec = self.io.command(it.command_point, True, actor=op.actor if op.origin == "MANUAL" else "program",
                               reason=f"program {op.program_id}@{op.version} op {op.op_id}", priority=Priority.NORMAL)
         if rec.outcome in OK:
@@ -745,7 +845,7 @@ class Engine:
 
     def _end(self, op: Op) -> None:
         for iid in op.held:                          # verified OFF now: the min-off clock starts
-            self._usage.setdefault(iid, {"off": None, "starts": []})["off"] = self.clock.mono()
+            self._mark_off(iid)
         self.arbiter.release(op.op_id)
         self.ops.pop(op.op_id, None)
         if op.state == "STOP_UNVERIFIED":
@@ -778,6 +878,11 @@ class Engine:
         if op.window_end_utc is not None and a.type in ("RUN_FOR", "KEEP_BETWEEN") and self.clock.utc() >= op.window_end_utc:
             self._begin_stop(op, "window ended", result="DONE")
             return
+        for iid in list(op.on):                      # a fault input on running equipment stops the operation
+            held = self._held(op, iid)
+            if iid not in op.off_sent and held is not None and (why := self._fault_refusal(held)) is not None:
+                self._fail(op, why)
+                return
         for iid in list(op.on):                      # running equipment must keep reporting ON where it can
             if iid not in op.off_sent and not self._feedback_ok(op, iid):
                 return
@@ -886,7 +991,7 @@ class Engine:
                     op.on.remove(s.item)
                 op.off_sent.discard(s.item)
                 if op.held.pop(s.item, None) is not None:
-                    self._usage.setdefault(s.item, {"off": None, "starts": []})["off"] = mono
+                    self._mark_off(s.item)
             elif s.do in ("WAIT", "RUN"):
                 if mono - op.step_since < s.seconds:
                     return

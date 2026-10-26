@@ -180,8 +180,30 @@
     }
     $("login-view").classList.add("hidden"); $("pwchange-view").classList.add("hidden"); $("app").classList.remove("hidden");
     $("who").textContent = `${sess.username} (${sess.role}${sess.commissioning ? ", commissioning" : ""})`;
+    S.role = sess.role; S.nav = sess.navigation || [];
+    applyNav();
     route(); refresh();
   }
+  // 0.7.0 role navigation (ADR-0023): exactly the pages of the role. The server refuses the rest anyway.
+  const VIEW_NAV = { overview: "overview", blocks: "blocks", twin: "twin", "hw-add": "hw-add", programs: "programs",
+    history: "history", alarms: "alarms", equipment: "equipment", "equipment-types": "equipment", operation: "programs",
+    io: "hardware", board: "hardware", discovery: "hw-add", control: "hardware", settings: "settings", start: "settings" };
+  function applyNav() {
+    document.querySelectorAll("#nav [data-nav]").forEach(a => {
+      const on = S.nav.includes(a.dataset.nav);
+      a.classList.toggle("hidden", !on);
+      if (a.dataset.viewerLabel) a.textContent = S.role === "viewer" ? a.dataset.viewerLabel : "Alarms & Events";
+    });
+  }
+  function navAllows(view) {
+    const k = VIEW_NAV[view];
+    if (k) return S.nav.includes(k);
+    return S.role !== "viewer" || /^(sector-|main-|drainage|diagram)/.test(view);   // process pages: read-only views
+  }
+  const NEEDS = { blocks: "an operator or administrator account", twin: "an operator or administrator account",
+    "hw-add": "an operator or administrator account", history: "an operator or administrator account",
+    equipment: "an administrator account (operators find equipment in Blocks)", hardware: "an administrator account",
+    settings: "an administrator account" };
   $("login-form").addEventListener("submit", async ev => {
     ev.preventDefault();
     const f = new FormData(ev.target);
@@ -261,7 +283,10 @@
         || Date.now() - pressed < 2000;     // nor between pressing and releasing a button: the click would be lost
       const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
       try {
-        if (fn && !typing) await fn();
+        if (!navAllows(S.view)) {
+          if (!typing) mount(section(S.view), h("div", { class: "card", "data-denied": S.view }, h("h2", null, "Not available for your account"),
+            h("p", null, `This page needs ${NEEDS[VIEW_NAV[S.view]] || "another role"}.`), h("p", null, h("a", { href: "#overview" }, "Back to the overview"))));
+        } else if (fn && !typing) await fn();
         else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
       } catch (e) {
         // a page that cannot be drawn says so; it is not a lost connection unless a request failed
@@ -296,7 +321,7 @@
     b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
     const real = st.profile !== "SIMULATED";
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
-    // the developer I/O board is for the people who commission the modules: not for a viewer account
+    // the developer I/O board: in the administrator's Hardware group only (0.7.0)
     $("nav-board").classList.toggle("hidden", !(can("sim_command") || can("process_control") || can("io_assign")));
     if ((real || isInst()) && window.AqPlant) window.AqPlant.buildNav();   // process pages (read-only on hardware, ADR-0009 addendum)
     plainStatus(st);
