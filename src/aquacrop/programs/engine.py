@@ -30,6 +30,10 @@ Rules that the tests hold it to:
   it too. A stop always wins over a start in the same tick (0.7.0).
 * A repeat inside a window starts its next cycle only after the previous one ended verified plus the rest time,
   never after the window's end; a cycle still running at the end is stopped and reported WINDOW_ENDED (0.7.0).
+* An item verified OFF stays the operation's duty until the operation ends (RR-01): if it reads ON or UNKNOWN again
+  during the stop, the rest of the plan holds (no dependent valve closes), the stop is STOP_UNVERIFIED with an alarm
+  and OFF is sent again; the operation never ends while any item it switched ON is not verified OFF. Escalation
+  during a stop: fault inputs and stop conditions raise their alarms but never release, skip or reorder a step.
 """
 from __future__ import annotations
 
@@ -124,6 +128,10 @@ class Op:
     stop_step_since: float = 0.0
     stop_sent: set[str] = field(default_factory=set)  # plan OFFs sent in this stop
     plan_done: bool = False
+    # RR-01: items this operation switched ON and has since verified OFF. They keep their held channels and stay this
+    # operation's duty until it ends: re-checked before every later stop step and before the operation is finished.
+    stopped: dict[str, ItemView] = field(default_factory=dict)
+    stop_hold: bool = False                          # the plan holds because an earlier OFF is no longer proven
 
     def public(self, now: float) -> dict:
         return {"op_id": self.op_id, "program_id": self.program_id, "version": self.version, "origin": self.origin,
@@ -887,6 +895,7 @@ class Engine:
             self._fail(op, why)
             return False
         op.held[iid] = it
+        op.stopped.pop(iid, None)
         use = self._usage.setdefault(iid, {"off": None, "starts": []})
         use["starts"] = [t for t in use["starts"] if self.clock.mono() - t < 3600] + [self.clock.mono()]
         self._save_usage(iid)                        # an attempted start counts, confirmed or not
@@ -945,6 +954,8 @@ class Engine:
         STOP_UNVERIFIED and sends that OFF again, never an ON. True when the plan is through."""
         now = self.clock.mono()
         while op.stop_idx < len(op.stop_plan):
+            if not self._stopped_still_off(op, now):
+                return False                         # an earlier OFF is no longer proven: nothing dependent happens
             s = op.stop_plan[op.stop_idx]
             if s.do == "WAIT":
                 if now - op.stop_step_since < s.seconds:
@@ -976,8 +987,7 @@ class Engine:
                     return False
                 op.on.remove(s.item)
                 op.off_sent.discard(s.item)
-                if op.held.pop(s.item, None) is not None:
-                    self._mark_off(s.item)
+                self._verified_off(op, s.item)
                 if op.state == "STOP_UNVERIFIED":
                     op.state = "STOPPING"
                     self.alarm("PROGRAM_STOP_UNVERIFIED", op.program_id, False, {})
@@ -987,6 +997,58 @@ class Engine:
             op.stop_step_since = now
         return True
 
+    def _verified_off(self, op: Op, iid: str) -> None:
+        """An item this operation switched ON is verified OFF: its min-off clock starts, and it stays held (RR-01)."""
+        it = self._held(op, iid)
+        if it is not None:
+            op.stopped[iid] = it
+        self._mark_off(iid)
+
+    def _regressed(self, op: Op) -> list[tuple[str, bool | None, bool | None]]:
+        """Items verified OFF earlier in this operation that no longer read OFF (ON or UNKNOWN)."""
+        out = []
+        for iid in op.stopped:
+            ok, coil, fbv = self._off_state(op, iid)
+            if not ok:
+                out.append((iid, coil, fbv))
+        return out
+
+    def _stopped_still_off(self, op: Op, now: float) -> bool:
+        """RR-01: before any later stop step, every earlier OFF must still be proven. Otherwise hold the plan, report
+        STOP_UNVERIFIED with an alarm, and send that OFF again (never an ON). When it is proven again, the current
+        step's time restarts, so a wait before a dependent valve is a full wait after a verified stop."""
+        bad = self._regressed(op)
+        if not bad:
+            if op.stop_hold:
+                op.stop_hold = False
+                op.stop_step_since = now
+                if op.state == "STOP_UNVERIFIED":
+                    op.state = "STOPPING"
+                    self.alarm("PROGRAM_STOP_UNVERIFIED", op.program_id, False, {})
+                self.event("PROGRAM_STOP_REVERIFIED", {"op_id": op.op_id}, "system")
+            return True
+        detail = [f"{getattr(self._held(op, i), 'name', i)}: verified OFF earlier, now output "
+                  f"{'UNKNOWN' if c is None else 'ON' if c else 'OFF'}, feedback "
+                  f"{'UNKNOWN' if f is None else 'ON' if f else 'OFF'}; the rest of the {op.stop_plan_name} stop "
+                  "waits for it" for i, c, f in bad]
+        if not op.stop_hold:
+            op.stop_hold = True
+            op.last_off_retry = None
+            self.event("PROGRAM_STOP_PROOF_LOST", {"op_id": op.op_id, "items": detail}, "system")
+        if op.state != "STOP_UNVERIFIED":
+            op.state = "STOP_UNVERIFIED"
+            self.alarm("PROGRAM_STOP_UNVERIFIED", op.program_id, True, {"op_id": op.op_id, "items": detail})
+            self.event("PROGRAM_STOP_UNVERIFIED", {"op_id": op.op_id, "items": detail}, "system")
+        if op.last_off_retry is None or now - op.last_off_retry >= STOP_VERIFY_S:
+            op.last_off_retry = now
+            for iid, *_ in bad:
+                it = self._held(op, iid)
+                if it and it.command_point:
+                    self.io.command(it.command_point, False, actor="program",
+                                    reason=f"stop {op.op_id}: verified OFF earlier, no longer OFF: OFF again",
+                                    priority=Priority.STOP)
+        return False
+
     def _advance_stop(self, op: Op) -> None:
         if not op.plan_done:
             if not self._run_stop_plan(op):
@@ -994,7 +1056,7 @@ class Engine:
             # the plan is through (or there is none): whatever is still on goes OFF now, the last one first
             op.plan_done = True
             op.stop_since = self.clock.mono()
-            op.stopping_items = list(reversed(op.on))
+            op.stopping_items = list(reversed(op.on)) + [i for i in op.stopped if i not in op.on]
             for iid in op.stopping_items:
                 it = self._held(op, iid)
                 if it and it.command_point:
@@ -1080,6 +1142,10 @@ class Engine:
             held = self._held(op, iid)
             if iid not in op.off_sent and held is not None and (why := self._fault_refusal(held)) is not None:
                 self._fail(op, why)
+                return
+        for iid in list(op.stopped):                 # RR-01: switched OFF by this operation, now ON again
+            if self._off_state(op, iid)[1] is True:
+                self._fail(op, f"{getattr(self._held(op, iid), 'name', iid)}: verified OFF earlier, output reads ON again")
                 return
         for iid in list(op.on):                      # running equipment must keep reporting ON where it can
             if iid not in op.off_sent and not self._feedback_ok(op, iid):
@@ -1187,9 +1253,8 @@ class Engine:
                     return
                 if s.item in op.on:
                     op.on.remove(s.item)
+                    self._verified_off(op, s.item)
                 op.off_sent.discard(s.item)
-                if op.held.pop(s.item, None) is not None:
-                    self._mark_off(s.item)
             elif s.do in ("WAIT", "RUN"):
                 if mono - op.step_since < s.seconds:
                     return

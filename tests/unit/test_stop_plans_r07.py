@@ -111,3 +111,61 @@ def test_r07_02_without_a_fault_plan_everything_goes_off_last_first():
     r.run(0.5)
     assert not r.twin.s.coils[PUMP] and not r.twin.s.coils[VALVE]
     assert stop_steps(r) == []
+
+
+# ---------------------------------------------------------------- RR-01 (independent re-review of 7bc098c)
+def test_rr01_a_pump_that_runs_again_during_the_wait_holds_the_valve_and_the_operation():
+    """The reviewer's probe, expected-correct: the pump OFF verifies, then the pump reads ON again (simulated stuck
+    contactor) during the normal plan's wait. The valve stays open, the operation stays held with an alarm, OFF is sent
+    again and never an ON; once the pump is OFF again the full wait runs before the valve closes."""
+    r = started(compile_form(form(guards=GUARD), fault_block(), "VALIDATED", views()))
+    r.e.stop_op("review", next(iter(r.e.ops)))
+    r.run(0.5)
+    assert not r.twin.s.coils[PUMP] and r.twin.s.coils[VALVE]
+    ons = len(r.on_frames())
+    r.twin.s.coils[PUMP] = True                                     # not an engine command: the device runs again
+    r.twin.set_fault("pump", "STUCK_ON")
+    r.run(30)
+    assert r.twin.s.coils[VALVE], "a dependent valve was closed on a pump that is not proven stopped"
+    assert r.e.ops, "the operation was finished while its pump is ON"
+    op = next(iter(r.e.ops.values()))
+    assert op.state == "STOP_UNVERIFIED" and op.stopped["pump"].command_point == PUMP
+    assert r.alarms[("PROGRAM_STOP_UNVERIFIED", "p")] is True
+    assert len(r.on_frames()) == ons                                # only OFF again, never an ON
+    assert any(k == "PROGRAM_STOP_PROOF_LOST" for k, _ in r.events)
+    r.twin.set_fault("pump", None)
+    for _ in range(30):                                             # the next OFF retry (every 10 s) is verified
+        if not r.twin.s.coils[PUMP]:
+            break
+        r.run(0.5)
+    assert not r.twin.s.coils[PUMP] and r.twin.s.coils[VALVE]
+    r.run(1.0)
+    assert r.twin.s.coils[VALVE]                                    # the wait starts again from the verified stop
+    r.run(3)
+    assert not r.twin.s.coils[VALVE] and not r.e.ops
+    assert r.e.finished[-1]["result"] == "STOPPED_BY_USER"
+    assert r.alarms[("PROGRAM_STOP_UNVERIFIED", "p")] is False
+
+
+def test_rr01_an_operation_never_ends_while_an_earlier_stopped_item_reads_on():
+    """After the plan is through, the final check covers every item the operation switched ON, not only the last."""
+    r = started(compile_form(form(guards=GUARD), fault_block(), "VALIDATED", views()))
+    r.e.stop_op("review", next(iter(r.e.ops)))
+    r.run(2.6)                                                      # pump off, wait done, valve off sent
+    r.twin.s.coils[PUMP] = True
+    r.twin.set_fault("pump", "STUCK_ON")
+    r.run(25)
+    assert r.e.ops and next(iter(r.e.ops.values())).state == "STOP_UNVERIFIED"
+    r.twin.set_fault("pump", None)
+    r.run(12)
+    assert not r.e.ops and not r.twin.s.coils[PUMP]
+
+
+def test_rr01_a_rebind_during_the_stop_keeps_the_original_channels():
+    """The held channels are the ones switched ON; a binding change mid-stop does not move the OFF duty."""
+    r = started(compile_form(form(guards=GUARD), fault_block(), "VALIDATED", views()))
+    op = next(iter(r.e.ops.values()))
+    original = op.held["pump"].command_point
+    r.e.stop_op("review", op.op_id)
+    r.run(0.5)
+    assert op.stopped["pump"].command_point == original == PUMP
