@@ -13,10 +13,10 @@ Playwright for the browser journey. Branch `feat/equipment-programs-twin`; the r
 
 | Kind | Result |
 |---|---|
-| Full source test suite (unit, integration, acceptance, hardware fakes, router in Node) | __SUITE__ |
+| Full source test suite (unit, integration, acceptance, hardware fakes, router in Node) | PASS: 694 passed, 8 skipped, 0 failed on the code of `c5ac7cb` (before its two new test files, which pass separately: 8 passed). Skipped on Windows by design: the Linux CM4 installer, POSIX and rclone/openssl-dependent offsite and network checks |
 | Fake-bus checks (no write from the twin, from imports, from viewers; existing wire-frame fixtures) | PASS, inside the suite |
 | Browser journey, desktop and tablet width, three roles (`scripts/ui_check/run_journey_070.py`) | PASS, 29 of 29 checks (`operator/walkthrough-0.7/checks.json`) |
-| Packaged release: build, checksums, verification | __RELEASE__ |
+| Packaged release: build, checksums, verification | PASS, 28 of 28 `verify_release.py` checks with the bundled Python (see "Packaged release") |
 | CM4: installed versions, upgrade, twin restart, rollback, load (TWIN-09, REL-04) | NOT RUN (see "CM4") |
 | Owner physical results (IO 8CH test loads, wiring, any equipment) | NOT RUN |
 | Owner acceptance of the walkthrough | NOT RUN: the owner's to give |
@@ -132,10 +132,10 @@ Playwright for the browser journey. Branch `feat/equipment-programs-twin`; the r
 |---|---|---|
 | SAFE-01 to SAFE-05, SAFE-07 | PASS (regression) | Existing fake-wire, lease and gate tests in the suite, unchanged |
 | SAFE-06 | PASS | FB-06, and `expect` checks on process actions (`test_r34_01_*`) |
-| REL-01 | __REL01__ | |
+| REL-01 | PASS | Full suite as above; skips are platform tools absent on Windows, not 0.7 cases. Software and fake-bus results only |
 | REL-02 | PASS (simulation) | Browser journey: equipment → drawing (drag, connect) → block → volume program on a weekly schedule → twin run → history; viewer and tablet checks. Fault run in the browser: checked by hand earlier in the session, not in the scripted journey |
 | UX-01 to UX-04 | PASS | Browser: a choice redraws its form at once; typed values survive the page's refresh; messages beside their button; no sideways scroll at tablet width |
-| REL-03 | __REL03__ | |
+| REL-03 | PASS (part) | Built from the clean commit; ZIP and manifest checksums, wheel identity, configs and the bundled Python 3.14.8 with every locked package verified. Cold start through the launcher, login, restart: NOT RUN on this build |
 | REL-04 | NOT RUN | CM4 staged upgrade, paired twin and rollback |
 | REL-05 | PASS (documents) | ADR-0023 to 0026, CAPABILITIES-0.7, upgrade-0.7, walkthrough-0.7 with screenshots from the journey. Owner acceptance: NOT RUN |
 
@@ -148,6 +148,14 @@ Playwright for the browser journey. Branch `feat/equipment-programs-twin`; the r
 - The twin's installation graph stayed empty after an import until the page was reloaded.
 - Tank water and pipe flow in the twin were drawn black (no style).
 - The program form's refusal for a missing feedback channel now says what to change.
+
+## Packaged release
+
+`python scripts/build_release.py --out <dir> --windows-runtime download --wheelhouse aarch64:3.11 --wheelhouse aarch64:3.13`
+from a clean worktree of commit `c5ac7cb0f0b03a4afae66cf30dadc1e3bf44cd83`: `aquacrop-0.7.0.zip`, 2264 files, SHA-256
+`fdd274b4e0aef0f84382644363467987cc46e9f2ae1359a3eb26b98262b8730a`. `scripts/verify_release.py` with the
+release's own `runtime/python.exe`: 28 passed, 0 failed. The ZIP carries the documents as they stood at that commit
+(this record without its final numbers).
 
 ## CM4
 
