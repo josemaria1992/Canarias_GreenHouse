@@ -5,7 +5,7 @@ from tests.hardware.test_twin_graph_070 import KINDS, POS, graph, drawing  # noq
 from tests.hardware.test_twin_service import ORIGIN, _twin_h, live_and_twin, login  # noqa: F401  (fixture)
 
 
-def test_mod01_a_simulated_module_adds_twin_channels_and_cannot_be_exported(live_and_twin):
+def test_mod01_a_simulated_module_adds_twin_channels_that_stay_in_the_twin(live_and_twin):
     app, live, twin_app, twin, bus, hl = live_and_twin
     H = _twin_h(twin, "bench1")
     r = twin.post("/api/twin/modules", json={"device_uid": "sim_io", "model": "WAVESHARE_MODBUS_RTU_IO_8CH",
@@ -23,8 +23,16 @@ def test_mod01_a_simulated_module_adds_twin_channels_and_cannot_be_exported(live
     r = twin.post("/api/twin/equipment/bind", json={"item_id": "p9", "role": "start", "point": "sim_io.DO1"}, headers=H)
     assert r.status_code == 200, r.text                          # the twin's channel lists follow its configuration
     pv = twin.get("/api/twin/changes").json()["preview"]
-    assert any("simulated module" in m for m in pv["missing"])
-    assert twin.post("/api/twin/export", json={"note": ""}, headers=H).status_code == 409
+    # 0.7.1 (owner decision, DT-06): a simulated module's channel stays in the twin; it never travels with an export
+    # and does not stop one (the equipment goes as planned, without that channel)
+    assert any("sim_io.DO1" in m and "stays in the twin" in m for m in pv["twin_only"])
+    assert not any(b["point"] == "sim_io.DO1" for b in pv["bindings"]) and not pv["missing"]
+    r = twin.post("/api/twin/export", json={"note": ""}, headers=H)
+    assert r.status_code == 200 and r.json()["bindings"] == 0, r.text
+    from aquacrop.twin.changes import read_exports
+    import os
+    pkg = next(x for x in read_exports(os.environ["AQUACROP_FEED_DIR"]) if x["digest"] == r.json()["digest"])
+    assert not any((b.get("point") or "").startswith("sim_io.") for b in pkg["bindings"])
     assert "sim_io" not in {d.device_uid for d in app.state.cfg.devices}     # the real system never saw it
     r = twin.post("/api/twin/modules/remove", json={"device_uid": "sim_io"}, headers=H)
     assert r.status_code == 200 and "sim_io" not in {d.device_uid for d in twin_app.state.svc.cfg.devices}

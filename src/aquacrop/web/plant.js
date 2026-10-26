@@ -888,18 +888,18 @@
         h("td", null, pv.state === "STOPPED" && !pv.stopping ? null : h("button", { class: "cmd small danger", disabled: !can("process_control"),
           onclick: () => setState(pid, "STOPPED", `${w.name}: stop requested`) }, w.stop)));
     });
+    // 0.7.1 (owner decision): the Overview is the diagram; the separate "what is happening now", tanks and sectors panels
+    // are gone. Problems stay (they say what to do), and so does the one safety action, Stop all processes.
+    const graph = window.AqOverview ? await window.AqOverview.card().catch(() => null) : null;
+    const running = PR.order.filter(pid => PR.processes[pid].state !== "STOPPED" || PR.processes[pid].stopping);
     mount("v-overview",
-      h("div", { class: "grid" },
-        h("div", { class: "card wide" }, h("h2", null, "What is happening now"),
-          table(["Process", "State", "Now", ""], procs),
-          h("div", { class: "row" }, h("button", { class: "cmd danger", disabled: !can("process_control"),
-            onclick: () => confirm("Stop every process?") && act("POST", "/api/processes/stop-all", { reason: "operator stop all" }, "every process stopping") }, "Stop all processes"),
-            h("span", { class: "muted" }, "Recipe in use: ", h("strong", null, PR.recipe.active || "none"), ". Automatic operation exists only in the Digital Twin in this release."))),
-        h("div", { class: "card" }, h("h2", null, "Tanks"), table(["Tank", "Water level", ""], tanks)),
-        problemsCard(P, PR, null)),
-      sectorsCard(P, PR),
-      h("div", { class: "card", id: "overview-diagram" }, h("h2", null, "Greenhouse diagram"), diagramView(P, PR, {}), legend(P),
-        h("p", null, h("a", { href: "#diagram" }, "Open the full diagram"))));
+      problemsCard(P, PR, null),
+      graph && graph.dataset.overview === "graph" ? graph : h("div", { class: "card", id: "overview-diagram" }, h("h2", null, "Greenhouse diagram"), diagramView(P, PR, {}), legend(P),
+        graph ? graph.querySelector("[data-migration]") : null),
+      h("div", { class: "row" }, h("button", { class: "cmd danger", disabled: !can("process_control") || !running.length,
+        onclick: () => confirm("Stop every process?") && act("POST", "/api/processes/stop-all", { reason: "operator stop all" }, "every process stopping") }, "Stop all processes"),
+        h("span", { class: "muted small" }, running.length ? `${running.length} process${running.length === 1 ? "" : "es"} running or stopping; their state is on the diagram.` : "Nothing is running.")));
+    void tanks; void procs;
   }
   /** O-05: each sector's name, valve, readings and its page and history, always visible on the Overview. */
   function sectorsCard(P, PR) {

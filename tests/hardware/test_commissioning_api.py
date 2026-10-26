@@ -33,6 +33,9 @@ def usb_adapter(app):
 
 
 def test_the_wizard_needs_the_commissioning_flag_and_writes_only_on_the_adapter(hw):
+    """MOD-01..03 (0.7.1): an operator without commissioning cannot write a module, but sends a request; an operator
+    with commissioning prepares the module from that request on the in-memory buses; the request follows the run and
+    says AWAITING_APPLICATION, never ADDED, until the running configuration has the module."""
     app, c, bus, relay, ai = hw
     usb, port = usb_adapter(app)
     new = usb.add("digital_io", 1)
@@ -40,14 +43,19 @@ def test_the_wizard_needs_the_commissioning_flag_and_writes_only_on_the_adapter(
     ov = c.get("/api/commissioning", headers=h).json()
     assert ov["available"] and ov["adapters"][0]["selectable"] and "not into this PC" in ov["where"]
     assert c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).status_code == 403
+    rq = c.post("/api/modules/requests", json={"model": "IO 8CH, SKU 26244", "purpose": "two more sector valves"}, headers=h)
+    assert rq.status_code == 200 and "not" in rq.json()["next"] and "emailed" in rq.json()["next"]
+    rid = rq.json()["request_id"]
+    mine = c.get("/api/modules/requests", headers=h).json()
+    assert [r["status"] for r in mine["requests"]] == ["REQUESTED"] and not mine["can_handle"]
     c.post("/api/auth/logout", headers=h)
-    h = login(c, "bench1")                                 # 0.7.0: the commissioning flag no longer writes modules
-    assert c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).status_code == 403
-    c.post("/api/auth/logout", headers=h)
-    h = login(c, "admin1")
-    v = c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a"}, headers=h).json()
+    h = login(c, "bench1")                                 # 0.7.1: an operator with commissioning prepares modules
+    seen = c.get("/api/modules/requests", headers=h).json()
+    assert seen["can_handle"] and seen["requests"][0]["request_id"] == rid
+    v = c.post("/api/commissioning/open", json={"adapter": port, "bus_id": "rs485_a", "request_id": rid}, headers=h).json()
     tx = v["tx_id"]
     assert v["state"] == "READ"                              # Start reads the module at once (owner, 2026-10-24)
+    assert c.get("/api/modules/requests", headers=h).json()["requests"][0]["status"] == "PREPARING"
     assert c.get(f"/api/commissioning/{tx}/suggest", headers=h).json()["address"] == 7   # before naming it
     assert c.post(f"/api/commissioning/{tx}/read", json={"confirmation": CONFIRM_PHRASE}, headers=h).json()["state"] == "READ"
     assert c.post(f"/api/commissioning/{tx}/identity", json={"name": "digital_C", "sku": "26244", "label": "digital_C"},
@@ -66,6 +74,13 @@ def test_the_wizard_needs_the_commissioning_flag_and_writes_only_on_the_adapter(
     assert v["state"] == "DETECTED"
     assert bus.write_frames() == [] and not any(f[1] == 0x05 for f in usb.frames_in)
     assert app.state.svc.workers["rs485_a"].health()["ok"]
+    req = c.get("/api/modules/requests", headers=h).json()["requests"][0]
+    assert req["status"] == "AWAITING_APPLICATION" and req["device_uid"] == "digital_C" and "maintenance" in req["next"]
+    # closing it does not make it Added; ADDED only comes from the running configuration
+    assert c.post("/api/modules/requests/close", json={"request_id": rid, "outcome": "done", "decision": "CLOSED"},
+                  headers=h).json()["status"] == "CLOSED"
+    assert c.get("/api/modules/requests", headers=h).json()["requests"][0]["status"] == "CLOSED"
+    assert not any(d.device_uid == "digital_C" for d in app.state.cfg.devices)
     pf.BUSES.pop(port.split("//")[1], None)
 
 

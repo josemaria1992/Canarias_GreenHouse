@@ -1,6 +1,8 @@
-/* AquaCrop Hardware → Add module and Discovery pages (0.5.0). Loaded after app.js, built on window.AqUI.
- * The wizard prepares one new module on the controller's USB-to-RS485 adapter; every step is checked again by
- * the server. All text is inserted with textContent. */
+/* AquaCrop Add Module and Discovery pages (0.5.0; 0.7.1). Loaded after app.js, built on window.AqUI.
+ * Add Module is for real modules only (simulated modules are made in Digital Twin). Administrators and operators with
+ * commissioning prepare a module with the wizard on the controller's USB-to-RS485 adapter, every step checked again by
+ * the server; every other operator sends a request, which is recorded on this bench and followed here until the
+ * module is really in the configuration. All text is inserted with textContent. */
 "use strict";
 (function () {
   const U = window.AqUI;
@@ -98,7 +100,8 @@
         h("div", { class: "row" }, h("button", { class: "cmd", disabled: busy, onclick: () => step(id, "POST", `/api/commissioning/${id}/detect`, undefined, "Detected on the bus.") }, "Detect on " + t.bus_id), note(id))));
     }
     if (t.state === "DETECTED") {
-      kids.push(h("p", null, `Found at ${t.address} on ${t.bus_id}. A configuration proposal with this module was written on the controller; its channels start unassigned and unverified. Install it as the upgrade guide describes. Nothing was switched on.`));
+      kids.push(h("p", null, `Found at ${t.address} on ${t.bus_id}. A configuration proposal with this module was written on the controller; its channels start unassigned and unverified.`),
+        h("p", { class: "warn small" }, "Not added yet: an administrator applies the proposal during maintenance (stop the service, install the proposal as the running configuration, start it again). Nothing was switched on."));
     }
     if (["OPEN", "READ", "IDENTIFIED", "RESERVED", "PREPARED"].includes(t.state))
       kids.push(h("button", { class: "ghost small", disabled: busy, onclick: () => step(id, "POST", `/api/commissioning/${id}/cancel`, { reason: "cancelled in the dashboard" }, "Cancelled.") },
@@ -106,51 +109,72 @@
     return h("div", { class: "card" }, kids);
   }
 
-  // 0.7.0 (MOD-01/02): first the choice; routine registration is a request; preparing a module is an administrator's
-  const RQ = { msg: null };
-  async function choiceCard() {
-    const R = await api("GET", "/api/modules/requests").catch(() => ({ requests: [] }));
+  // 0.7.1 (MOD-01..03): real modules only. Requests are a workflow on this bench with a state and a next step.
+  const RQ = { msg: {}, from: null };
+  const REQ_CLS = { REQUESTED: "warn", PREPARING: "warn", AWAITING_APPLICATION: "warn", ADDED: "ok", REJECTED: "bad", CLOSED: "" };
+  const REQ_WORD = { REQUESTED: "Requested", PREPARING: "Being prepared", AWAITING_APPLICATION: "Prepared: waiting for the configuration",
+    ADDED: "Added", REJECTED: "Rejected", CLOSED: "Closed" };
+  function rqNote(k) { const m = RQ.msg[k]; return m ? h("span", { class: "inline-msg " + (m.bad ? "bad" : "ok"), role: "status" }, m.text) : null; }
+  async function requestsCard() {
+    const R = await api("GET", "/api/modules/requests").catch(() => ({ requests: [], where: "", can_handle: false }));
     const model = h("select", { "aria-label": "Module model" }, [["Relay (D), SKU 26517", "Relay (D)"], ["IO 8CH, SKU 26244", "IO 8CH"],
       ["Analog Input 8CH, SKU 25821", "Analog Input 8CH"]].map(([v, t]) => h("option", { value: v }, t)));
     const purpose = h("input", { maxlength: 200, placeholder: "what it is for (e.g. two more sector valves)", "aria-label": "Purpose" });
     const where = h("input", { maxlength: 120, placeholder: "where it is mounted (optional)", "aria-label": "Location" });
     const send = async () => {
-      try { const r = await api("POST", "/api/modules/requests", { model: model.value, purpose: purpose.value, location: where.value, note: "" }); RQ.msg = { text: r.next }; }
-      catch (e) { RQ.msg = { text: String(e.message || e), bad: true }; }
+      try { const r = await api("POST", "/api/modules/requests", { model: model.value, purpose: purpose.value, location: where.value, note: "" }); RQ.msg.new = { text: r.next }; purpose.value = ""; where.value = ""; }
+      catch (e) { RQ.msg.new = { text: String(e.message || e), bad: true }; }
       U.refresh();
     };
-    const twin = async () => {
-      try { const t = await api("POST", "/api/twin-link/ticket"); window.open(t.url + "#t=" + encodeURIComponent(t.ticket), "_blank", "noopener"); }
-      catch (e) { RQ.msg = { text: String(e.message || e), bad: true }; U.refresh(); }
+    const close = async (r, decision, why) => {
+      if ((why.value || "").trim().length < 3) { RQ.msg["r" + r.request_id] = { text: "Write the reason (it is shown to the requester).", bad: true }; U.refresh(); return; }
+      try { await api("POST", "/api/modules/requests/close", { request_id: r.request_id, outcome: why.value, decision }); RQ.msg["r" + r.request_id] = { text: decision === "REJECTED" ? "Rejected." : "Closed." }; }
+      catch (e) { RQ.msg["r" + r.request_id] = { text: String(e.message || e), bad: true }; }
+      U.refresh();
     };
-    const open = R.requests.filter(r => !r.closed);
+    const row = r => {
+      const why = h("input", { maxlength: 200, placeholder: "reason", "aria-label": `Reason for request ${r.request_id}` });
+      return h("tr", { "data-request": r.request_id },
+        h("td", null, `#${r.request_id}`), h("td", null, r.requester), h("td", null, r.model), h("td", null, r.purpose, r.location ? h("div", { class: "muted small" }, r.location) : null),
+        h("td", null, pill(REQ_WORD[r.status] || r.status, REQ_CLS[r.status]), r.reason ? h("div", { class: "small" }, r.reason) : null, r.device_uid ? h("div", { class: "mono small" }, r.device_uid) : null),
+        h("td", { class: "small" }, r.next),
+        h("td", null, R.can_handle && !r.closed ? [
+          r.status === "REQUESTED" ? h("button", { class: "small", onclick: () => { RQ.from = r; RQ.msg.start = { text: `Preparing for request #${r.request_id}: choose the adapter and the destination port below, then Start.` }; U.refresh(); } }, "Prepare from this request") : null,
+          h("details", { class: "inline" }, h("summary", { class: "small" }, "Reject or close"), why,
+            h("button", { class: "small ghost", onclick: () => close(r, "REJECTED", why) }, "Reject"),
+            h("button", { class: "small ghost", onclick: () => close(r, "CLOSED", why) }, "Close"))] : null,
+          rqNote("r" + r.request_id)));
+    };
+    const open = R.requests.filter(r => !r.closed), done = R.requests.filter(r => r.closed);
+    const table = list => h("table", { class: "compact" }, h("thead", null, h("tr", null, ["", "Asked by", "Module", "Purpose", "State", "Next", ""].map(x => h("th", null, x)))),
+      h("tbody", null, list.map(row)));
     return h("div", { class: "card" }, h("h2", null, "Add Module"),
-      h("div", { class: "grid" },
-        h("div", { class: "card" }, h("h3", null, "Register a real module"),
-          h("p", { class: "small" }, "Ask for a supported module to be added to the real installation. An administrator prepares its address and modes with the USB adapter on the controller and applies the configuration during maintenance; until then nothing changes and no channel exists."),
-          h("div", { class: "row wrap" }, h("label", null, "Model", model), h("label", null, "Purpose", purpose), h("label", null, "Location", where),
-            h("button", { disabled: !can("module_register"), onclick: send }, "Send the request")),
-          RQ.msg ? h("p", { class: "inline-msg " + (RQ.msg.bad ? "bad" : "ok"), role: "status" }, RQ.msg.text) : null,
-          open.length ? h("details", null, h("summary", { class: "small" }, `Open requests (${open.length})`),
-            h("ul", { class: "small" }, open.map(r => h("li", null, `${r.model}: ${r.purpose}${r.location ? " (" + r.location + ")" : ""} — by ${r.by}, ${new Date(r.utc).toLocaleString()}`)))) : null),
-        h("div", { class: "card" }, h("h3", null, "Create a simulated module"),
-          h("p", { class: "small" }, "A simulated module exists only in the Digital Twin: its channels can be used there to design and test, the real system never sees it, and equipment wired to it cannot be sent to the real system."),
-          h("button", { class: "ghost", onclick: twin }, "Open the Digital Twin (Modules of this twin)"))));
+      h("p", { class: "muted" }, "Real modules only. Simulated modules are made in the Digital Twin."),
+      h("h3", null, "Module requests"),
+      h("p", { class: "small" }, R.where),
+      can("module_register") ? h("div", { class: "row wrap" }, h("label", null, "Model", model), h("label", null, "Purpose", purpose), h("label", null, "Location", where),
+        h("button", { onclick: send }, "Send the request"), rqNote("new")) : null,
+      open.length ? table(open) : h("p", { class: "muted small" }, "No open request."),
+      done.length ? h("details", null, h("summary", { class: "small" }, `Finished requests (${done.length})`), table(done)) : null,
+      h("p", { class: "muted small" }, "A request becomes Added only when the module is in the running configuration. Rejecting or closing a request never adds a module."));
   }
 
   VIEWS["hw-add"] = async function () {
-    const choice = await choiceCard();
+    const choice = await requestsCard();
     if (!can("module_setup")) return mount("v-hw-add", choice, h("div", { class: "card" }, h("h3", null, "Preparing a new module"),
-      h("p", { class: "muted" }, "Writing a module's address and modes is done by an administrator, with the USB adapter on the controller. Send a request above.")));
+      h("p", { class: "muted" }, "Writing a module's address and modes is done by an administrator or an operator with commissioning, with the USB adapter on the controller. Send a request above; its state is shown there.")));
     const C = await api("GET", "/api/commissioning");
-    if (!C.available) return mount("v-hw-add", choice, h("div", { class: "card" }, h("h2", null, "Prepare a module (administrator)"), h("p", null, C.reason)));
+    if (!C.available) return mount("v-hw-add", choice, h("div", { class: "card" }, h("h2", null, "Prepare a module"), h("p", null, C.reason)));
     const bus = h("select", { "aria-label": "Destination port" }, C.buses.map(b => h("option", { value: b.bus_id }, `${b.bus_id} (${b.port}): ${b.modules.map(m => m.device_uid + "@" + m.address).join(", ") || "no modules yet"}`)));
     const ad = h("select", { "aria-label": "Adapter" }, C.adapters.map(a => h("option", { value: a.stable_id, disabled: !a.selectable },
       `${a.by_id || a.path} · ${[a.manufacturer, a.product].filter(Boolean).join(" ")}${a.selectable ? "" : " — " + a.why_not}`)));
     const open = C.transactions.filter(t => !["CANCELLED", "FAILED", "DETECTED"].includes(t.state));
     const done = C.transactions.filter(t => ["CANCELLED", "FAILED", "DETECTED"].includes(t.state));
     mount("v-hw-add", choice,
-      h("div", { class: "card" }, h("h2", null, "Prepare a module (administrator): how to"),
+      h("div", { class: "card", "data-wizard": "" }, h("h2", null, "Prepare a module"),
+        RQ.from ? h("p", { class: "small" }, pill(`For request #${RQ.from.request_id}`, "warn"), ` ${RQ.from.model}: ${RQ.from.purpose} (asked by ${RQ.from.requester}) `,
+          h("button", { class: "small ghost", onclick: () => { RQ.from = null; U.refresh(); } }, "Not from a request")) : null,
+        h("p", { class: "muted small" }, "1 choose the module's destination port and the setup adapter · 2 read the new module · 3 choose its address · 4 check the writes · 5 write and verify · 6 move it to its port and detect it · 7 the configuration is applied during maintenance; its channels then appear unassigned and unverified."),
         h("ol", null,
           h("li", null, "Plug the USB-to-RS485 adapter into a USB port of the controller (the Raspberry CM4), NOT into this PC."),
           h("li", null, "Wire the adapter to the new module: A to A, B to B, and GND to GND."),
@@ -160,7 +184,7 @@
           h("li", null, "Follow the instructions in the panel that opens.")),
         diagram(C.buses[0]),
         C.adapters.length ? h("div", { class: "row" }, h("label", null, "Adapter ", ad), h("label", null, "Destination port ", bus),
-          h("button", { class: "cmd", disabled: !can("module_setup"), onclick: () => step("start", "POST", "/api/commissioning/open", { adapter: ad.value, bus_id: bus.value, read: true }) }, "Start"),
+          h("button", { class: "cmd", disabled: !can("module_setup"), onclick: async () => { const r = await step("start", "POST", "/api/commissioning/open", { adapter: ad.value, bus_id: bus.value, read: true, request_id: RQ.from ? RQ.from.request_id : null }); if (r) RQ.from = null; } }, "Start"),
           h("button", { class: "ghost", onclick: () => { say("start", "Adapter list refreshed."); U.refresh(); } }, "Refresh list"), note("start"))
           : h("p", { class: "warn" }, "No USB-to-RS485 adapter is plugged into the controller. Plug it in, then refresh this page."),
         h("p", { class: "muted small" }, "Only the new module may be wired to the adapter: two modules at the same address can look like one. Preparing a module never switches an output and never writes to the installation buses.")),

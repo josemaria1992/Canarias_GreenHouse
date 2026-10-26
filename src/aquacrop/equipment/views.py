@@ -31,7 +31,8 @@ def hydraulic_items(equipment) -> dict[str, dict]:
     out = {}
     for it in equipment.items(include_retired=False):
         tb = types.get((it["type_id"], it["type_version"]))
-        out[it["item_id"]] = {"kind": tb.hydraulic if tb else None, "name": it["name"]}
+        out[it["item_id"]] = {"kind": tb.hydraulic if tb else None, "name": it["name"],
+                              "public_id": it.get("public_id", it["item_id"])}
     return out
 
 

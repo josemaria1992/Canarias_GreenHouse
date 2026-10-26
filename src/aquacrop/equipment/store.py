@@ -443,9 +443,9 @@ class EquipmentStore:
                 "exported_utc": _now(),
                 "types": [{"type_id": t["type_id"], "version": t["version"], "status": t["status"], "name": t["name"],
                            "body": t["body"]} for t in self.types()],
-                "items": [{"item_id": i["item_id"], "version": i["version"], "status": i["status"], "name": i["name"],
-                           "type_id": i["type_id"], "type_version": i["type_version"], "icon": i["icon"],
-                           "body": i["body"]} for i in self.items()],
+                "items": [{"item_id": i["item_id"], "public_id": i["public_id"], "version": i["version"],
+                           "status": i["status"], "name": i["name"], "type_id": i["type_id"],
+                           "type_version": i["type_version"], "icon": i["icon"], "body": i["body"]} for i in self.items()],
                 "bindings": [{"item_id": v["item_id"], "role": v["role"], "point": v["point"], "status": v["status"]}
                              for v in self.bindings().values()],
                 "note": "Import makes DRAFT types and items without channels; bindings are not imported."}

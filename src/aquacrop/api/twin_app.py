@@ -35,6 +35,7 @@ from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, l
 from ..twin import feed
 from . import pages
 from ..equipment.definitions import TypeBody, channel_issues
+from ..blocks.store import BlockRefused
 from ..twin.changes import ChangeRefused, TwinChanges, preview as changes_preview, program_items, write_export
 from ..twin.equipment_service import EquipmentTwinService, twin_config
 from .app import safe_validation_response
@@ -165,6 +166,11 @@ class ProgramRefIn(_B):
 
 class AcceptIn(ProgramRefIn):
     note: str = Field(default="", max_length=500)
+
+
+class DesignImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replace: bool = False                 # replace a twin design that was not exported (the second press)
 
 
 def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_hosts: list[str],
@@ -506,7 +512,11 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     from ..blocks.store import BlockStore
     from ..equipment.views import views_hydraulic
     from . import blocks as block_routes
-    svc.blocks = BlockStore(hist, items=lambda: views_hydraulic(svc.items.views()))
+    def public_ids() -> dict[str, str]:              # 0.7.1: the IDs people see, as the main dashboard has them
+        return {i["item_id"]: i.get("public_id") or i["item_id"]
+                for i in ((svc.snap or {}).get("equipment") or {}).get("items", [])}
+    svc.blocks = BlockStore(hist, items=lambda: {k: v | {"public_id": public_ids().get(k, k)}
+                                                 for k, v in views_hydraulic(svc.items.views()).items()})
     app.state.blocks = svc.blocks
     block_routes.register(app, require, svc.blocks, legacy_layout=lambda: (draft()[0], draft()[1]))
     from . import runs as run_routes
@@ -616,6 +626,41 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         hist.event("TWIN_LAYOUT_SAVED", {"digest": layout.digest(lay), "symbols": len(lay.nodes)}, actor=p.username)
         return {"digest": layout.digest(lay), "issues": layout.issues(lay, svc.items.items)}
 
+    @app.post("/api/twin/design/import")
+    def design_import(body: DesignImportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Import from Overview (0.7.1): bring the real system's equipment, programs and approved drawing into the twin
+        as the working design. When the real system has an installation graph, the twin's drawing becomes that graph
+        (a design changed in the twin and not exported is replaced only with `replace`). When it still has only the
+        earlier drawing, the answer is a migration proposal for the editor: nothing is saved until the user saves it,
+        and every ambiguous or unlinked part is listed for the user to decide. Nothing on the real system changes."""
+        refused(svc.import_snapshot, p.username)
+        live = (svc.snap or {}).get("hydraulics") or {}
+        lt, ld = live.get("topology") or {}, live.get("diagram") or {}
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        if (lt.get("graph") or {}).get("nodes"):
+            own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+            differs = cur_t["digest"] != lt.get("digest") or cur_d.get("digest") != ld.get("digest")
+            if own and differs and not body.replace:
+                raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                         "Import from Overview replaces them: press it again to replace them")
+            try:
+                if differs:
+                    svc.blocks.save_drawing(p.username, "installation", lt["graph"], ld.get("diagram") or {},
+                                            expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"],
+                                            note="imported from the Overview")
+            except BlockRefused as e:
+                raise HTTPException(409, f"the Overview's drawing could not be loaded: {e}")
+            hist.event("TWIN_DESIGN_IMPORTED", {"source": "overview graph", "replaced": bool(own and differs)},
+                       actor=p.username)
+            return {"source": "graph", "topology_rev": svc.blocks.topology()["rev"], "replaced": bool(own and differs)}
+        from ..topology.migrate import propose
+        lay, where = live_layout()
+        items = svc.blocks.items()
+        prop = propose(lay, {k: v.get("kind") for k, v in items.items()}, {k: v.get("name") for k, v in items.items()})
+        hist.event("TWIN_DESIGN_IMPORTED", {"source": "earlier drawing", "ambiguous": len(prop["ambiguous"]),
+                                            "unresolved": len(prop["unresolved"])}, actor=p.username)
+        return {"source": "legacy", "from": where, "proposal": prop}
+
     @app.post("/api/twin/layout/start-from")
     def start_from(body: LayoutStartIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         if body.source == "live":
@@ -696,6 +741,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             binds.setdefault(b["item_id"], {})[b["role"]] = b["point"]
         doc = svc.changes.doc
         items = [{k: i[k] for k in ("item_id", "name", "type_id", "type_version", "icon", "body", "status")}
+                 | {"public_id": i.get("public_id") or i["item_id"]}
                  | {"bindings": binds.get(i["item_id"], {}),
                     "changed": i["item_id"] in doc["items"] or i["item_id"] in doc["retire"]
                     or any(k.startswith(i["item_id"] + ".") for k in doc["bindings"])}

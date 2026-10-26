@@ -394,3 +394,27 @@ ol.steps li.step { gap: 6px; margin: 4px 0; }
 .hed-pipe.flowing { stroke-width: 4; }
 @media (max-width: 1024px) { .hed-body { flex-direction: column; } .hed-side { flex-basis: auto; width: 100%; max-height: none; } }
 @media (prefers-reduced-motion: reduce) { .hed-pipe { transition: none; } }
+/* 0.7.1 Blocks: members by type, read-only orientation drawing */
+.member-groups { display: grid; gap: 8px; margin: 8px 0; }
+.member-group > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; gap: 6px; }
+.member-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 16px; padding: 4px 0 8px 4px; }
+label.check.member { gap: 8px; }
+.hed-view .hed-sym { cursor: pointer; }
+.hed-sym.lit .hed-box { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 4 3; }
+.selected-card { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 0.7.1 Overview: item state written under each symbol (text, not only colour) */
+.hed-state { font-size: 11px; font-weight: 700; fill: var(--muted); }
+.hed-state.st-on, .hed-state.st-up { fill: var(--st-on-t, var(--ok)); }
+.hed-state.st-fault { fill: var(--bad); }
+.hed-state.st-unk { fill: var(--st-unk, var(--muted)); }
+.hed-state.st-planned { fill: var(--warn, #b26b00); font-style: italic; }
+.pill.st-planned { border-style: dashed; }
+/* 0.7.1 editor: free compatible ports are green with a ring (and say so in their label), alignment guides */
+.hed-port.ok { fill: var(--ok); stroke: var(--ink); stroke-width: 2; cursor: pointer; }
+.hed-port.no { fill: var(--panel); stroke: var(--line-strong); stroke-dasharray: 2 2; opacity: .7; }
+.hed-port-ring { fill: none; stroke: var(--ok); stroke-width: 2; pointer-events: none; }
+.hed-port:focus-visible { outline: none; stroke: var(--focus); stroke-width: 3; }
+.hed-guide { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 6 4; pointer-events: none; }
+.hed-palette-group > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.hed-anchor select { min-height: 28px; padding: 2px 6px; font-size: 12px; }
+.hed-anchor input[type=range] { width: 90px; min-height: 0; padding: 0; }

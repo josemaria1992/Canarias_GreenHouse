@@ -950,6 +950,38 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "issues": layout_mod.issues(lay, items), "proposals": props, "can_accept": can_accept_layout(p),
                 "previous": meta.get("previous") if prev is not None else None}
 
+    @app.get("/api/overview/diagram")
+    def overview_diagram(p: Principal = Depends(require(Perm.READ))):
+        """The Overview's drawing (0.7.1, owner decision): the approved installation graph and its drawing, as exported
+        from Digital Twin and applied here, with each item's live state. Until one exists, the earlier drawing is
+        the Overview and this says so. Read-only for every role; it changes nothing."""
+        from ..topology import definitions as td
+        t, d = blocks.topology(), blocks.diagram("installation")
+        explicit = bool(t["graph"].get("nodes"))
+        lay, meta = layouts.current()
+        from ..equipment.definitions import TypeBody
+        types = {(x["type_id"], x["version"]): TypeBody.model_validate(x["body"]) for x in equipment.types()}
+        bound = {}
+        for b in equipment.bindings().values():
+            bound.setdefault(b["item_id"], []).append(b["role"])
+        channels = {}                    # what each item needs and has: passive parts need no channel at all
+        for it in equipment.items(include_retired=False):
+            tb = types.get((it["type_id"], it["type_version"]))
+            roles = [r for r in (tb.roles if tb else [])]
+            channels[it["item_id"]] = {"roles": len(roles), "required": [r.role for r in roles if r.required],
+                                       "bound": sorted(bound.get(it["item_id"], []))}
+        return {"explicit": explicit, "topology": {"rev": t["rev"], "digest": t["digest"], "graph": t["graph"]},
+                "channels": channels,
+                "diagram": {"rev": d["rev"], "diagram": d["diagram"]}, "symbols": td.symbols_public(),
+                "items": blocks.items(), "readings": live_readings(),
+                "legacy": {"source": meta.get("source"), "accepted_by": meta.get("accepted_by"),
+                           "accepted_utc": meta.get("accepted_utc"), "symbols": len(lay.nodes)},
+                "migration": ("The Overview draws the installation graph exported from the Digital Twin."
+                              if explicit else
+                              "The Overview still draws the earlier drawing. Its editable successor is designed in the "
+                              "Digital Twin: Import from Overview, edit and simulate, then Export to Overview. The earlier "
+                              "drawing stays unchanged until an export is applied, and is kept as a reference after.")}
+
     def _layout_choice(p: Principal, lay, source: str, note: str) -> dict:
         if not can_accept_layout(p):
             raise HTTPException(403, "only administrators and operators with commissioning change the diagram")

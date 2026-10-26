@@ -525,10 +525,25 @@
       h("button", { class: "cmd small", disabled: !can("backup") || b.running, onclick: () => act("POST", "/api/backup", undefined, "backup started; it ends with a BACKUP_CREATED or BACKUP_FAILED event") }, "Create backup now"));
   }
 
+  /** 0.7.1 (owner decision): the Overview is the installation's drawing with its state written on it. What must stay
+   *  visible besides it is short: active alarms, modules that do not answer, and whether physical writes are possible.
+   *  The system, module and drive tables are kept under Details, not repeated as panels. */
   async function hwOverview() {
     const st = S.status, al = await api("GET", "/api/alarms"), lease = st.bench_lease;
-    const diag = window.AqPlant ? await window.AqPlant.hwDiagram().catch(() => null) : null;
+    const diag = window.AqOverview ? await window.AqOverview.card().catch(e => h("div", { class: "card" }, h("p", { class: "error" }, "The drawing could not be shown: " + e.message)))
+      : (window.AqPlant ? await window.AqPlant.hwDiagram().catch(() => null) : null);
+    const down = Object.entries(st.devices).filter(([, d]) => !d.online);
     mount("v-overview", diag,
+      h("div", { class: "card", "data-overview-status": "" },
+        h("div", { class: "row wrap" },
+          lease ? pill(st.physical_writes, "bad") : pill(st.physical_writes, "ok"),
+          al.open.length ? pill(`${al.open.length} active alarm${al.open.length === 1 ? "" : "s"}`, al.open.some(o => o.severity === "CRITICAL") ? "bad" : "warn") : pill("no active alarm", "ok"),
+          down.length ? pill(`${down.length} module${down.length === 1 ? "" : "s"} not answering`, "bad") : pill("every module answers", "ok"),
+          st.storage.ok ? null : pill("STORAGE DEGRADED: " + st.storage.reason, "bad")),
+        al.open.length ? h("ul", { class: "small" }, al.open.slice(0, 8).map(o => h("li", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn"), ` ${o.rule_id} — ${o.target} (${o.active ? "active" : "cleared"})`)),
+          al.open.length > 8 ? h("li", null, h("a", { href: "#alarms" }, `${al.open.length - 8} more on Alarms & Events`)) : null) : null,
+        down.length ? h("p", { class: "bad small" }, "Not answering: ", down.map(([k, d]) => `${k} (${d.bus_id} @${d.address}${d.last_error ? ": " + d.last_error : ""})`).join("; "), ". Its readings are UNKNOWN on the drawing.") : null),
+      h("details", { class: "card" }, h("summary", null, "Details: system, output modes, modules, drive"),
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
           h("dt", null, "Profile"), h("dd", null, st.profile),
@@ -545,7 +560,7 @@
           al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
             h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"))))) : h("p", { class: "muted" }, "None"))),
       h("div", { class: "card" }, h("h2", null, "Devices (each polled and reported independently)"), devTable(st)),
-      driveCard(st.drives));
+      driveCard(st.drives)));
   }
 
   // The shared drive's Modbus interface (ADR-0015): read every poll; written only under a bench lease.

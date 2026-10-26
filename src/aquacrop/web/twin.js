@@ -111,8 +111,8 @@
         h("label", { class: "small" }, "Start at ", start),
         twice("reset", "Reset", "Press again to reset (history is kept)", "ghost", !run,
           () => act("POST", "api/twin/control", { action: "reset", start_local: start.value || null }, "twin reset")),
-        h("button", { class: "ghost", disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "import" }, "imported from the real system") }, "Import from the real system")),
-      h("p", { class: "muted small" }, `${v.label} Last import from the real system: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
+        h("span", { class: "muted small" }, "Import from Overview is in Installation design below.")),
+      h("p", { class: "muted small" }, `${v.label} Last import from the main dashboard: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
   }
   function modeCard(v) {
     const e = v.engine, ok = can("process_control");
@@ -151,7 +151,7 @@
             return h("tr", null, h("td", null, r.label), h("td", null, val), h("td", { class: "muted" }, r.point || ""), h("td", null, inp));
           }))),
           h("div", { class: "row small" }, faultSel, h("button", { class: "small ghost", disabled: !run, onclick: () => act("POST", "api/twin/fault", { target: it.item_id, fault: faultSel.value || null }, "fault set") }, "Apply fault")));
-      })) : h("p", { class: "muted" }, "No equipment in the copy yet. Create equipment on the real dashboard, then press Import from the real system."),
+      })) : h("p", { class: "muted" }, "No equipment in the copy yet. Create equipment on the main dashboard's Equipment page, then press Import from Overview."),
       h("p", { class: "muted small" }, "Lights: asked = the program's command; output = the virtual coil read back; feedback = the item's own input. UNKNOWN is never shown as OFF."));
   }
   function programsCard(v) {

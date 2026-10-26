@@ -13,7 +13,8 @@ from tests.integration.test_api_installation import ORIGIN, _app, icfg, login  #
 
 VIEWER_READS = {"/api/auth/session", "/api/status", "/api/layout", "/api/plant", "/api/plant/reading", "/api/twin",
                 "/api/controller", "/api/processes", "/api/alarms", "/api/operation", "/api/programs", "/api/health",
-                "/api/version", "/api/auth/logout", "/api/auth/login", "/api/auth/password", "/api/auth/ticket"}
+                "/api/version", "/api/auth/logout", "/api/auth/login", "/api/auth/password", "/api/auth/ticket",
+                "/api/overview/diagram"}
 
 
 def test_rbac01_navigation_is_exactly_the_specified_pages(tmp_path, icfg):

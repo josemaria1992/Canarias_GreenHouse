@@ -79,7 +79,8 @@
   function card() {
     if (!D.card) {
       D.body = h("div");
-      D.card = h("div", { class: "card", id: "twin-diagram" }, D.body);
+      // 0.7.1: the earlier drawing is a reference with its simulation replay; the design is drawn in Installation design
+      D.card = h("details", { class: "card", id: "twin-diagram" }, h("summary", null, "Earlier drawing (reference, read-only) and replay"), D.body);
       D.card.addEventListener("pointerdown", () => { D.dragging = true; });
       window.addEventListener("pointerup", () => { if (D.dragging) { D.dragging = false; } });
     }
@@ -298,18 +299,9 @@
     const count = c.added.length + c.removed.length + c.moved.length + c.changed.length + c.pipes_added.length + c.pipes_removed.length + c.pipes_changed.length;
     const note = h("input", { maxlength: 500, placeholder: "what changed and why (optional)", "aria-label": "Note for the approver" });
     const list = (w, xs) => xs.length ? h("li", null, `${w}: ${xs.slice(0, 8).join(", ")}${xs.length > 8 ? ` and ${xs.length - 8} more` : ""}`) : null;
-    return h("div", { class: "card" }, h("h3", null, "Layout"),
-      h("div", { class: "row" },
-        h("span", { class: "small muted" }, "Older drawing, kept as a reference: its pipes may be diagonal and are not edited any more. Draw the installation in the Installation graph above."),
-        h("button", { class: "ghost small", disabled: !ed, onclick: async () => { if (await call("start", "POST", "api/twin/layout/start-from", { source: "live" }, "the twin now uses the real system's layout")) { await load(); draw(); } } }, "Start again from the real system's layout"),
-        h("button", { class: "ghost small", disabled: !ed, onclick: async () => { if (await call("start", "POST", "api/twin/layout/start-from", { source: "default" }, "the twin now uses the standard drawing")) { await load(); draw(); } } }, "Start from the standard drawing"),
-        msgEl("start")),
-      same ? h("p", { class: "muted small" }, "The twin's layout is the same as the real system's.")
-        : h("div", null, h("p", { class: "small" }, `Different from the real system's layout (${count} change${count === 1 ? "" : "s"}):`),
-          h("ul", { class: "small" }, list("added", c.added), list("removed", c.removed), list("moved", c.moved), list("changed", c.changed),
-            list("pipes added", c.pipes_added), list("pipes removed", c.pipes_removed), list("pipes changed", c.pipes_changed)),
-          h("div", { class: "row" }, note, h("button", { disabled: !ed, onclick: () => call("send", "POST", "api/twin/layout/send", { note: note.value }, "sent: an administrator or an operator with commissioning accepts it on the real dashboard (Overview)") }, "Send to the real system"), msgEl("send"))),
-      h("p", { class: "muted small" }, "This reference drawing changes nothing of the equipment, channels, programs or the graph's water."));
+    void ed; void note; void list; void count; void same; void c;
+    return h("div", { class: "card" }, h("h3", null, "About this drawing"),
+      h("p", { class: "small muted" }, "The earlier drawing, kept unchanged as a reference with the simulation replay. It is not edited and not sent anywhere: the installation is drawn in Installation design above, and Import from Overview converts this drawing into a design you review."));
   }
 
   window.AqTwinDiagram = { card, update };

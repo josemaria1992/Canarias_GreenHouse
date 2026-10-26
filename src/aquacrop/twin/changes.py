@@ -341,18 +341,22 @@ def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dic
         live = live_items[iid]
         items.append({"item_id": iid, "op": "retire", "name": live["name"], "base_version": c["base_version"],
                       "before": {k: live[k] for k in ("name", "type_id", "type_version", "icon", "body")}, "exercised_by": []})
-    binds = [{"item_id": k.split(".", 1)[0], "role": k.split(".", 1)[1], "point": c["point"], "base_point": c["base_point"]}
+    sim = virtual_uids or set()
+    every = [{"item_id": k.split(".", 1)[0], "role": k.split(".", 1)[1], "point": c["point"], "base_point": c["base_point"]}
              for k, c in sorted(ch.doc["bindings"].items())]
+    # 0.7.1 (owner decision): a channel of a simulated module stays in the twin; it is never sent to the real system and
+    # does not stop an export of the drawing or of anything else
+    twin_only = [b for b in every if b["point"] and b["point"].split(".", 1)[0] in sim]
+    binds = [b for b in every if b not in twin_only]
     missing = [f"{p['name']} (v{p['twin_version']} in the twin) has no run that ended DONE in this twin run with the "
                "current equipment, channels and drawing" + (" (earlier runs are history only: run it again)"
                                                              if p["history_runs"] else "")
                for p in progs if not p["passed"]]
     missing += [f"{p['name']} (v{p['twin_version']}) is not validated in the twin" for p in progs if p["status"] != "VALIDATED"]
-    sim = virtual_uids or set()
-    missing += [f"{b['item_id']}.{b['role']} uses {b['point']}, a channel of a simulated module: it exists in the twin only "
-                "and cannot be sent to the real system" for b in binds if b["point"] and b["point"].split(".", 1)[0] in sim]
     hyd = hydraulics_changes(snap, hydraulics)
     return {"items": items, "bindings": binds, "programs": progs, "missing": missing, "hydraulics": hyd,
+            "twin_only": [f"{b['item_id']}.{b['role']} on {b['point']} (a simulated module: stays in the twin)"
+                          for b in twin_only],
             "empty": not (items or binds or progs or hyd)}
 
 

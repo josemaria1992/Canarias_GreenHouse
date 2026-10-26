@@ -1,9 +1,15 @@
-"""HTTP routes of Hardware → Add module (the USB commissioning wizard) and Hardware → Discovery (0.5.0).
+"""HTTP routes of Add Module (the USB commissioning wizard), module requests and Discovery (0.5.0; 0.7.1).
 
-Only a hardware profile has them: on the simulation every route answers `available: false` or 409. Reading
-the adapter list, a transaction and the discovery view needs READ; every step of the wizard and a full
-discovery sweep need MODULE_SETUP (an operator or administrator with the commissioning flag). Serial work
-runs in a worker thread so the event loop keeps serving the dashboard.
+Only a hardware profile has the wizard: on the simulation it answers `available: false` or 409. Every step of the
+wizard needs MODULE_SETUP: administrators, and operators with the commissioning flag (owner decision 26 October
+2026, ADR-0023 amended), checked on the server for every request.
+
+Module requests (0.7.1, MOD-03) are a tracked workflow on this bench, not a message: they are stored in this
+installation's database and shown on Add Module to whoever may prepare modules, and to the person who asked. Nothing
+is emailed or sent anywhere. The states are REQUESTED -> PREPARING (a wizard run started from it) -> AWAITING_APPLICATION
+(the module was detected on its bus and a configuration proposal was written; an administrator applies it during
+maintenance) -> ADDED, which is shown only when the running configuration really contains the module. REJECTED and
+CLOSED end a request without adding anything. Serial work runs in a worker thread.
 """
 from __future__ import annotations
 
@@ -23,6 +29,7 @@ class OpenIn(_B):
     adapter: str = Field(max_length=200)
     bus_id: str = Field(max_length=48)
     read: bool = True          # Start reads the module at once (owner, 2026-10-24: no typed confirmation)
+    request_id: int | None = Field(default=None, ge=1)   # 0.7.1: prepared from this module request
 
 
 class ReadIn(_B):
@@ -65,6 +72,17 @@ class ModuleRequestCloseIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: int = Field(ge=1)
     outcome: str = Field(min_length=3, max_length=200)
+    decision: str = Field(default="CLOSED", pattern="^(CLOSED|REJECTED)$")
+
+
+REQUEST_NEXT = {
+    "REQUESTED": "Waiting for an administrator or an operator with commissioning to prepare the module on Add Module.",
+    "PREPARING": "Being prepared with the USB adapter on the controller (address and modes).",
+    "AWAITING_APPLICATION": ("Prepared and found on its bus. An administrator applies the configuration proposal during "
+                             "maintenance; its channels then appear unassigned and unverified."),
+    "ADDED": "In the running configuration. Its channels are unassigned and unverified until someone assigns them.",
+    "REJECTED": "Not added.", "CLOSED": "Closed without adding a module.",
+}
 
 
 def register(app, require, wizard, svc) -> None:
@@ -94,6 +112,13 @@ def register(app, require, wizard, svc) -> None:
                 "where": ("Plug the USB-to-RS485 adapter into a USB port of the controller (the CM4), not into this PC: "
                           "the dashboard is a web page and cannot see adapters on the computer showing it.")}
 
+    def link_request(request_id: int | None, tx: dict, actor: str) -> None:
+        if request_id is None:
+            return
+        cur = hist.query("SELECT status FROM module_requests WHERE request_id=?", (request_id,))
+        if cur and cur[0]["status"] in ("REQUESTED", "PREPARING"):
+            _set(request_id, "PREPARING", actor, tx_id=tx["tx_id"])
+
     @app.get("/api/commissioning/{tx_id}")
     async def tx_view(tx_id: str, p: Principal = Depends(require(Perm.OPS_READ))):
         return await step(need().view, tx_id)
@@ -101,6 +126,7 @@ def register(app, require, wizard, svc) -> None:
     @app.post("/api/commissioning/open")
     async def tx_open(body: OpenIn, p: Principal = Depends(require(Perm.MODULE_SETUP))):
         v = await step(need().open, p.username, body.adapter, body.bus_id)
+        link_request(body.request_id, v, p.username)
         if not body.read:
             return v
         # Pressing Start is the user's statement that only the new module is wired to the adapter (owner decision
@@ -141,28 +167,84 @@ def register(app, require, wizard, svc) -> None:
     async def tx_detect(tx_id: str, p: Principal = Depends(require(Perm.MODULE_SETUP))):
         return await step(need().detect, p.username, tx_id)
 
-    # 0.7.0 (MOD-02): routine registration is a request recorded for an administrator; it changes no configuration
+    # 0.7.1 (MOD-03): module requests as a tracked workflow on this bench; nothing here changes the configuration
+    hist = app.state.hist
+
+    def _now() -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def _set(rid: int, status: str, actor: str, **cols) -> None:
+        sets = ", ".join(f"{k}=?" for k in ("status", "status_utc", "handler", *cols))
+        vals = (status, _now(), actor, *cols.values(), rid)
+        hist.submit(lambda c: c.execute(f"UPDATE module_requests SET {sets} WHERE request_id=?", vals), wait=True)
+        hist.event("MODULE_REQUEST_" + status, {"request_id": rid, **cols}, actor=actor)
+
+    def _sync(r: dict) -> dict:
+        """Follow a request's wizard run, and say ADDED only when the running configuration has the module."""
+        if r["status"] in ("REJECTED", "CLOSED", "ADDED"):
+            return r
+        uid = r.get("device_uid")
+        if uid and any(d.device_uid == uid for d in app.state.cfg.devices):
+            _set(r["request_id"], "ADDED", "system", device_uid=uid)
+            return r | {"status": "ADDED"}
+        if r.get("tx_id") and wizard is not None:
+            try:
+                t = wizard.view(r["tx_id"])
+            except WizardRefused:
+                return r
+            name = (t.get("identity") or {}).get("name")
+            if t["state"] == "DETECTED" and r["status"] != "AWAITING_APPLICATION":
+                _set(r["request_id"], "AWAITING_APPLICATION", "system", device_uid=name)
+                return r | {"status": "AWAITING_APPLICATION", "device_uid": name}
+            if t["state"] in ("CANCELLED", "FAILED") and r["status"] == "PREPARING":
+                _set(r["request_id"], "REQUESTED", "system", reason=f"preparation {t['state'].lower()}; the request is open again")
+                return r | {"status": "REQUESTED"}
+        return r
+
     @app.get("/api/modules/requests")
     def module_requests(p: Principal = Depends(require(Perm.OPS_READ))):
-        import json as _json
-        rows = app.state.hist.query("SELECT id, utc, actor, payload_json FROM events WHERE kind='MODULE_REGISTRATION_REQUESTED' "
-                                    "ORDER BY id DESC LIMIT 50")
-        done = {r["payload_json"] for r in app.state.hist.query(
-            "SELECT payload_json FROM events WHERE kind='MODULE_REGISTRATION_CLOSED' ORDER BY id DESC LIMIT 200")}
-        closed = {_json.loads(x).get("request_id") for x in done}
-        return {"requests": [{"request_id": r["id"], "utc": r["utc"], "by": r["actor"], "closed": r["id"] in closed}
-                             | _json.loads(r["payload_json"]) for r in rows]}
+        handler = p.can(Perm.MODULE_SETUP)
+        rows = [dict(r) for r in hist.query("SELECT * FROM module_requests ORDER BY request_id DESC LIMIT 100")]
+        if not handler:
+            rows = [r for r in rows if r["requester"] == p.username]
+        out = []
+        for r in rows:
+            r = _sync(r)
+            out.append({k: r.get(k) for k in ("request_id", "utc", "requester", "model", "purpose", "location", "note",
+                                               "status", "status_utc", "handler", "reason", "tx_id", "device_uid")}
+                       | {"by": r["requester"], "closed": r["status"] in ("REJECTED", "CLOSED", "ADDED"),
+                          "next": REQUEST_NEXT.get(r["status"], "")})
+        return {"requests": out, "can_handle": handler,
+                "where": ("Requests are recorded on this bench and shown here to administrators and operators with "
+                          "commissioning, who prepare the module; you see the state of your own requests here. They are "
+                          "not emailed or sent anywhere else.")}
 
     @app.post("/api/modules/requests")
     def module_request(body: ModuleRequestIn, p: Principal = Depends(require(Perm.MODULE_REGISTER))):
-        app.state.hist.event("MODULE_REGISTRATION_REQUESTED", body.model_dump(), actor=p.username)
-        return {"ok": True, "next": "An administrator prepares the module (address and modes) with the USB adapter on the "
-                                    "controller, then applies the configuration during maintenance. Nothing changed yet."}
+        row = (_now(), p.username, body.model, body.purpose, body.location, body.note, "REQUESTED", _now())
+
+        def tx(c):
+            return c.execute("INSERT INTO module_requests(utc, requester, model, purpose, location, note, status, "
+                             "status_utc) VALUES(?,?,?,?,?,?,?,?)", row).lastrowid
+        rid = hist.submit(tx, wait=True)
+        hist.event("MODULE_REGISTRATION_REQUESTED", body.model_dump() | {"request_id": rid}, actor=p.username)
+        return {"ok": True, "request_id": rid, "status": "REQUESTED",
+                "next": ("Recorded on this bench as request " + str(rid) + ". Administrators and operators with "
+                         "commissioning see it on Add Module and prepare the module with the USB adapter on the "
+                         "controller; you can follow its state here. Nothing changed yet, and nothing was emailed.")}
 
     @app.post("/api/modules/requests/close")
     def module_request_close(body: ModuleRequestCloseIn, p: Principal = Depends(require(Perm.MODULE_SETUP))):
-        app.state.hist.event("MODULE_REGISTRATION_CLOSED", body.model_dump(), actor=p.username)
-        return {"ok": True}
+        """Reject or close a request. This never adds a module: ADDED comes only from the running configuration."""
+        cur = hist.query("SELECT status FROM module_requests WHERE request_id=?", (body.request_id,))
+        if not cur:
+            raise HTTPException(404, "no such module request")
+        if cur[0]["status"] in ("ADDED", "REJECTED", "CLOSED"):
+            raise HTTPException(409, f"request {body.request_id} is already {cur[0]['status'].lower()}")
+        _set(body.request_id, body.decision, p.username, reason=body.outcome)
+        hist.event("MODULE_REGISTRATION_CLOSED", body.model_dump(), actor=p.username)
+        return {"ok": True, "status": body.decision}
 
     @app.get("/api/discovery")
     def discovery(p: Principal = Depends(require(Perm.OPS_READ))):

@@ -67,7 +67,7 @@ def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software
            "equipment": equipment.export(),
            "bindings": [{"item_id": v["item_id"], "role": v["role"], "point": v["point"], "status": v["status"]}
                         for v in equipment.bindings().values()],
-           "programs": [{k: v[k] for k in ("program_id", "version", "status", "name", "digest", "body")}
+           "programs": [{k: v.get(k) for k in ("program_id", "public_id", "version", "status", "name", "digest", "body")}
                         for v in programs.versions()],
            "users": users, "layout": layout, "hydraulics": hydraulics}     # 0.7.0: graph, drawing and blocks
     _atomic(Path(feed_dir) / SNAPSHOT, doc)

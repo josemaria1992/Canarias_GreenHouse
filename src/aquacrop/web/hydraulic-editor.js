@@ -8,7 +8,15 @@
    committed drawing stays and the reason is written beside the toolbar. Nothing is sent until Save.
 
    Gestures work with mouse, touch and keyboard: tap to select, drag a symbol or a segment handle, arrow keys move
-   the selection by one grid step (Shift: five), Delete removes it, Escape cancels, Ctrl+Z / Ctrl+Y undo and redo. */
+   the selection by one grid step (Shift: five), Delete removes it, Escape cancels, Ctrl+Z / Ctrl+Y undo and redo.
+
+   0.7.1 (owner decisions): connection heights align. A dragged symbol snaps so that a connected port sits exactly at
+   the height (or position) of the port at the pipe's other end when it is within a few pixels, and to other ports'
+   guides otherwise, so aligned equipment gets a straight pipe instead of a tiny step; a deliberate offset beyond the
+   snap distance keeps its bend. "Straighten pipes" does the same for a whole imported drawing. A pipe starts from a
+   visible port: select a symbol and press one of its free outlets, or use Connect pipe; free compatible inlets are
+   then drawn green with a ring and a label, the others grey with the reason in words. Each port's side and position
+   along it can be changed in the symbol's panel. Geometry never creates a connection. */
 "use strict";
 (function () {
   const NS = "http://www.w3.org/2000/svg";
@@ -54,7 +62,9 @@
   }
 
   /**
-   * create(root, { symbols, items, graph, diagram, readOnly, onChange(dirty), names })
+   * create(root, { symbols, items, graph, diagram, readOnly, onChange(dirty), names, viewOnly, onSelect(id), highlight })
+   * viewOnly (0.7.1, Blocks): a read-only picture to orient by: no tools but zoom, no palette; selecting a symbol only
+   * tells onSelect, and `highlight` (node ids) are drawn emphasised. It can never move, connect or remove anything.
    * -> { get(): {graph, diagram}, set(graph, diagram), dirty(), select(id), issues(), destroy() }
    */
   function create(root, opt) {
@@ -69,6 +79,8 @@
     function route(id) { return st.diagram.routes.find(r => r.edge === id); }
     const grid = () => st.diagram.grid || 10;
     const snapG = v => st.snap ? Math.round(v / grid()) * grid() : R.snap(v);
+    const ALIGN = 12;                                  // px: a port this close to another port's line snaps onto it
+    const horizontalSide = side => side === "E" || side === "W";
 
     // ---------------------------------------------------------------- history
     function checkpoint() { st.undo.push(clone({ graph: st.graph, diagram: st.diagram })); if (st.undo.length > 100) st.undo.shift(); st.redo = []; }
@@ -76,6 +88,68 @@
     function undo() { if (!st.undo.length) return say("Nothing to undo."); st.redo.push(clone({ graph: st.graph, diagram: st.diagram })); Object.assign(st, st.undo.pop()); st.sel = null; changed(); say("Undone."); }
     function redo() { if (!st.redo.length) return say("Nothing to redo."); st.undo.push(clone({ graph: st.graph, diagram: st.diagram })); Object.assign(st, st.redo.pop()); st.sel = null; changed(); say("Redone."); }
     function say(text, bad) { st.msg = text ? { text, bad: !!bad } : null; drawStatus(); }
+
+    // ---------------------------------------------------------------- alignment of connection heights (0.7.1)
+    /** For a symbol about to sit at (x, y): the shift that puts its connected ports exactly level with the port at
+     *  the other end of each pipe (first), or on another symbol's port line (a guide), if within ALIGN. */
+    function alignShift(id, x, y) {
+      const n = node(id), s = sym(id);
+      if (!n || !s || n.kind === "junction") return { dx: 0, dy: 0, guides: [] };
+      const probe = Object.assign({}, s, { x, y });
+      let best = { dx: null, dy: null }, guides = [];
+      const consider = (axis, d, line) => {
+        if (Math.abs(d) > ALIGN) return;
+        if (best[axis] === null || Math.abs(d) < Math.abs(best[axis])) { best[axis] = d; guides = guides.filter(g => g.axis !== axis).concat([{ axis, at: line }]); }
+      };
+      for (const e of st.graph.edges) {                 // the ports this symbol's pipes join first
+        const mine = e.src.node === id ? e.src : e.dst.node === id ? e.dst : null;
+        if (!mine) continue;
+        const other = mine === e.src ? e.dst : e.src;
+        const on = node(other.node), os = sym(other.node);
+        if (!on || !os || other.node === id) continue;
+        const a = G.anchor(n.kind, probe, mine.port), b = G.anchor(on.kind, os, other.port);
+        if (!a || !b) continue;
+        if (horizontalSide(a.side) && horizontalSide(b.side)) consider("dy", b.y - a.y, b.y);
+        else if (!horizontalSide(a.side) && !horizontalSide(b.side)) consider("dx", b.x - a.x, b.x);
+      }
+      if (best.dy === null || best.dx === null) {        // then any other port's line, as a guide
+        for (const p of SYM[n.kind].ports) {
+          const a = G.anchor(n.kind, probe, p.id); if (!a) continue;
+          for (const os of st.diagram.symbols) {
+            if (os.node === id) continue;
+            const on = node(os.node); if (!on || on.kind === "junction") continue;
+            for (const q of SYM[on.kind].ports) {
+              const b = G.anchor(on.kind, os, q.id); if (!b) continue;
+              if (best.dy === null && horizontalSide(a.side) && horizontalSide(b.side)) consider("dy", b.y - a.y, b.y);
+              if (best.dx === null && !horizontalSide(a.side) && !horizontalSide(b.side)) consider("dx", b.x - a.x, b.x);
+            }
+          }
+        }
+      }
+      return { dx: best.dx || 0, dy: best.dy || 0, guides };
+    }
+    /** Move every symbol whose pipe has a small step so the two ports are level, if its pipes still route. */
+    function straighten() {
+      checkpoint();
+      let moved = 0;
+      for (let pass = 0; pass < 3; pass++) {
+        for (const e of st.graph.edges) {
+          const ends = endpoints(e); if (!ends) continue;
+          const a = ends.start, b = ends.end;
+          const h1 = horizontalSide(a.side) && horizontalSide(b.side), v1 = !horizontalSide(a.side) && !horizontalSide(b.side);
+          const d = h1 ? b.y - a.y : v1 ? b.x - a.x : 0;
+          if (!d || Math.abs(d) > ALIGN) continue;
+          // move the end with fewer pipes (a pump between two pipes moves less often than a tank with many)
+          const cand = [e.dst.node, e.src.node].filter(x => node(x).kind !== "junction").sort((x, y) => edgesOf(x).length - edgesOf(y).length);
+          for (const id of cand) {
+            const s0 = sym(id), sign = id === e.dst.node ? -1 : 1;
+            if (moveSymbol(id, s0.x + (h1 ? 0 : sign * d), s0.y + (h1 ? sign * d : 0), false)) { moved++; break; }
+          }
+        }
+      }
+      if (!moved) { st.undo.pop(); return say("No small steps to straighten: every pipe that can be level is level."); }
+      changed(); say(`${moved} symbol(s) moved so their pipes are level. Undo puts them back.`);
+    }
 
     // ---------------------------------------------------------------- routing
     function obstacles(except) {
@@ -138,6 +212,17 @@
       const p = SYM[n.kind].ports.find(q => q.id === port);
       return p && (p.many || !st.graph.edges.some(e => (e.src.node === n.id && e.src.port === port) || (e.dst.node === n.id && e.dst.port === port)));
     }
+    /** Why this port cannot be the next end of the pipe being drawn (null when it can), in words. */
+    function portWhy(n, p) {
+      if (!st.pending) {
+        if (!["out", "both"].includes(p.flow)) return `water cannot leave by the ${p.label.toLowerCase()}: start from an outlet`;
+        return portFree(n, p.id) ? null : "it already has its pipe; add a junction to branch";
+      }
+      if (st.pending.node === n.id) return "a pipe joins two different pieces of equipment";
+      if (!["in", "both"].includes(p.flow)) return `water cannot enter by the ${p.label.toLowerCase()}`;
+      if (!portFree(n, p.id)) return "it already has its pipe; add a junction to branch";
+      return null;
+    }
     function connect(a, b) {
       const na = node(a.node), nb = node(b.node);
       const pa = SYM[na.kind].ports.find(q => q.id === a.port), pb = SYM[nb.kind].ports.find(q => q.id === b.port);
@@ -151,10 +236,15 @@
       do { id = `e-${n++}`; } while (edge(id));
       st.graph.edges.push({ id, src: { node: a.node, port: a.port }, dst: { node: b.node, port: b.port }, medium: "WATER" });
       st.diagram.routes.push({ edge: id, points: [], mode: "AUTO", pins: [] });
-      const r = reroute([id]);
+      let aligned = "";
+      if (edgesOf(b.node).length === 1 && nb.kind !== "junction") {      // a newly joined symbol is levelled with its pipe
+        const sb = sym(b.node), sh = alignShift(b.node, sb.x, sb.y);
+        if (sh.dx || sh.dy) { sb.x += sh.dx; sb.y += sh.dy; aligned = " Its ports are levelled, so the pipe is straight."; }
+      }
+      const r = reroute(edgesOf(b.node).concat([id]).filter((x, i, l) => l.indexOf(x) === i));
       if (!r.ok) { Object.assign(st, st.undo.pop()); draw(); return say(`Not connected: ${r.reason}`, true); }
       st.sel = { type: "route", id };
-      changed(); say(`Connected ${nameOf(a.node)} ${pa.label.toLowerCase()} to ${nameOf(b.node)} ${pb.label.toLowerCase()}.`);
+      changed(); say(`Connected ${nameOf(a.node)} ${pa.label.toLowerCase()} to ${nameOf(b.node)} ${pb.label.toLowerCase()}.${aligned}`);
     }
     /** Split a pipe at a point of one of its segments with an explicit junction (a deliberate Join). */
     function joinHere(edgeId, seg, pt) {
@@ -213,6 +303,17 @@
       if (!r.ok) { Object.assign(st, st.undo.pop()); draw(); return say(`Not turned: ${r.reason}`, true); }
       changed(); say(`${nameOf(id)} turned a quarter.`);
     }
+    /** Move a port to another side or along its side; its pipes stay attached and stay horizontal and vertical. */
+    function setAnchor(id, port, side, offset) {
+      const s = sym(id), p = SYM[node(id).kind].ports.find(q => q.id === port);
+      checkpoint();
+      s.ports = Object.assign({}, s.ports || {});
+      if (side === p.side && Math.abs(offset - p.offset) < 1e-9) delete s.ports[port];
+      else s.ports[port] = { side, offset: Math.round(offset * 100) / 100 };
+      const r = reroute(edgesOf(id));
+      if (!r.ok) { Object.assign(st, st.undo.pop()); draw(); return say(`Port not moved: ${r.reason}`, true); }
+      changed(); say(`${nameOf(id)} ${p.label.toLowerCase()} moved; its pipes follow it.`);
+    }
     function rerouteSelected() {
       if (!st.sel || st.sel.type !== "route") return say("Select a pipe first.", true);
       checkpoint();
@@ -242,12 +343,16 @@
     }
     function drawBar() {
       const ro = opt.readOnly;
+      if (opt.viewOnly) return put(bar,
+        toolButton("Zoom in", () => { st.zoom = Math.min(4, st.zoom * 1.25); draw(); }), toolButton("Zoom out", () => { st.zoom = Math.max(0.25, st.zoom / 1.25); draw(); }),
+        toolButton("Fit", () => { st.zoom = 1; draw(); }));
       put(bar, 
         toolButton("Select", () => { st.tool = "select"; st.pending = null; draw(); }, st.tool === "select"),
         toolButton("Connect pipe", () => { st.tool = "connect"; st.pending = null; draw(); say("Choose an outlet port, then the port it feeds."); }, st.tool === "connect", ro),
         toolButton("Junction", () => { st.tool = "junction"; st.pending = null; draw(); say("Choose the point of a pipe where a branch joins it."); }, st.tool === "junction", ro),
         toolButton("Undo", undo, false, ro || !st.undo.length), toolButton("Redo", redo, false, ro || !st.redo.length),
         toolButton("Reroute selected", rerouteSelected, false, ro || !(st.sel && st.sel.type === "route")),
+        toolButton("Straighten pipes", straighten, false, ro || !st.graph.edges.length, "Level the ports of pipes that have a small step"),
         toolButton("Turn", () => st.sel && st.sel.type === "symbol" && rotate(st.sel.id), false, ro || !(st.sel && st.sel.type === "symbol")),
         toolButton("Remove", removeSelection, false, ro || !st.sel),
         toolButton("Zoom in", () => { st.zoom = Math.min(4, st.zoom * 1.25); draw(); }), toolButton("Zoom out", () => { st.zoom = Math.max(0.25, st.zoom / 1.25); draw(); }),
@@ -320,7 +425,8 @@
         } else {
           const b = G.box(n.kind, s);
           const label = s.label || nameOf(n.id);
-          const g = svg("g", { class: "hed-sym" + (selected ? " sel" : ""), "data-node": s.node, tabindex: "0", role: "button",
+          const lit = (opt.highlight || []).includes(n.id);
+          const g = svg("g", { class: "hed-sym" + (selected ? " sel" : "") + (lit ? " lit" : ""), "data-node": s.node, tabindex: "0", role: "button",
             "aria-label": `${KIND_WORD[n.kind]} ${label}`, onpointerdown: ev => symDown(ev, s.node) },
             svg("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: n.kind === "tank" ? 4 : 8, class: "hed-box k-" + n.kind }),
             iconAt(KIND_ICON[n.kind], b), svg("text", { x: b.x + b.w / 2, y: b.y + b.h + 14, class: "hed-label", "text-anchor": "middle" }, label));
@@ -334,15 +440,27 @@
               tk.pct == null ? "NOT MODELLED" : `${tk.L.toFixed(0)} L (${tk.pct}%)`));
           }
           if (st.overlay && st.overlay.notModelled && st.overlay.notModelled[n.id]) g.appendChild(svg("title", null, `NOT MODELLED: ${st.overlay.notModelled[n.id]}`));
+          const live = st.overlay && st.overlay.states ? st.overlay.states[n.id] : null;
+          if (live) {                                       // 0.7.1 Overview: the item's state in words, never only a colour
+            g.appendChild(svg("text", { x: b.x + b.w / 2, y: b.y + b.h + 28, class: "hed-state st-" + live.cls, "text-anchor": "middle", "data-state": live.word }, live.word));
+            g.setAttribute("aria-label", `${KIND_WORD[n.kind]} ${label}: ${live.word}${live.why ? " (" + live.why + ")" : ""}`);
+            g.appendChild(svg("title", null, `${label}: ${live.word}${live.why ? " — " + live.why : ""}`));
+          }
           kids.push(g);
         }
-        const showPorts = st.tool === "connect" || selected;
+        const showPorts = (st.tool === "connect" || selected) && !opt.viewOnly;
         if (showPorts) for (const p of SYM[n.kind].ports) {
           const a = G.anchor(n.kind, s, p.id);
-          const ok = st.tool !== "connect" ? true : st.pending ? (["in", "both"].includes(p.flow) && st.pending.node !== n.id && portFree(n, p.id)) : (["out", "both"].includes(p.flow) && portFree(n, p.id));
-          kids.push(svg("circle", { cx: a.x, cy: a.y, r: st.tool === "connect" ? 7 : 4, class: "hed-port" + (ok ? " ok" : " no") + (st.pending && st.pending.node === n.id && st.pending.port === p.id ? " pend" : ""),
-            "data-port": `${n.id}.${p.id}`, tabindex: st.tool === "connect" ? "0" : null, role: st.tool === "connect" ? "button" : null,
-            "aria-label": `${nameOf(n.id)} ${p.label}${ok ? "" : " (not available)"}`, onpointerdown: ev => portDown(ev, n.id, p.id, ok) }, svg("title", null, `${p.label} (${p.flow})`)));
+          const connecting = st.tool === "connect";
+          const why = connecting ? portWhy(n, p) : (!opt.readOnly && ["out", "both"].includes(p.flow) && portFree(n, p.id) ? null : "select");
+          const ok = connecting ? why === null : why === null;
+          const pend = st.pending && st.pending.node === n.id && st.pending.port === p.id;
+          const word = pend ? "pipe starts here" : connecting ? (ok ? (st.pending ? "free inlet: connect here" : "free outlet: start here") : `not here: ${why}`)
+            : ok ? "free outlet: press to start a pipe" : p.label;
+          kids.push(svg("circle", { cx: a.x, cy: a.y, r: connecting || ok ? 7 : 4, class: "hed-port" + (ok ? " ok" : " no") + (pend ? " pend" : ""),
+            "data-port": `${n.id}.${p.id}`, tabindex: connecting || ok ? "0" : null, role: connecting || ok ? "button" : null,
+            "aria-label": `${nameOf(n.id)} ${p.label}: ${word}`, onpointerdown: ev => portDown(ev, n.id, p.id, ok, why) }, svg("title", null, `${p.label}: ${word}`)));
+          if (connecting && ok && st.pending && !pend) kids.push(svg("circle", { cx: a.x, cy: a.y, r: 11, class: "hed-port-ring" }));
         }
       }
       for (const m of st.graph.measures || []) {                // a dashed line from a sensor to what it measures
@@ -353,6 +471,8 @@
         if (m.edge && routes[m.edge]) { const p = routes[m.edge]; to = p[Math.floor(p.length / 2)]; }
         if (to) kids.push(svg("path", { d: `M${b.x + b.w / 2} ${b.y + b.h / 2}L${to[0]} ${b.y + b.h / 2}L${to[0]} ${to[1]}`, class: "hed-tap" }, svg("title", null, `${nameOf(m.sensor)} measures this (a tap: it carries no water)`)));
       }
+      for (const g of st.guides || []) kids.push(svg("line", g.axis === "dy" ? { x1: -40, x2: W + 40, y1: g.at, y2: g.at, class: "hed-guide" }
+        : { y1: -40, y2: H + 40, x1: g.at, x2: g.at, class: "hed-guide" }));
       put(canvas, ...kids);
       drawSide();
     }
@@ -366,20 +486,31 @@
 
     // ---------------------------------------------------------------- side panel: palette, properties, checks
     function drawSide() {
+      if (opt.viewOnly) return put(side);
       const parts = [];
       const placed = new Set(st.graph.nodes.map(n => n.item).filter(Boolean));
       const free = Object.entries(opt.items).filter(([id, it]) => it.kind && !placed.has(id));
-      parts.push(el("h3", null, "Equipment"), free.length ? el("ul", { class: "hed-palette" }, free.map(([id, it]) =>
-        el("li", null, `${it.name} (${KIND_WORD[it.kind].toLowerCase()}) `, opt.readOnly ? null : el("button", { class: "small", onclick: () => placeItem(id) }, "Place"))))
-        : el("p", { class: "muted small" }, "Every water item is in the drawing. Create more in the equipment library."));
+      const kinds = ["source", "tank", "pump", "valve", "meter", "sector", "sensor"];
+      parts.push(el("h3", null, "Equipment to place"), free.length ? kinds.filter(k => free.some(([, it]) => it.kind === k)).map(k =>
+        el("details", { class: "hed-palette-group", open: true }, el("summary", null, `${KIND_WORD[k]}s`),
+          el("ul", { class: "hed-palette" }, free.filter(([, it]) => it.kind === k).map(([id, it]) =>
+            el("li", null, el("span", null, it.name), it.public_id ? el("span", { class: "mono small muted" }, ` ${it.public_id}`) : null, " ",
+              opt.readOnly ? null : el("button", { class: "small", "aria-label": `Place ${it.name}`, onclick: () => placeItem(id) }, "Place"))))))
+        : el("p", { class: "muted small" }, "Every water item is in the drawing. Create more on the Equipment page, then import again."));
       if (st.sel && st.sel.type === "symbol") {
         const n = node(st.sel.id), s = sym(st.sel.id);
         const conns = st.graph.edges.filter(e => e.src.node === n.id || e.dst.node === n.id);
         parts.push(el("h3", null, n.kind === "junction" ? "Junction" : nameOf(n.id)),
-          el("p", { class: "small" }, `${KIND_WORD[n.kind]}${n.item ? " · item " + n.item : ""} · position ${s.x}, ${s.y}${s.rot ? " · turned " + s.rot + "°" : ""}`),
+          el("p", { class: "small" }, `${KIND_WORD[n.kind]}${n.item ? " · " + ((opt.items[n.item] || {}).public_id || n.item) : ""} · position ${s.x}, ${s.y}${s.rot ? " · turned " + s.rot + "°" : ""}`),
           el("ul", { class: "small" }, SYM[n.kind].ports.map(p => {
             const c = conns.filter(e => (e.src.node === n.id && e.src.port === p.id) || (e.dst.node === n.id && e.dst.port === p.id));
-            return el("li", null, `${p.label}: `, c.length ? c.map(e => pipeName(e)).join("; ") : el("span", { class: "muted" }, "not connected"));
+            const cur = (s.ports || {})[p.id] || { side: p.side, offset: p.offset };
+            const edit = opt.readOnly || n.kind === "junction" ? null : el("span", { class: "row hed-anchor" },
+              el("select", { "aria-label": `${p.label} side`, onchange: ev => setAnchor(n.id, p.id, ev.target.value, cur.offset) },
+                ["N", "E", "S", "W"].map(x => el("option", { value: x, selected: cur.side === x ? true : null }, { N: "top", E: "right", S: "bottom", W: "left" }[x]))),
+              el("input", { type: "range", min: 0.1, max: 0.9, step: 0.05, value: cur.offset, "aria-label": `${p.label} position along its side`,
+                onchange: ev => setAnchor(n.id, p.id, cur.side, Number(ev.target.value)) }));
+            return el("li", null, `${p.label}: `, c.length ? c.map(e => pipeName(e)).join("; ") : el("span", { class: "muted" }, "not connected"), edit);
           })));
         if (n.kind === "sensor") {
           const cur = (st.graph.measures || []).find(m => m.sensor === n.id);
@@ -442,6 +573,7 @@
       grab(ev);
       if (st.tool === "connect") return;
       st.sel = { type: "symbol", id };
+      if (opt.onSelect) opt.onSelect(id);
       if (opt.readOnly) return draw();
       const s = sym(id), p0 = docPoint(ev);
       st.drag = { kind: "symbol", id, dx: p0[0] - s.x, dy: p0[1] - s.y, snap: clone({ graph: st.graph, diagram: st.diagram }), moved: false };
@@ -471,12 +603,18 @@
       st.drag = { kind: "segment", id, seg, p0, orig: clone(r.points), snap: clone({ graph: st.graph, diagram: st.diagram }), moved: false };
       canvas.setPointerCapture(ev.pointerId);
     }
-    function portDown(ev, nodeId, port, ok) {
-      if (st.tool !== "connect") return;
+    function portDown(ev, nodeId, port, ok, why) {
       ev.stopPropagation();
-      if (!ok) return say(st.pending ? "That port cannot take this pipe." : "Start from an outlet that is still free.", true);
-      if (!st.pending) { st.pending = { node: nodeId, port }; draw(); return say(`From ${nameOf(nodeId)}: now choose the port it feeds.`); }
-      const a = st.pending; st.pending = null;
+      if (opt.readOnly) return;
+      if (st.tool !== "connect") {                    // a free outlet of the selected symbol starts a pipe at once
+        if (!ok) return;
+        ev.preventDefault();
+        st.tool = "connect"; st.pending = { node: nodeId, port }; draw();
+        return say(`From ${nameOf(nodeId)}: the free inlets it can feed are green. Choose one, or press Escape to cancel.`);
+      }
+      if (!ok) return say(`${nameOf(nodeId)} ${SYM[node(nodeId).kind].ports.find(q => q.id === port).label.toLowerCase()}: ${why}.`, true);
+      if (!st.pending) { st.pending = { node: nodeId, port }; draw(); return say(`From ${nameOf(nodeId)}: the free inlets it can feed are green. Choose one, or press Escape to cancel.`); }
+      const a = st.pending; st.pending = null; st.tool = "select";
       connect(a, { node: nodeId, port });
     }
     canvas.addEventListener("pointermove", ev => {
@@ -484,9 +622,12 @@
       const p = docPoint(ev);
       onFrame(() => {
         if (d.kind === "symbol") {
-          const x = snapG(p[0] - d.dx), y = snapG(p[1] - d.dy), s = sym(d.id);
-          if (x === s.x && y === s.y) return;
-          if (moveSymbol(d.id, x, y, false)) { d.moved = true; say(null); }
+          let x = snapG(p[0] - d.dx), y = snapG(p[1] - d.dy);
+          const s = sym(d.id), sh = alignShift(d.id, x, y);
+          x = R.snap(x + sh.dx); y = R.snap(y + sh.dy);
+          st.guides = sh.guides;
+          if (x === s.x && y === s.y) return draw();
+          if (moveSymbol(d.id, x, y, false)) { d.moved = true; say(sh.guides.length ? "Level with the port it connects to." : null); }
           draw();
         } else if (d.kind === "segment") {
           const a = d.orig[d.seg], b = d.orig[d.seg + 1];
@@ -508,7 +649,7 @@
     });
     function endDrag(cancel) {
       const d = st.drag; if (!d) return;
-      st.drag = null;
+      st.drag = null; st.guides = [];
       if (cancel) { Object.assign(st, d.snap); draw(); return say("Cancelled."); }
       if (d.moved) { st.undo.push(d.snap); st.redo = []; changed(); }
     }
@@ -558,11 +699,13 @@
       get: () => ({ graph: clone(st.graph), diagram: clone(st.diagram) }),
       /** Simulated values drawn on top (the twin): {edges: {id: L/min}, tanks: {id: {L, pct}}, notModelled}. */
       setOverlay(ov) { st.overlay = ov; if (!st.drag) draw(); },
+      setHighlight(ids) { opt.highlight = ids || []; if (!st.drag) draw(); },
       set(graph, diagram, serverIssues) { st.graph = clone(graph); st.diagram = clone(diagram); st.undo = []; st.redo = []; st.dirty = false; st.sel = null; opt.serverIssues = serverIssues || []; routeMissing(); draw(); },
       dirty: () => st.dirty,
       clean() { st.dirty = false; if (opt.onChange) opt.onChange(false); },
       say, select(id) { st.sel = node(id) ? { type: "symbol", id } : edge(id) ? { type: "route", id } : null; draw(); },
       issues, placeItem, connect, joinHere, moveSymbol, rotate, removeSelection, reroute, rerouteSelected, undo, redo,
+      straighten, alignShift, setAnchor,
       state: st,
     };
   }
