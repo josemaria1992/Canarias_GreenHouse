@@ -39,7 +39,8 @@ Status: proposed for 0.7.0 (DIGITAL_TWIN_SPECIFICATION, FEEDBACK_FOR_CLAUDE F01/
    engine follows the normal plan when a user stops the operation, its runtime guard or its window ends, or the
    mode changes; the fault plan after a failure, a stop condition or a stop of everything (an empty plan: every item
    still on goes off, last first). Each OFF is verified (output and feedback) before the next step; an OFF not
-   verified within its timeout holds the rest of the plan (STOP_UNVERIFIED, OFF retried, never an ON). What a plan
+   verified within its timeout holds the rest of the plan (STOP_UNVERIFIED, OFF retried, never an ON). Owner
+   decision 2026-10-26: hold, because a pump must not pump against a closed valve and a bypass is not confirmed. What a plan
    leaves on is switched off after it, last first. The preview names the actual plans.
 3. **Shared drivers are capacities** (R07-03, `graph-water-2`). Every running pump and every source is one capacity
    shared by all active paths through it; paths are filled together, max-min fair, until a capacity they use is

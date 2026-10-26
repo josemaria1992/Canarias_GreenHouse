@@ -134,10 +134,12 @@ amendment.
 | R07-03 shared pump capacity counted twice | Every pump and source is one capacity over all its active paths (max-min fair fill). Model id `graph-water-2` | `twin/graph_water.py` | `tests/unit/test_graph_water_r07.py` (20 L/min main pump: 10 + 10; with a 5 L/min booster: 15 + 5; series; two sources; emptying tank; batch-independent) |
 | R07-04 stale DONE after failed journal writes | Compensation is journaled (COMPENSATING). An unwritable record is kept in memory and reported. Recovery checks every DONE step against the real system and marks steps UNDONE or UNKNOWN; UNKNOWN blocks undo. Windows replace refusals are retried | `api/changes.py`, `twin/feed.py`, `twin/changes.py` | `tests/hardware/test_journal_failures_r07.py` (the review's two-denial probe, a journal that cannot be written at all, a record that cannot be created, an unknown step, a passing lock) |
 
-One behaviour choice needs the owner's confirmation. When a stop plan's OFF cannot be verified (for example a pump
-that keeps running), the engine holds the rest of the plan, so the valve stays open rather than closing on a
-running pump. It sends the OFF again and raises an alarm. Session end still applies the configured LEASE_END
-safe state to every output.
+**Owner decision, 26 October 2026: hold.** When a stop plan's OFF cannot be verified (for example a pump that
+keeps running), the engine holds the rest of the plan. The valve stays open rather than closing on a pump that may
+still run. The engine sends the OFF again and raises an alarm. The owner's reasons: a pump must not pump against a
+closed valve, and it is not yet known whether the installation has a bypass valve. Every line will have a flow or
+pressure meter to show what is happening. Session end still applies the configured LEASE_END safe state to every
+output.
 
 ## Evidence
 
