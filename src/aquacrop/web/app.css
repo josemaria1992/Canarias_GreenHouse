@@ -377,5 +377,10 @@ ol.steps li.step { gap: 6px; margin: 4px 0; }
 .hed-issues li.bad { color: var(--bad); }
 .hed-issues li.warn { color: var(--warn); }
 .hed-palette { padding-left: 18px; }
+.hed-bar input[type=checkbox] { min-height: 0; padding: 0; vertical-align: middle; }
+/* the twin's simulated values: water in a tank, flow on a pipe (numbers, never an animation) */
+.hed-water { fill: var(--sim); opacity: .3; pointer-events: none; }
+.hed-flow { font-size: 11px; font-weight: 600; fill: var(--sim); }
+.hed-pipe.flowing { stroke-width: 4; }
 @media (max-width: 1024px) { .hed-body { flex-direction: column; } .hed-side { flex-basis: auto; width: 100%; max-height: none; } }
 @media (prefers-reduced-motion: reduce) { .hed-pipe { transition: none; } }

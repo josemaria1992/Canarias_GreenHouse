@@ -89,3 +89,26 @@ def test_rbac03_old_wizard_routes_refuse_a_commissioning_operator(tmp_path, icfg
         r = c.post("/api/commissioning/open", json={"adapter": "/dev/ttyUSB0", "bus_id": "rs485_a", "read": True},
                    headers=h)
         assert r.status_code == 403
+
+
+def test_mod02_an_operator_request_is_a_record_never_configuration(tmp_path, icfg):
+    app = _app(tmp_path, icfg)
+    devices = [d.model_dump() for d in app.state.cfg.devices]
+    with TestClient(app, base_url=ORIGIN) as c:
+        hv = login(c, "view1")
+        req = {"model": "WAVESHARE_MODBUS_RTU_IO_8CH", "purpose": "two more sector valves", "location": "north bench"}
+        assert c.post("/api/modules/requests", json=req, headers=hv).status_code == 403
+        ho = login(c, "oper1")
+        r = c.post("/api/modules/requests", json=req, headers=ho)
+        assert r.status_code == 200 and "Nothing changed yet" in r.json()["next"]
+        listed = c.get("/api/modules/requests", headers=ho).json()["requests"]
+        assert len(listed) == 1 and listed[0]["by"] == "oper1" and not listed[0]["closed"]
+        assert listed[0]["purpose"] == "two more sector valves"
+        rid = listed[0]["request_id"]
+        assert c.post("/api/modules/requests/close", json={"request_id": rid, "outcome": "prepared"},
+                      headers=ho).status_code == 403             # preparing a module is an administrator's task
+        ha = login(c, "admin1")
+        assert c.post("/api/modules/requests/close", json={"request_id": rid, "outcome": "prepared at address 7"},
+                      headers=ha).status_code == 200
+        assert c.get("/api/modules/requests", headers=ho).json()["requests"][0]["closed"]
+    assert [d.model_dump() for d in app.state.cfg.devices] == devices   # the configuration never changed

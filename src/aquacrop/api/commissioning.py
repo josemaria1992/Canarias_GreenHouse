@@ -53,6 +53,20 @@ class SweepIn(_B):
     bus_id: str = Field(max_length=48)
 
 
+class ModuleRequestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str = Field(max_length=64)
+    purpose: str = Field(min_length=3, max_length=200)
+    location: str = Field(default="", max_length=120)
+    note: str = Field(default="", max_length=500)
+
+
+class ModuleRequestCloseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: int = Field(ge=1)
+    outcome: str = Field(min_length=3, max_length=200)
+
+
 def register(app, require, wizard, svc) -> None:
     def need():
         if wizard is None:
@@ -126,6 +140,29 @@ def register(app, require, wizard, svc) -> None:
     @app.post("/api/commissioning/{tx_id}/detect")
     async def tx_detect(tx_id: str, p: Principal = Depends(require(Perm.MODULE_SETUP))):
         return await step(need().detect, p.username, tx_id)
+
+    # 0.7.0 (MOD-02): routine registration is a request recorded for an administrator; it changes no configuration
+    @app.get("/api/modules/requests")
+    def module_requests(p: Principal = Depends(require(Perm.OPS_READ))):
+        import json as _json
+        rows = app.state.hist.query("SELECT id, utc, actor, payload_json FROM events WHERE kind='MODULE_REGISTRATION_REQUESTED' "
+                                    "ORDER BY id DESC LIMIT 50")
+        done = {r["payload_json"] for r in app.state.hist.query(
+            "SELECT payload_json FROM events WHERE kind='MODULE_REGISTRATION_CLOSED' ORDER BY id DESC LIMIT 200")}
+        closed = {_json.loads(x).get("request_id") for x in done}
+        return {"requests": [{"request_id": r["id"], "utc": r["utc"], "by": r["actor"], "closed": r["id"] in closed}
+                             | _json.loads(r["payload_json"]) for r in rows]}
+
+    @app.post("/api/modules/requests")
+    def module_request(body: ModuleRequestIn, p: Principal = Depends(require(Perm.MODULE_REGISTER))):
+        app.state.hist.event("MODULE_REGISTRATION_REQUESTED", body.model_dump(), actor=p.username)
+        return {"ok": True, "next": "An administrator prepares the module (address and modes) with the USB adapter on the "
+                                    "controller, then applies the configuration during maintenance. Nothing changed yet."}
+
+    @app.post("/api/modules/requests/close")
+    def module_request_close(body: ModuleRequestCloseIn, p: Principal = Depends(require(Perm.MODULE_SETUP))):
+        app.state.hist.event("MODULE_REGISTRATION_CLOSED", body.model_dump(), actor=p.username)
+        return {"ok": True}
 
     @app.get("/api/discovery")
     def discovery(p: Principal = Depends(require(Perm.OPS_READ))):

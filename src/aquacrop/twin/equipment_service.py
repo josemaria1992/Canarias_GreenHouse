@@ -41,7 +41,8 @@ WATER_MODEL = "drawing-water-0.7.0"   # part of every proof context: a changed m
 FRAMES = 2400                     # timeline: ten minutes of wall time at four frames a second
 
 
-def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[str]) -> InstallationConfig:
+def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[str], virtual=None) -> InstallationConfig:
+    """`virtual`: the twin's simulated modules (0.7.0); they add a virtual bus and devices to the twin only."""
     d = dict(live)
     d["profile"] = "SIMULATED"
     d["config_id"] = f"{live['config_id']}-twin"
@@ -58,6 +59,9 @@ def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[s
     d["historian"] = h
     d["security"] = dict(live.get("security", {}), allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
     d.pop("offsite_backup", None)
+    if virtual is not None and virtual.all():
+        d = virtual.merge(d)
+        d["config_version"] += "+sim-" + "-".join(sorted(virtual.uids()))
     return InstallationConfig.model_validate(d)
 
 
@@ -115,6 +119,7 @@ class EquipmentTwinService:
         self.water = Water()                      # 0.6.4: water along the drawing's pipes
         self.layout_fn = None                     # () -> (digest, layout doc), set by the app
         self.blocks = None                        # BlockStore of the twin (0.7.0), set by the app
+        self.virtual = None                       # VirtualModules of the twin (0.7.0), set by the app
         self.gwater = GraphWater()                # 0.7.0: water over the explicit graph, when the twin has one
         self.model_error: str | None = None
         self.loop_error: str | None = None
@@ -179,7 +184,7 @@ class EquipmentTwinService:
             self.items.load(self.changes.overlay(snap) if self.changes is not None else snap)
             hyd = self.blocks.import_snapshot(snap.get("hydraulics")) if self.blocks is not None else None
             rebuilt = False
-            if f"{snap['config_version']}-twin" != self.cfg.config_version:
+            if f"{snap['config_version']}-twin" != self.cfg.config_version.split("+sim-")[0]:
                 self._rebuild(snap["config"], actor)  # modules changed on the real system: a controlled reset
                 rebuilt = True
             have = {(v["program_id"], v["version"]): v for v in self.programs.versions()}
@@ -222,10 +227,19 @@ class EquipmentTwinService:
 
     def _rebuild(self, live_config: dict, actor: str) -> None:
         sec = self.cfg.security
-        self.cfg = twin_config(live_config, allowed_hosts=list(sec.allowed_hosts), allowed_origins=list(sec.allowed_origins))
+        self.cfg = twin_config(live_config, allowed_hosts=list(sec.allowed_hosts), allowed_origins=list(sec.allowed_origins),
+                               virtual=self.virtual)
         self.twin = EquipmentTwin(self.cfg, self.clock, self.items.views)
         self.commands = CommandService(self.cfg, self.twin.backend, self.hist, lambda c: None, lambda: ControllerState.AUTO)
         self.reset(actor, self.clock.start_utc)
+
+    def rebuild_modules(self, actor: str) -> None:
+        """After a simulated module is added or removed: rebuild the twin's configuration and reset (a new run)."""
+        if self.snap is None:
+            raise ValueError("no snapshot from the real system yet")
+        with self.lock:
+            self._rebuild(self.snap["config"], actor)
+            self.items.load(self.changes.overlay(self.snap) if self.changes is not None else self.snap)
 
     def sync_users(self, accounts) -> int:
         """One-way copy of the live accounts. A changed password, role, commissioning flag or a disabled or removed
@@ -507,7 +521,10 @@ class EquipmentTwinService:
         g = self.graph()
         if g is None:
             return None
-        return self.gwater.view(g, params_from(g, self.items.views()))
+        out = self.gwater.view(g, params_from(g, self.items.views()))
+        # which graph and drawing these numbers belong to: the page draws them again when either changes
+        out["revs"] = f"{self.blocks.topology()['rev']}/{self.blocks.diagram()['rev']}"
+        return out
 
     def view(self) -> dict:
         with self.lock:

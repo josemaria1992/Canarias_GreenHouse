@@ -29,10 +29,10 @@
   const $ = id => document.getElementById(id);
   // A refresh that was already fetching when the user changed a field or a choice on this page does not
   // rebuild it: that would put back the old value just before the user presses the button next to it.
-  const edits = { seq: 0, id: null };
+  const edits = { seq: 0, id: null, at: 0 };
   document.addEventListener("change", e => {
     const v = e.target && e.target.closest ? e.target.closest("section") : null;
-    if (v) { edits.seq += 1; edits.id = v.id; }
+    if (v) { edits.seq += 1; edits.id = v.id; edits.at = Date.now(); }
   }, true);
   let rendering = null;          // the edit count when the current refresh started
   let renderingView = null;      // the page the current refresh is drawing (the user may already have moved on)
@@ -278,8 +278,11 @@
       setStale(false);
       await plantForStatus();
       renderBanner();
-      const ae = document.activeElement;   // don't rebuild a view while the user is typing in it
-      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)
+      const ae = document.activeElement;   // don't rebuild a view while the user is typing in it; a choice just made
+      // (a radio, a checkbox, a list whose value just changed) is not typing: the form it changes must follow it
+      const choice = ae && (ae.tagName === "INPUT" && /^(radio|checkbox)$/.test(ae.type) || ae.tagName === "SELECT" && Date.now() - edits.at < 1500);
+      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && (/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && !choice
+          || ae.closest("[role=application]"))   // nor while the keyboard works in the drawing: it would lose its focus
         || Date.now() - pressed < 2000;     // nor between pressing and releasing a button: the click would be lost
       const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
       try {
@@ -920,6 +923,9 @@
           i.op !== "retire" ? h("div", { class: "small " + (i.exercised_by.length ? "muted" : "warn") }, i.exercised_by.length ? `Ran in the twin in ${i.exercised_by.join(", ")}` : "Not exercised by any program run in the twin") : null,
           diffTable(i.diff))),
         x.bindings.length ? h("div", null, h("strong", null, "Channels"), h("ul", { class: "small" }, x.bindings.map(b => h("li", null, `${b.item_id}.${b.role}: ${b.base_point || "no channel"} → ${b.point || "no channel"} (arrives as proposed; verify it at the bench)`)))) : null,
+        x.hydraulics ? h("div", null, h("strong", null, x.hydraulics.graph_changed ? "Installation graph: connections changed" : "Installation drawing changed"),
+          h("p", { class: "small" }, `${x.hydraulics.nodes} parts, ${x.hydraulics.edges} pipes. ${x.hydraulics.meaning}.`),
+          x.hydraulics.blocks.length ? h("p", { class: "small" }, "Block versions (arrive as drafts to validate on Blocks): ", x.hydraulics.blocks.join(", ")) : null) : null,
         x.programs.map(p => h("div", null, h("strong", null, `Program ${p.name}: ${p.base_version ? "new version replacing v" + p.base_version : "new program"}`), " ",
           p.passed ? pill(`TWIN PASSED (${p.runs.filter(r => r.result === "DONE").length} DONE${p.failed ? ", " + p.failed + " not DONE" : ""})`, p.failed ? "warn" : "ok") : pill("NO TWIN PROOF", "bad"),
           diffTable(p.diff), !p.diff ? h("pre", { class: "small mono" }, JSON.stringify(p.body, null, 1)) : null)),
@@ -1422,7 +1428,27 @@
     }
     return { groups: [...groups].filter(([, xs]) => xs.length), unused };
   }
+  // 0.7.0 Operation History: recent program runs first, each opening its timeline (recorded events, commands, alarms)
+  function runsCard(R, RD) {
+    const row = r => h("tr", { class: S.runSel === r.op_id ? "selected-row" : null },
+      h("td", null, fmtTime(r.started_utc)), h("td", null, `${r.program_id} v${r.version}`), h("td", null, r.origin ? r.origin.toLowerCase() : ""),
+      h("td", null, pill(r.result, r.result === "DONE" ? "ok" : r.result === "NOT ENDED" ? "warn" : "bad")),
+      h("td", null, r.requested_L ? `${r.measured_L} of ${r.requested_L} L${r.uncertain_L ? `, ${r.uncertain_L} L uncertain` : ""}` : (r.runtime_s != null ? `${r.runtime_s} s` : "")),
+      h("td", null, h("button", { class: "small ghost", onclick: () => { S.runSel = S.runSel === r.op_id ? null : r.op_id; refresh(); } }, S.runSel === r.op_id ? "Close" : "Timeline")));
+    return h("div", { class: "card", "data-runs": "" }, h("div", { class: "row" }, h("h2", null, "Program runs"),
+      h("a", { href: "/api/history/runs.csv", download: "aquacrop-runs.csv" }, "Download CSV")),
+      h("p", { class: "muted small" }, R.meaning),
+      R.runs.length ? h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Started", "Program", "Origin", "Result", "Delivered / ran", ""].map(x => h("th", null, x)))),
+        h("tbody", null, R.runs.map(row))) : h("p", { class: "muted" }, "No program has run yet."),
+      RD ? h("div", { class: "card" }, h("h3", null, `${RD.program_id} v${RD.version}: ${RD.result}`),
+        RD.reason ? h("p", null, RD.reason) : null,
+        h("table", { class: "compact small" }, h("tbody", null, RD.timeline.map(e => h("tr", null, h("td", null, fmtTime(e.utc)), h("td", null, e.kind.toLowerCase().replace(/_/g, " ")), h("td", null, e.what))))),
+        RD.program_body ? h("details", null, h("summary", { class: "small" }, "The program version this run used"), h("pre", { class: "small mono" }, JSON.stringify(RD.program_body, null, 2))) : null) : null);
+  }
+
   VIEWS.history = async function () {
+    const R = await api("GET", "/api/history/runs?limit=20").catch(() => ({ runs: [], meaning: "" }));
+    const RD = S.runSel ? await api("GET", "/api/history/runs/" + encodeURIComponent(S.runSel)).catch(() => null) : null;
     const C = await historyChoices();
     const known = new Set(S.allPoints.map(p => p.id));
     S.trendSel = S.trendSel.filter(x => known.has(x));
@@ -1462,8 +1488,8 @@
     // the runtime and volume estimate reads every sample: only for ranges up to a day
     const an = span <= 86400000 ? await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()))
       : { estimates: {}, note: "Running time and volume estimates are shown for ranges up to one day." };
-    mount("v-history",
-      h("div", { class: "card" }, h("h2", null, "History"),
+    mount("v-history", runsCard(R, RD),
+      h("div", { class: "card" }, h("h2", null, "Readings"),
         h("p", { class: "muted" }, `Choose up to 8 readings (${S.trendSel.length} chosen) and a time range. Times are site time (${S.tz}). A reading is recorded every minute.`),
         ranges,
         h("p", null, `From ${fmtTime(start.toISOString())} to ${fmtTime(end.toISOString())}`),

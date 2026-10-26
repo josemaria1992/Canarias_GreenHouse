@@ -167,8 +167,8 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
         if s.verify:
             vr = _verify_role(v)
             if vr is None:
-                raise FormRefused(f"the block's startup waits for {v.name}'s feedback, but it has no feedback channel",
-                                  "block_id")
+                raise FormRefused(f"the block's startup waits for {v.name}'s feedback, but it has no feedback channel: "
+                                  f"give {v.name} one, or untick \"wait for its feedback\" in the block's plan", "block_id")
             step["verify_role"] = vr
         steps.append(step)
     e = f.endpoint

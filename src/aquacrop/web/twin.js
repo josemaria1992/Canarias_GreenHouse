@@ -219,12 +219,15 @@
       const D = window.AqTwinDiagram;
       const X = window.AqTwinChanges;
       const Gr = window.AqTwinGraph;                   // 0.7.0: water over the explicit graph
-      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), Gr ? Gr.card() : "", D.card(), h("div", { id: "t-rest" }), X.card());
+      const Mo = window.AqTwinModules;                 // 0.7.0: simulated modules
+      if (!$("t-top")) $("main").replaceChildren(...[h("div", { id: "t-top" }), Gr ? Gr.card() : null, D.card(), h("div", { id: "t-rest" }),
+        Mo ? Mo.card() : null, X.card()].filter(Boolean));
       const ae = document.activeElement;
       const using = id => ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest("#" + id);
       if (!using("t-top")) $("t-top").replaceChildren(controls(v));
       if (!using("t-rest")) $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
       if (Gr) Gr.update(v);
+      if (Mo) Mo.update(false);
       D.update(v);
       X.update(v);
     } catch (e) { /* shown by the next action */ }

@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.7.0 (2026-10-26): blocks, an explicit installation graph, programs from forms
+
+Owner upgrade brief of 25 October 2026. Simulation and software only: no physical result was produced for this
+release. What each capability is today: `docs/CAPABILITIES-0.7.md`. Upgrading and going back:
+`docs/operations/upgrade-0.7.md`. A tour with screenshots: `docs/operator/walkthrough-0.7.md`.
+
+- **Who sees what (ADR-0023).** The menu follows the account's role and the server refuses everything else.
+  Viewers see Overview, Programs and Alarms only; they no longer open history, equipment, modules or the twin.
+  Operators build equipment, drawings, blocks and programs, propose channels and request modules; writing a new
+  module's address and modes is an administrator's task, even for operators with the commissioning flag. An old
+  link to a page the role cannot open says which role it needs.
+- **The installation graph (ADR-0024).** Blocks → Installation drawing: place equipment, connect an outlet to the
+  inlet it feeds, add junctions where pipes really join. Pipes are drawn with horizontal and vertical segments
+  only, while dragging too; moving a symbol or a segment changes the drawing, never the connections, and two
+  pipes that cross show a gap and stay apart. Works with the mouse, touch and the keyboard. The 0.6 drawing stays
+  as a read-only reference and can be loaded as a draft with every ambiguity listed.
+- **Blocks.** A block is one purpose (water a sector, fill a tank, return drainage) over equipment you already
+  have: where the water comes from, where it goes, the path along the drawn pipes, the meter on that path, and an
+  example startup and stop plan to check.
+- **Programs from forms (ADR-0025).** Where, how much (time, measured volume, or by hand within a maximum), when
+  (days and times, a date range, a repeat inside a window), start and stop conditions. Preview shows the exact
+  steps the engine will run. No JSON. Older programs keep running unchanged.
+- **Equipment from forms.** Typed properties with units, scaling and alarm limits (with delay and deadband);
+  tanks, water sources and sectors need no channel. Alarm limits are evaluated on real readings of verified
+  channels and in the twin.
+- **Safer runs.** Every switch ON checks the item's limits (minimum off time, starts per hour) across programs
+  and restarts; a configured fault input inhibits a start or stops a run with a lasting alarm; a stale or
+  missing reading counts as not holding.
+- **The twin's water (ADR-0026).** The twin moves water along the explicit graph with a ledger that balances
+  every step, says NOT MODELLED where a number is missing, and shows flows and tank levels on the drawing. Twin
+  evidence names its run and the exact equipment, channels, graph and model it ran with; a reset or any of
+  those changing makes it stale. Simulated modules can be added in the twin (never exported).
+- **Exports applied durably.** An approved export from the twin (now including the graph, drawing and blocks)
+  is applied step by step through a journal: a failure undoes what was done and says so, a restart in the middle
+  settles it, and two approvals at once apply it once.
+- **Operation History.** Program runs with their result and volume, a timeline of recorded steps, commands and
+  alarms, and a CSV export.
+- Fixed while testing in the browser: choosing "Deliver a measured volume" (or any other choice) now redraws
+  the form at once instead of after the next click elsewhere; the arrow keys keep moving a selected symbol after
+  the page refreshes; the twin's graph shows a newly imported drawing without reloading the page; tank water
+  and flow numbers are drawn in the twin's colours instead of black.
+- Database schema 6 (equipment usage, graph and drawing revisions, blocks, twin runs). 0.6.13 refuses a schema 6
+  database: going back needs the pre-upgrade backup (`upgrade-0.7.md`).
+
 ## 0.6.13 (2026-10-25): twin edits no longer hide newer equipment; the standard drawing stays linked
 
 - An equipment edit made in the twin before the real system changed the same item used to replace the whole item

@@ -106,16 +106,51 @@
     return h("div", { class: "card" }, kids);
   }
 
+  // 0.7.0 (MOD-01/02): first the choice; routine registration is a request; preparing a module is an administrator's
+  const RQ = { msg: null };
+  async function choiceCard() {
+    const R = await api("GET", "/api/modules/requests").catch(() => ({ requests: [] }));
+    const model = h("select", { "aria-label": "Module model" }, [["Relay (D), SKU 26517", "Relay (D)"], ["IO 8CH, SKU 26244", "IO 8CH"],
+      ["Analog Input 8CH, SKU 25821", "Analog Input 8CH"]].map(([v, t]) => h("option", { value: v }, t)));
+    const purpose = h("input", { maxlength: 200, placeholder: "what it is for (e.g. two more sector valves)", "aria-label": "Purpose" });
+    const where = h("input", { maxlength: 120, placeholder: "where it is mounted (optional)", "aria-label": "Location" });
+    const send = async () => {
+      try { const r = await api("POST", "/api/modules/requests", { model: model.value, purpose: purpose.value, location: where.value, note: "" }); RQ.msg = { text: r.next }; }
+      catch (e) { RQ.msg = { text: String(e.message || e), bad: true }; }
+      U.refresh();
+    };
+    const twin = async () => {
+      try { const t = await api("POST", "/api/twin-link/ticket"); window.open(t.url + "#t=" + encodeURIComponent(t.ticket), "_blank", "noopener"); }
+      catch (e) { RQ.msg = { text: String(e.message || e), bad: true }; U.refresh(); }
+    };
+    const open = R.requests.filter(r => !r.closed);
+    return h("div", { class: "card" }, h("h2", null, "Add Module"),
+      h("div", { class: "grid" },
+        h("div", { class: "card" }, h("h3", null, "Register a real module"),
+          h("p", { class: "small" }, "Ask for a supported module to be added to the real installation. An administrator prepares its address and modes with the USB adapter on the controller and applies the configuration during maintenance; until then nothing changes and no channel exists."),
+          h("div", { class: "row wrap" }, h("label", null, "Model", model), h("label", null, "Purpose", purpose), h("label", null, "Location", where),
+            h("button", { disabled: !can("module_register"), onclick: send }, "Send the request")),
+          RQ.msg ? h("p", { class: "inline-msg " + (RQ.msg.bad ? "bad" : "ok"), role: "status" }, RQ.msg.text) : null,
+          open.length ? h("details", null, h("summary", { class: "small" }, `Open requests (${open.length})`),
+            h("ul", { class: "small" }, open.map(r => h("li", null, `${r.model}: ${r.purpose}${r.location ? " (" + r.location + ")" : ""} — by ${r.by}, ${new Date(r.utc).toLocaleString()}`)))) : null),
+        h("div", { class: "card" }, h("h3", null, "Create a simulated module"),
+          h("p", { class: "small" }, "A simulated module exists only in the Digital Twin: its channels can be used there to design and test, the real system never sees it, and equipment wired to it cannot be sent to the real system."),
+          h("button", { class: "ghost", onclick: twin }, "Open the Digital Twin (Modules of this twin)"))));
+  }
+
   VIEWS["hw-add"] = async function () {
+    const choice = await choiceCard();
+    if (!can("module_setup")) return mount("v-hw-add", choice, h("div", { class: "card" }, h("h3", null, "Preparing a new module"),
+      h("p", { class: "muted" }, "Writing a module's address and modes is done by an administrator, with the USB adapter on the controller. Send a request above.")));
     const C = await api("GET", "/api/commissioning");
-    if (!C.available) return mount("v-hw-add", h("div", { class: "card" }, h("h2", null, "Add module"), h("p", null, C.reason)));
+    if (!C.available) return mount("v-hw-add", choice, h("div", { class: "card" }, h("h2", null, "Prepare a module (administrator)"), h("p", null, C.reason)));
     const bus = h("select", { "aria-label": "Destination port" }, C.buses.map(b => h("option", { value: b.bus_id }, `${b.bus_id} (${b.port}): ${b.modules.map(m => m.device_uid + "@" + m.address).join(", ") || "no modules yet"}`)));
     const ad = h("select", { "aria-label": "Adapter" }, C.adapters.map(a => h("option", { value: a.stable_id, disabled: !a.selectable },
       `${a.by_id || a.path} · ${[a.manufacturer, a.product].filter(Boolean).join(" ")}${a.selectable ? "" : " — " + a.why_not}`)));
     const open = C.transactions.filter(t => !["CANCELLED", "FAILED", "DETECTED"].includes(t.state));
     const done = C.transactions.filter(t => ["CANCELLED", "FAILED", "DETECTED"].includes(t.state));
-    mount("v-hw-add",
-      h("div", { class: "card" }, h("h2", null, "How to add a module"),
+    mount("v-hw-add", choice,
+      h("div", { class: "card" }, h("h2", null, "Prepare a module (administrator): how to"),
         h("ol", null,
           h("li", null, "Plug the USB-to-RS485 adapter into a USB port of the controller (the Raspberry CM4), NOT into this PC."),
           h("li", null, "Wire the adapter to the new module: A to A, B to B, and GND to GND."),

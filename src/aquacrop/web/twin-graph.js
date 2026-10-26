@@ -16,9 +16,12 @@
     if (!G.card) { G.body = h("div"); G.card = h("div", { class: "card", id: "twin-graph" }, G.body); }
     return G.card;
   }
+  const revs = l => `${l.topo.rev}/${l.dia.rev}`;
+  let loads = 0;
   async function load() {
+    const n = ++loads;
     const [topo, dia] = await Promise.all([api("GET", "api/topology"), api("GET", "api/diagram/installation")]);
-    G.loaded = { topo, dia };
+    if (n === loads) G.loaded = { topo, dia };          // an earlier, slower answer never replaces a later one
   }
   function ledgerTable(gw) {
     const l = gw.ledger;
@@ -36,9 +39,9 @@
         can("equipment_edit") ? h("button", { onclick: async () => { await load(); G.editing = true; G.ed = null; build(v); } }, "Draw the installation graph") : null);
       return;
     }
-    if (!G.ed || (!G.editing && G.loaded && G.loaded.topo.rev !== (G.lastRev || 0))) build(v);
+    // drawn again whenever the graph or drawing it shows is not the one loaded last (an import, a twin edit)
+    if (!G.ed || (!G.editing && G.loaded && revs(G.loaded) !== G.built)) build(v);
     if (G.ed && !G.editing) G.ed.setOverlay({ edges: gw.edges, tanks: gw.tanks, notModelled: gw.not_modelled });
-    G.lastRev = G.loaded && G.loaded.topo.rev;
     const nm = Object.entries(gw.not_modelled || {});
     put(G.side, 
       h("h3", null, "Water now"), h("p", { class: "small" }, `Model ${gw.model}: a bounded water balance over the explicit pipes. Pressure, chemistry and suction are NOT MODELLED.`),
@@ -65,6 +68,7 @@
     G.ed = window.AqHydraulicEditor.create(host, { symbols: topo.symbols, items: topo.items, graph: topo.graph, diagram: dia.diagram,
       readOnly: !G.editing, serverIssues: topo.issues });
     G.rev = { t: topo.rev, d: dia.rev };
+    G.built = revs(G.loaded);
     const save = async () => {
       const cur = G.ed.get();
       const r = await call("save", "POST", "api/drawing/installation", { graph: cur.graph, diagram: cur.diagram, expected_topology_rev: G.rev.t, expected_diagram_rev: G.rev.d },
@@ -85,7 +89,13 @@
     if (!G.body) return;
     if (G.editing) return;                                // never rebuilt under the editor
     const now = Date.now();
-    if (!G.loaded || now - G.last > 5000) { G.last = now; try { await load(); } catch (e) { return; } }
+    // loaded again when the snapshot names another graph or drawing revision (an import, a reset, an edit), and
+    // every 30 s anyway
+    const gw = v.graph_water;
+    if (!G.loaded || gw && gw.revs !== revs(G.loaded) || now - G.last > 30000) {
+      G.last = now;
+      try { await load(); } catch (e) { return; }
+    }
     if (!G.side) G.side = h("div");
     draw(v);
   }

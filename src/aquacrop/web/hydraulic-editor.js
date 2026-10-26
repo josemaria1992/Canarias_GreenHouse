@@ -435,8 +435,11 @@
     }
     let frame = 0;
     function onFrame(fn) { if (frame) cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { frame = 0; fn(); }); }
+    /** A press on a part of the drawing keeps the keyboard on the canvas: the part itself is redrawn at once, and
+     *  focus left on it would fall back to the page (the arrow keys would then scroll instead of moving it). */
+    function grab(ev) { ev.stopPropagation(); ev.preventDefault(); canvas.focus({ preventScroll: true }); }
     function symDown(ev, id) {
-      ev.stopPropagation(); canvas.focus();
+      grab(ev);
       if (st.tool === "connect") return;
       st.sel = { type: "symbol", id };
       if (opt.readOnly) return draw();
@@ -446,7 +449,7 @@
       draw();
     }
     function pipeDown(ev, id) {
-      ev.stopPropagation(); canvas.focus();
+      grab(ev);
       const r = route(id);
       if (st.tool === "junction" && !opt.readOnly) {
         const p = docPoint(ev);
@@ -463,7 +466,7 @@
       st.sel = { type: "route", id }; draw();
     }
     function segDown(ev, id, seg) {
-      ev.stopPropagation(); canvas.focus();
+      grab(ev);
       const r = route(id), p0 = docPoint(ev);
       st.drag = { kind: "segment", id, seg, p0, orig: clone(r.points), snap: clone({ graph: st.graph, diagram: st.diagram }), moved: false };
       canvas.setPointerCapture(ev.pointerId);

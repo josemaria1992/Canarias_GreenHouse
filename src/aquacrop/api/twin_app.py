@@ -57,6 +57,16 @@ class TicketIn(_B):
     ticket: str = Field(max_length=512)
 
 
+class ModuleIn(_B):
+    device_uid: str = Field(max_length=32)
+    model: str = Field(max_length=64)
+    label: str = Field(default="", max_length=80)
+
+
+class ModuleRefIn(_B):
+    device_uid: str = Field(max_length=32)
+
+
 class GraphLevelIn(_B):
     node: str = Field(max_length=48)
     litres: float = Field(ge=0, le=1e7)
@@ -163,7 +173,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     snap = feed.read_snapshot(feed_dir)
     if snap is None:
         raise RuntimeError(f"no live snapshot in {feed_dir}: start the live service first")
-    cfg = twin_config(snap["config"], allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
+    from ..twin.virtual_modules import VirtualModules, VirtualRefused, WORDS as MODULE_WORDS
+    virtual = VirtualModules(state_dir / "virtual-modules.json")       # 0.7.0: modules that exist only in the twin
+    cfg = twin_config(snap["config"], allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, virtual=virtual)
     session_id = session_id or new_id("twin")
     hist = Historian(state_dir / cfg.historian.db_path, cfg, session_id)
     rows = hist.query("SELECT DISTINCT profile FROM process_sessions WHERE session_id != ?", (session_id,))
@@ -176,6 +188,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     limiter = RateLimiter()
     tickets = feed.TicketCheck(feed_dir)
     svc = EquipmentTwinService(cfg, hist, session_id, feed_dir)
+    svc.virtual = virtual
     svc.changes = TwinChanges(state_dir / "changes.json")
     svc.sync_users(accounts)
     loopback = sec.loopback_http_cookie_exemption and bind_host in ("127.0.0.1", "localhost", "::1")
@@ -496,6 +509,39 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     svc.blocks = BlockStore(hist, items=lambda: views_hydraulic(svc.items.views()))
     app.state.blocks = svc.blocks
     block_routes.register(app, require, svc.blocks, legacy_layout=lambda: (draft()[0], draft()[1]))
+    from . import runs as run_routes
+    run_routes.register(app, require, hist, svc.programs)
+
+    @app.get("/api/twin/modules")
+    def modules_view(p: Principal = Depends(require(Perm.OPS_READ))):
+        sim = virtual.uids()
+        return {"simulated": virtual.all(), "models": MODULE_WORDS,
+                "real": [{"device_uid": d.device_uid, "model": d.model.value, "label": d.label} for d in svc.cfg.devices
+                         if d.device_uid not in sim],
+                "meaning": "A simulated module exists in this twin only: the real system never sees it, and equipment "
+                           "on its channels cannot be sent to the real system."}
+
+    @app.post("/api/twin/modules")
+    def module_add(body: ModuleIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        live = {d["device_uid"] for d in (svc.snap or {}).get("config", {}).get("devices", [])}
+        try:
+            dev = virtual.add(body.device_uid, body.model, body.label, live)
+        except VirtualRefused as e:
+            raise HTTPException(409, str(e))
+        svc.rebuild_modules(p.username)
+        hist.event("TWIN_MODULE_ADDED", dev, actor=p.username)
+        return {"module": dev, "runtime_id": svc.runtime_id,
+                "note": "added; the twin was reset to a new run with the new channels"}
+
+    @app.post("/api/twin/modules/remove")
+    def module_remove(body: ModuleRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        try:
+            virtual.remove(body.device_uid)
+        except VirtualRefused as e:
+            raise HTTPException(409, str(e))
+        svc.rebuild_modules(p.username)
+        hist.event("TWIN_MODULE_REMOVED", {"device_uid": body.device_uid}, actor=p.username)
+        return {"removed": body.device_uid, "runtime_id": svc.runtime_id}
 
     @app.post("/api/twin/graph/level")
     def graph_level(body: GraphLevelIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
@@ -616,23 +662,25 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 out.append(f"{pid} v{ver}")
         return out
 
-    _all_points = sorted(str(x) for x in cfg.all_points())
-    _fits: dict[str, list[str]] = {}
+    # the channel lists follow the twin's current configuration (simulated modules rebuild it), never the boot one
+    _fits: dict[tuple, list[str]] = {}
 
     @app.get("/api/twin/changes")
     def changes_view(p: Principal = Depends(require(Perm.OPS_READ))):
         snap = svc.snap or {"equipment": {"types": [], "items": []}, "bindings": [], "programs": []}
         eff = svc.changes.overlay(snap) if svc.snap else snap
         if svc.snap:
-            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof)
+            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof,
+                                 virtual.uids(), svc.blocks.export())
         else:
             pv = {"items": [], "bindings": [], "programs": [], "missing": [], "empty": True}
-        all_points = _all_points
+        cur = svc.cfg
+        all_points = sorted(str(x) for x in cur.all_points())
 
         def fitting(role) -> list[str]:          # channels whose kind, direction and interface suit the role
-            key = role.model_dump_json()
-            if key not in _fits:                   # the configuration does not change while the twin runs
-                _fits[key] = [pt for pt in all_points if not channel_issues(cfg, role, pt, None)]
+            key = (cur.config_version, role.model_dump_json())
+            if key not in _fits:
+                _fits[key] = [pt for pt in all_points if not channel_issues(cur, role, pt, None)]
             return _fits[key]
         types = []
         for t in snap["equipment"]["types"]:
@@ -657,7 +705,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/equipment/save")
     def eq_save(body: ItemSaveIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
-        r = changed(svc.changes.save_item, svc.snap, cfg, body.item_id, body.name, body.type_id, body.type_version,
+        r = changed(svc.changes.save_item, svc.snap, svc.cfg, body.item_id, body.name, body.type_id, body.type_version,
                     body.icon, body.body)
         hist.event("TWIN_EQUIPMENT_CHANGED", {"item": body.item_id}, actor=p.username)
         return r
@@ -670,7 +718,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/equipment/bind")
     def eq_bind(body: BindIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
-        changed(svc.changes.bind, svc.snap, cfg, body.item_id, body.role, body.point)
+        changed(svc.changes.bind, svc.snap, svc.cfg, body.item_id, body.role, body.point)
         hist.event("TWIN_CHANNEL_CHANGED", {"item": body.item_id, "role": body.role, "point": body.point},
                    actor=p.username)
         return {"ok": True}
@@ -727,7 +775,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             made = []
             try:
                 for part in todo:
-                    svc.changes.save_item(svc.snap, cfg, part["item_id"], part["name"], part["type_id"],
+                    svc.changes.save_item(svc.snap, svc.cfg, part["item_id"], part["name"], part["type_id"],
                                           active[part["type_id"]], part["icon"], {})
                     made.append(part["item_id"])
             except ChangeRefused as e:
@@ -767,7 +815,8 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         if svc.snap is None:
             raise HTTPException(409, "no snapshot from the real system yet")
-        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof)
+        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof,
+                             virtual.uids(), svc.blocks.export())
         try:
             r = write_export(feed_dir, pv, by=p.username, note=body.note, twin_run=svc.run_id,
                              snapshot_utc=svc.snapshot_utc)

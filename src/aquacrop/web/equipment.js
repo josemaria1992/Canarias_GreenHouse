@@ -92,7 +92,7 @@
     if (d.version !== it.version && !d.dirty) Object.assign(d, { name: it.name, body: JSON.parse(JSON.stringify(it.body)), version: it.version });
     const b = d.body;
     b.properties = b.properties || {}; b.scaling = b.scaling || {}; b.alarms = b.alarms || [];
-    const mark = () => { d.dirty = true; };
+    const mark = () => { d.dirty = true; d.msg = null; };          // an edit retires the last save's message
     const props = (t ? t.body.properties || [] : []).map(p => {
       const cur = b.properties[p.key];
       let inp;

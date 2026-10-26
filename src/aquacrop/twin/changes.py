@@ -285,7 +285,31 @@ def twin_programs(snap: dict, versions: list[dict]) -> list[dict]:
     return out
 
 
-def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dict], proof=None) -> dict:
+def hydraulics_changes(snap: dict, mine: dict | None) -> dict | None:
+    """The twin's graph, drawing and blocks against the real system's (0.7.0): None when they are the same.
+    `mine` is the twin BlockStore's export. The base revisions are the real system's, as last imported."""
+    if not mine:
+        return None
+    live = snap.get("hydraulics") or {}
+    lt, ld = live.get("topology") or {}, live.get("diagram") or {}
+    t, d = mine["topology"], mine["diagram"]
+    live_blocks = {(b["block_id"], b["digest"]) for b in live.get("blocks", [])}
+    new_blocks = [b for b in mine.get("blocks", []) if b.get("created_by") != "live-snapshot"
+                  and (b["block_id"], b["digest"]) not in live_blocks and b["status"] != "RETIRED"]
+    graph_changed = t["digest"] != lt.get("digest")
+    drawing_changed = d.get("digest") is not None and d["digest"] != ld.get("digest")
+    if not (graph_changed or drawing_changed or new_blocks):
+        return None
+    return {"graph_changed": graph_changed, "drawing_changed": drawing_changed,
+            "topology": {"graph": t["graph"], "digest": t["digest"], "base_rev": lt.get("rev", 0)},
+            "diagram": {"diagram": d["diagram"], "digest": d.get("digest"), "base_rev": ld.get("rev", 0)},
+            "blocks": [{k: b[k] for k in ("block_id", "name", "body", "digest")} for b in new_blocks],
+            "meaning": ("a change of connections: blocks and twin results that relied on the old ones are checked again"
+                        if graph_changed else "the drawing only: the connections are the same")}
+
+
+def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dict], proof=None,
+            virtual_uids: set[str] | None = None, hydraulics: dict | None = None) -> dict:
     """What an export would carry now, with its proof and what is missing. `proof(program_id, version)` gives the
     results that count (0.7.0, F01: the current twin run, in the current equipment/channel/drawing context); the
     others stay visible as history and never count. Without `proof` nothing counts."""
@@ -323,8 +347,12 @@ def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dic
                                                              if p["history_runs"] else "")
                for p in progs if not p["passed"]]
     missing += [f"{p['name']} (v{p['twin_version']}) is not validated in the twin" for p in progs if p["status"] != "VALIDATED"]
-    return {"items": items, "bindings": binds, "programs": progs, "missing": missing,
-            "empty": not (items or binds or progs)}
+    sim = virtual_uids or set()
+    missing += [f"{b['item_id']}.{b['role']} uses {b['point']}, a channel of a simulated module: it exists in the twin only "
+                "and cannot be sent to the real system" for b in binds if b["point"] and b["point"].split(".", 1)[0] in sim]
+    hyd = hydraulics_changes(snap, hydraulics)
+    return {"items": items, "bindings": binds, "programs": progs, "missing": missing, "hydraulics": hyd,
+            "empty": not (items or binds or progs or hyd)}
 
 
 def write_export(feed_dir: Path, pv: dict, *, by: str, note: str, twin_run: str, snapshot_utc: str | None) -> dict:
@@ -337,6 +365,7 @@ def write_export(feed_dir: Path, pv: dict, *, by: str, note: str, twin_run: str,
             raise ChangeRefused(f"{p['program_id']}: its body does not match its digest")
     doc = {"kind": KIND, "by": by, "note": note, "written_utc": _now(), "twin_run": twin_run,
            "base_snapshot_utc": snapshot_utc, "items": pv["items"], "bindings": pv["bindings"],
+           "hydraulics": pv.get("hydraulics"),
            "programs": [{k: v for k, v in p.items() if k != "status"} for p in pv["programs"]],
            "meaning": "logic test on virtual modules with DEMO dynamics; not physical verification"}
     doc["digest"] = package_digest(doc)

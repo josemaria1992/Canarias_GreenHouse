@@ -168,7 +168,7 @@ class BlockStore:
     def export(self) -> dict:
         """For the live snapshot: the current graph, the installation drawing and every block version."""
         return {"topology": self.topology(), "diagram": self.diagram("installation"),
-                "blocks": [{k: b[k] for k in ("block_id", "version", "status", "name", "digest", "body", "validation")}
+                "blocks": [{k: b[k] for k in ("block_id", "version", "status", "name", "digest", "body", "validation", "created_by")}
                            for b in self.blocks()]}
 
     def import_snapshot(self, doc: dict | None, actor: str = "live-snapshot") -> dict:
@@ -303,6 +303,13 @@ class BlockStore:
                                               "version=?", (_now(), block_id, last["version"])), wait=True)
             self.h.event("BLOCK_RETIRED", {"block": f"{block_id}@{last['version']}"}, actor=actor)
             return self.get(block_id, last["version"])
+
+    def drop_version(self, actor: str, block_id: str, version: int, why: str) -> None:
+        """Undo of an applied twin export: that version is retired (kept as history), the previous one stays."""
+        self.get(block_id, version)
+        self.h.submit(lambda c: c.execute("UPDATE blocks SET status='RETIRED', updated_utc=? WHERE block_id=? AND version=?",
+                                          (_now(), block_id, version)), wait=True)
+        self.h.event("BLOCK_VERSION_DROPPED", {"block": f"{block_id}@{version}", "why": why}, actor=actor)
 
     def stale(self, block: dict) -> bool:
         """A VALIDATED block whose graph has changed semantically since: shown, and revalidated before use."""

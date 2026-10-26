@@ -857,6 +857,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                           legacy_layout=lambda: (layouts.current()[0], "the real system's drawing"))
     program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish, blocks=blocks,
                             views=lambda: design_views(equipment))
+    from . import runs as run_routes
+    run_routes.register(app, require, hist, programs)
 
     # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
     from . import operation as operation_routes
@@ -887,7 +889,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return p.can(Perm.EQUIPMENT_EDIT) and p.has_commissioning
 
     from . import changes as changes_routes
-    changes_routes.register(app, require, equipment, programs, feed_dir, state_dir, hist, can_accept_layout, publish)
+    changes_routes.register(app, require, equipment, programs, feed_dir, state_dir, hist, can_accept_layout, publish,
+                            blocks=blocks)
 
     def live_readings() -> dict:
         from ..equipment.definitions import ItemBody, TypeBody

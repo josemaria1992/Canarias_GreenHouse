@@ -1,0 +1,154 @@
+{
+ "profile": "SIMULATED",
+ "config": "installation-48",
+ "physical_verification": false,
+ "passed": 29,
+ "failed": 0,
+ "checks": [
+  {
+   "id": "RBAC-01 admin navigation",
+   "ok": true,
+   "detail": "overview,blocks,twin,hw-add,programs,history,alarms,equipment,hardware,settings"
+  },
+  {
+   "id": "RBAC-01 viewer sees Overview, Programs, Alarms only",
+   "ok": true,
+   "detail": "overview,programs,alarms"
+  },
+  {
+   "id": "RBAC-01 an old deep link explains the role needed",
+   "ok": true,
+   "detail": "blocks link as viewer"
+  },
+  {
+   "id": "RBAC-02 viewer API refused",
+   "ok": true,
+   "detail": "GET /api/topology"
+  },
+  {
+   "id": "RBAC-01 operator navigation",
+   "ok": true,
+   "detail": "overview,blocks,twin,hw-add,programs,history,alarms"
+  },
+  {
+   "id": "EQ-03 typed tank form saved",
+   "ok": true,
+   "detail": "Saved as a new version of this equipment."
+  },
+  {
+   "id": "EQ-03 typed scaling saved",
+   "ok": true,
+   "detail": "{\"flow\":{\"calibration_ref\":null,\"eng_max\":100,\"eng_min\":0,\"provenance\":\"DEMO\",\"raw_max\":20,\"raw_min\":4,\"raw_unit\":\"mA\",\"unit\":\"L/min\"}}"
+  },
+  {
+   "id": "EQ-03 a wrong value is refused beside the button",
+   "ok": true,
+   "detail": "property Rated flow is below the minimum 0"
+  },
+  {
+   "id": "EQ-02 an operator proposes channels (PROPOSED, no output right)",
+   "ok": true,
+   "detail": "meter-1:PROPOSED,pump-1:PROPOSED,valve-1:PROPOSED"
+  },
+  {
+   "id": "RTE-04 symbols dragged with the mouse land where dropped (grid snapped)",
+   "ok": true,
+   "detail": "6/6"
+  },
+  {
+   "id": "RTE-01 five pipes connected by clicking ports, all horizontal/vertical",
+   "ok": true,
+   "detail": "5 edges"
+  },
+  {
+   "id": "RTE-04 every pipe stays horizontal/vertical during the drag preview",
+   "ok": true,
+   "detail": "10 pointer moves checked"
+  },
+  {
+   "id": "RTE-03 a dragged segment moves, stays orthogonal and is pinned",
+   "ok": true,
+   "detail": "3 handles; [[400,400],[460,400],[460,320],[480,320]] -> [[400,400],[440,400],[440,320],[480,320]]; "
+  },
+  {
+   "id": "RTE-09 arrow keys move the selection by grid steps",
+   "ok": true,
+   "detail": "valve y 270; focus hed-canvas; "
+  },
+  {
+   "id": "TOPO-05 graph saved with five explicit edges",
+   "ok": true,
+   "detail": "rev 1"
+  },
+  {
+   "id": "PROG/EQ block validated from the form",
+   "ok": true,
+   "detail": "sector-1 VALIDATED"
+  },
+  {
+   "id": "PROG-01 preview shows the compiled sequence and next starts",
+   "ok": true,
+   "detail": "Sector 1 watering: deliver 10 L, measured, on Mon, Tue, Wed, Thu, Fri, Sat, Sun at 06:00 (Atlantic/Canary); never longer than 5 min in all.Next starts: Tue 2026"
+  },
+  {
+   "id": "PROG-01 program saved and validated with no JSON typed",
+   "ok": true,
+   "detail": "VALIDATED"
+  },
+  {
+   "id": "UX-04 no page-wide horizontal scroll at tablet width (programs)",
+   "ok": true,
+   "detail": "overflow 0px"
+  },
+  {
+   "id": "UX-04 no page-wide horizontal scroll at tablet width (blocks)",
+   "ok": true,
+   "detail": "overflow 0px"
+  },
+  {
+   "id": "UX-04 no page-wide horizontal scroll at tablet width (hw-add)",
+   "ok": true,
+   "detail": "overflow 0px"
+  },
+  {
+   "id": "UX-04 no page-wide horizontal scroll at tablet width (history)",
+   "ok": true,
+   "detail": "overflow 0px"
+  },
+  {
+   "id": "DEP the real system publishes its snapshot for the twin",
+   "ok": true,
+   "detail": "publish"
+  },
+  {
+   "id": "TWIN-02 the program delivers 10 L in the twin from the page",
+   "ok": true,
+   "detail": "{\"op_id\":\"op_e3f2277e1b8342a389260e900f454d8c\",\"program_id\":\"sector-1-am\",\"version\":1,\"origin\":\"MANUAL\",\"state\":\"STOPPING\",\"step\":7,\"on\":[],\"occurrence\":null,\"runtime_s\":37.5,\"remaining_s\":262.5,\"measured_L\":10.083,\"uncertain_L\":0,\"requested_L\":null,\"reason\":\"sequence complete\",\"result\":\"DONE\",\"actor\":\"oper\",\"ended_utc\":\"2026-10-26T12:55:22.500000+00:00\",\"twin_run_id\":\"twinrun_730ad8025be549c4a380ab9e38a99d49\",\"context\":\"6b42ced4ef4376893a6122a25c1fcecf7a623e409f3305bc8f8a05ff3ba7a5c6\",\"context_changed\":false}"
+  },
+  {
+   "id": "TWIN-03 ledger balanced",
+   "ok": true,
+   "detail": "3.126388037344441e-13"
+  },
+  {
+   "id": "TWIN-04 the twin's installation graph shows the imported drawing",
+   "ok": true,
+   "detail": "6 symbols drawn; page errors: []; topology rev 1 with 6 nodes; diagram rev 1 with 6 symbols"
+  },
+  {
+   "id": "DEP twin result recorded on the real system for this version",
+   "ok": true,
+   "detail": "\"twinrun_730ad8025be549c4a380ab9e38a99d49\""
+  },
+  {
+   "id": "HIST the live system's history lists no physical run (the twin's is in the twin)",
+   "ok": true,
+   "detail": "Program runsDownload CSVRecorded as it happened: engine events, audited commands"
+  },
+  {
+   "id": "HIST the twin run is in the twin's Operation History with its result",
+   "ok": true,
+   "detail": "1"
+  }
+ ]
+}

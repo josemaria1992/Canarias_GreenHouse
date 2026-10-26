@@ -34,6 +34,7 @@ from pathlib import Path
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..blocks.store import BlockRefused
 from ..equipment.store import EquipmentRefused
 from ..programs.store import ProgramRefused
 from ..security.auth import Perm, Principal
@@ -124,7 +125,8 @@ class Journal:
         os.replace(tmp, path)
 
 
-def register(app, require, equipment, programs, feed_dir: Path | None, state_dir: Path, hist, can_approve, publish):
+def register(app, require, equipment, programs, feed_dir: Path | None, state_dir: Path, hist, can_approve, publish,
+             blocks=None):
     journal = Journal(Path(state_dir) / "twin-changes")
     apply_lock = threading.Lock()                 # one apply or undo at a time, across every session
 
@@ -182,6 +184,20 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                 out.append(f"{p['name']} has a newer version on the real system (v{cur['version']})")
             elif cur is not None and cur["status"] == "DRAFT":
                 out.append(f"{p['name']} has an unfinished draft on the real system (v{cur['version']})")
+        hyd = pkg.get("hydraulics")
+        if hyd:
+            if blocks is None:
+                out.append("the real system has no installation graph store")
+            else:
+                if blocks.topology()["rev"] != hyd["topology"]["base_rev"]:
+                    out.append("the installation graph changed on the real system since the twin imported it")
+                if blocks.diagram("installation")["rev"] != hyd["diagram"]["base_rev"]:
+                    out.append("the installation drawing changed on the real system since the twin imported it")
+                latest = blocks.latest()
+                for b in hyd["blocks"]:
+                    cur = latest.get(b["block_id"])
+                    if cur is not None and cur["status"] == "DRAFT":
+                        out.append(f"block {b['name']} has an unfinished draft on the real system")
         return out
 
     def describe(pkg: dict) -> dict:
@@ -202,9 +218,14 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                           "body": p["body"], "passed": p["passed"], "failed": p.get("failed", 0),
                           "runs": [{k: r.get(k) for k in ("result", "reason", "ended_utc", "measured_L", "requested_L")}
                                    for r in p.get("runs", [])][-5:]})
+        hyd = pkg.get("hydraulics")
+        hyd_view = None if not hyd else {
+            "graph_changed": hyd["graph_changed"], "drawing_changed": hyd["drawing_changed"], "meaning": hyd["meaning"],
+            "nodes": len(hyd["topology"]["graph"].get("nodes", [])), "edges": len(hyd["topology"]["graph"].get("edges", [])),
+            "blocks": [b["name"] for b in hyd["blocks"]]}
         return {"digest": pkg["digest"], "by": pkg["by"], "note": pkg["note"], "written_utc": pkg["written_utc"],
                 "twin_run": pkg["twin_run"], "items": items, "bindings": pkg["bindings"], "programs": progs,
-                "meaning": pkg.get("meaning"), "conflicts": conflicts(pkg)}
+                "hydraulics": hyd_view, "meaning": pkg.get("meaning"), "conflicts": conflicts(pkg)}
 
     def package(digest: str) -> dict:
         pkg = next((x for x in (read_exports(feed_dir) if feed_dir else []) if x["digest"] == digest), None)
@@ -261,6 +282,21 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                                  "after": b["point"]})
                     equipment.bind(actor, b["item_id"], b["role"], b["point"], note=tag)
                     done(st)
+            hyd = pkg.get("hydraulics")
+            if hyd and blocks is not None:
+                bt, bdg = blocks.topology(), blocks.diagram("installation")
+                st = intent({"op": "hydraulics_saved", "before_graph": bt["graph"], "before_diagram": bdg["diagram"],
+                             "target_digest": hyd["topology"]["digest"]})
+                r = blocks.save_drawing(actor, "installation", hyd["topology"]["graph"], hyd["diagram"]["diagram"],
+                                        expected_topology_rev=bt["rev"], expected_diagram_rev=bdg["rev"], note=tag)
+                done(st, topology_rev=r["topology"]["rev"], diagram_rev=r["diagram"]["rev"])
+                for b in hyd["blocks"]:
+                    cur = blocks.latest().get(b["block_id"])
+                    st = intent({"op": "block_added", "block_id": b["block_id"], "digest": b["digest"],
+                                 "version_before": cur["version"] if cur else None})
+                    v = blocks.save_block(actor, b["block_id"], b["name"], b["body"],
+                                          expected_version=cur["version"] if cur else None)
+                    done(st, version=v["version"])
             for p in pkg["programs"]:
                 cur = latest_program(p["program_id"])
                 st = intent({"op": "program_added", "program_id": p["program_id"], "digest": p["digest"],
@@ -283,7 +319,7 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                                  "base_version": i["base_version"]})
                     it = equipment.retire_item(actor, i["item_id"], tag)
                     done(st, version=it["version"])
-        except (EquipmentRefused, ProgramRefused, ValueError, OSError) as e:
+        except (EquipmentRefused, ProgramRefused, ValueError, OSError, BlockRefused) as e:
             settle(steps)                             # a step that failed midway: was it made or not?
             problems = undo_steps([x for x in steps if x["state"] == "DONE"], actor, f"{tag} failed")
             rec["error"] = str(e)
@@ -330,6 +366,13 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                 made = cur is not None and cur["status"] == "RETIRED" and cur["version"] != s.get("base_version")
                 if made:
                     s["version"] = cur["version"]
+            elif s["op"] == "hydraulics_saved" and blocks is not None:
+                made = blocks.topology()["digest"] == s["target_digest"]
+            elif s["op"] == "block_added" and blocks is not None:
+                cur = blocks.latest().get(s["block_id"])
+                made = cur is not None and cur["digest"] == s["digest"] and cur["version"] != s.get("version_before")
+                if made:
+                    s["version"] = cur["version"]
             s["state"] = "DONE" if made else "NOT_DONE"
             s["settled"] = "checked against the real system after an interruption or failure"
 
@@ -364,6 +407,8 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                     problems.append(f"{s['item_id']} changed after the export was applied")
             elif s["op"] == "bound" and live_point(s["item_id"], s["role"]) != s["after"]:
                 problems.append(f"the channel of {s['item_id']}.{s['role']} changed after the export was applied")
+            elif s["op"] == "hydraulics_saved" and blocks is not None and blocks.topology()["rev"] != s.get("topology_rev"):
+                problems.append("the installation graph changed after the export was applied")
             elif s["op"] == "program_added":
                 rt = active_anywhere(s["program_id"], s["version"])
                 if rt:
@@ -396,8 +441,14 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
                                         expected_version=cur)
                 elif s["op"] == "item_created":
                     equipment.retire_item(actor, s["item_id"], why)
+                elif s["op"] == "hydraulics_saved" and blocks is not None:
+                    bt, bdg = blocks.topology(), blocks.diagram("installation")
+                    blocks.save_drawing(actor, "installation", s["before_graph"], s["before_diagram"],
+                                        expected_topology_rev=bt["rev"], expected_diagram_rev=bdg["rev"], note=why)
+                elif s["op"] == "block_added" and blocks is not None:
+                    blocks.drop_version(actor, s["block_id"], s["version"], why)
                 s["state"] = "UNDONE"
-            except (EquipmentRefused, ProgramRefused, ValueError, OSError) as e:
+            except (EquipmentRefused, ProgramRefused, ValueError, OSError, BlockRefused) as e:
                 problems.append(f"{s['op']} {s.get('item_id') or s.get('program_id')}: {e}")
         return problems
 
@@ -405,8 +456,13 @@ def register(app, require, equipment, programs, feed_dir: Path | None, state_dir
         n = {"create": 0, "update": 0, "retire": 0}
         for i in pkg["items"]:
             n[i["op"]] += 1
+        hyd = pkg.get("hydraulics")
+        h = ""
+        if hyd:
+            h = ("; installation graph changed" if hyd["graph_changed"] else "; installation drawing changed") + \
+                (f"; {len(hyd['blocks'])} block version(s)" if hyd["blocks"] else "")
         return (f"{n['create']} created, {n['update']} changed, {n['retire']} retired equipment; "
-                f"{len(pkg['bindings'])} channel(s); {len(pkg['programs'])} program version(s)")
+                f"{len(pkg['bindings'])} channel(s); {len(pkg['programs'])} program version(s){h}")
 
     @app.post("/api/twin-changes/approve")
     def approve(body: ApproveIn, p: Principal = Depends(require(Perm.OPS_READ))):
