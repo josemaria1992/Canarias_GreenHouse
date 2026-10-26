@@ -6,7 +6,7 @@ checks, browser checks, packaged-release checks, CM4 measurements and owner phys
 Earlier results (0.6.x reviews, CI runs) are not evidence for anything new here.
 
 Environment: Windows 11 desktop, Python 3.12 (`.venv`), Node.js for the router tests, headless Chromium through
-Playwright for the browser journey. Branch `feat/equipment-programs-twin`; the release commit and checksums are in
+Playwright for the browser journey. Branch `feat/operator-upgrade-0.7` (base `feat/equipment-programs-twin` at `ffdc7bd`); the release commit and checksums are in
 "Packaged release" below.
 
 ## Summary
@@ -155,9 +155,12 @@ Playwright for the browser journey. Branch `feat/equipment-programs-twin`; the r
 from a clean worktree of commit `c5ac7cb0f0b03a4afae66cf30dadc1e3bf44cd83`: `aquacrop-0.7.0.zip`, 2264 files, SHA-256
 `fdd274b4e0aef0f84382644363467987cc46e9f2ae1359a3eb26b98262b8730a`. `scripts/verify_release.py` with the
 release's own `runtime/python.exe`: 28 passed, 0 failed. The ZIP carries the documents as they stood at that commit
-(this record without its final numbers).
+(this record without its final numbers). Commit `66ac861` (CI fix: a run's timeline begins at its own start) changed
+`historian/runs.py` after this build, so the ZIP must be rebuilt from the final head before any install.
 
 ## CM4
 
-The installed versions on the bench controller were not read in this session (the remote query was not
-permitted). Nothing was installed, upgraded, restarted or switched on any device.
+Owner-reported: the CM4 runs Raspberry Pi OS Lite 64-bit (arm64). The release carries aarch64 wheelhouses for
+Python 3.11 (Bookworm) and 3.13 (Trixie), so either base is covered; which one is installed, and the installed
+AquaCrop version, were not read in this session (the remote query was not permitted). Nothing was installed,
+upgraded, restarted or switched on any device.
