@@ -177,6 +177,7 @@ def _delivery(batch: int, steps: int = 40):
     s.lock, s.clock, s.twin, s.engine = RLock(), r.clock, r.twin, r.e
     s.items = SimpleNamespace(views=lambda: r._items)
     s.water, s.layout_fn, s._frame = Water(), lambda: ("drawing", doc), lambda: None
+    s.blocks, s.alarms, s.model_error = None, None, None          # 0.7.0 parts this scenario does not use
     s.step_water(0)
     r.twin.step(0)
     r.e.approve_recovery("review", "MANUAL")

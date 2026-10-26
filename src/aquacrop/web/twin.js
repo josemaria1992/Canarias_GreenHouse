@@ -138,7 +138,7 @@
     const run = can("sim_command");
     return h("div", { class: "card" }, h("h2", null, "Equipment"),
       v.items.length ? h("div", { class: "eq-grid" }, v.items.map(it => {
-        const faultSel = h("select", { "aria-label": `Fault for ${it.name}` }, ["", "NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW"].map(f => h("option", { value: f, selected: (it.fault || "") === f }, f || "no fault")));
+        const faultSel = h("select", { "aria-label": `Fault for ${it.name}` }, ["", "NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW", "TRIP"].map(f => h("option", { value: f, selected: (it.fault || "") === f }, f || "no fault")));
         return h("div", { class: "eq-card" + (it.owner ? " eq-busy" : "") },
           h("div", { class: "row" }, icon(it.icon, 32), h("strong", null, it.name), pill(it.behaviour === "NOT_MODELLED" ? "NOT MODELLED" : it.behaviour.toLowerCase(), it.behaviour === "NOT_MODELLED" ? "bad" : "")),
           it.coil !== "NONE" ? h("div", { class: "row" }, led(it.commanded ? "ON" : "OFF", "asked"), led(it.coil, "output"), it.feedback !== "NONE" ? led(it.feedback, "feedback") : null) : h("p", { class: "muted small" }, "input only"),
@@ -218,11 +218,13 @@
       // open editor there is not cut off; the other parts are not redrawn under a field being used
       const D = window.AqTwinDiagram;
       const X = window.AqTwinChanges;
-      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), D.card(), h("div", { id: "t-rest" }), X.card());
+      const Gr = window.AqTwinGraph;                   // 0.7.0: water over the explicit graph
+      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), Gr ? Gr.card() : "", D.card(), h("div", { id: "t-rest" }), X.card());
       const ae = document.activeElement;
       const using = id => ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest("#" + id);
       if (!using("t-top")) $("t-top").replaceChildren(controls(v));
       if (!using("t-rest")) $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
+      if (Gr) Gr.update(v);
       D.update(v);
       X.update(v);
     } catch (e) { /* shown by the next action */ }

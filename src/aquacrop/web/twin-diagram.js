@@ -300,7 +300,7 @@
     const list = (w, xs) => xs.length ? h("li", null, `${w}: ${xs.slice(0, 8).join(", ")}${xs.length > 8 ? ` and ${xs.length - 8} more` : ""}`) : null;
     return h("div", { class: "card" }, h("h3", null, "Layout"),
       h("div", { class: "row" },
-        h("button", { disabled: !ed, onclick: startEdit }, "Edit layout"),
+        h("span", { class: "small muted" }, "Older drawing, kept as a reference: its pipes may be diagonal and are not edited any more. Draw the installation in the Installation graph above."),
         h("button", { class: "ghost small", disabled: !ed, onclick: async () => { if (await call("start", "POST", "api/twin/layout/start-from", { source: "live" }, "the twin now uses the real system's layout")) { await load(); draw(); } } }, "Start again from the real system's layout"),
         h("button", { class: "ghost small", disabled: !ed, onclick: async () => { if (await call("start", "POST", "api/twin/layout/start-from", { source: "default" }, "the twin now uses the standard drawing")) { await load(); draw(); } } }, "Start from the standard drawing"),
         msgEl("start")),
@@ -309,7 +309,7 @@
           h("ul", { class: "small" }, list("added", c.added), list("removed", c.removed), list("moved", c.moved), list("changed", c.changed),
             list("pipes added", c.pipes_added), list("pipes removed", c.pipes_removed), list("pipes changed", c.pipes_changed)),
           h("div", { class: "row" }, note, h("button", { disabled: !ed, onclick: () => call("send", "POST", "api/twin/layout/send", { note: note.value }, "sent: an administrator or an operator with commissioning accepts it on the real dashboard (Overview)") }, "Send to the real system"), msgEl("send"))),
-      h("p", { class: "muted small" }, "The layout is edited in the twin only. The real system draws it after it is accepted there; it changes the drawing, never equipment, channels or programs."));
+      h("p", { class: "muted small" }, "This reference drawing changes nothing of the equipment, channels, programs or the graph's water."));
   }
 
   window.AqTwinDiagram = { card, update };

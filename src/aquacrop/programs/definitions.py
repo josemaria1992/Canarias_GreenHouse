@@ -1,10 +1,17 @@
 """Program bodies: a trigger and an action over equipment items, as validated data.
 
 Triggers
-  MANUAL      started by an authorized user ("run now"), in MANUAL mode only
-  WEEKLY      weekly windows in the site time zone (`schedule.py`)
-  CONDITION   an input condition held for a debounce time, re-armed only after it clears
-  CONTINUOUS  always armed while the program is active (KEEP_BETWEEN), optionally limited to weekly windows
+  MANUAL         started by an authorized user ("run now"), in MANUAL mode only
+  WEEKLY         weekly windows in the site time zone (`schedule.py`), optionally inside a local date range
+  CONDITION      an input condition held for a debounce time, re-armed only after it clears
+  CONTINUOUS     always armed while the program is active (KEEP_BETWEEN), optionally limited to weekly windows
+  WINDOW_REPEAT  (0.7.0) a weekly window in which the action repeats: the next cycle starts `rest_s` after the
+                 previous one ended verified, at most `max_count` cycles; nothing starts after the window's end
+                 and a cycle still running then is stopped through its plan (reported WINDOW_ENDED, not DONE)
+
+Conditions on any program (0.7.0): `permissives` must all hold (for their debounce) when an operation starts;
+`guards` are watched while it runs and any one that holds for its debounce stops it through its plan. A missing,
+stale or bad reading is UNKNOWN: it prevents the start, and stops a running operation.
 
 Actions
   RUN_FOR         one item ON for a bounded duration (or for the window, bounded by the item's max runtime)
@@ -21,7 +28,9 @@ import hashlib
 import json
 from typing import Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from datetime import date
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
 
 from ..equipment.definitions import ID_RE, ItemBody, Operation, Purpose, TypeBody
 from .schedule import written_length_s
@@ -33,10 +42,34 @@ class _M(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
+def _drop_defaults(d: dict, keys: dict) -> dict:
+    """Fields added in 0.7.0 are left out of a body while they hold their default, so the digest of every program
+    written before them stays exactly what it was."""
+    for k, default in keys.items():
+        if k not in d:
+            continue
+        v = d[k]
+        if v == default or (isinstance(default, list) and isinstance(v, (list, tuple)) and not v):
+            del d[k]
+    return d
+
+
 class WeeklyEntry(_M):
     days: tuple[Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"], ...] = Field(min_length=1)
     start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    from_date: date | None = None              # inclusive local start dates of the occurrences (0.7.0)
+    to_date: date | None = None
+
+    @model_validator(mode="after")
+    def _range(self):
+        if self.from_date and self.to_date and self.from_date > self.to_date:
+            raise ValueError("the date range ends before it starts")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        return _drop_defaults(handler(self), {"from_date": None, "to_date": None})
 
 
 class Condition(_M):
@@ -74,7 +107,14 @@ class ContinuousTrigger(_M):
     entries: tuple[WeeklyEntry, ...] = ()            # empty: always armed
 
 
-Trigger = Union[ManualTrigger, WeeklyTrigger, ConditionTrigger, ContinuousTrigger]
+class WindowRepeatTrigger(_M):
+    type: Literal["WINDOW_REPEAT"]
+    entries: tuple[WeeklyEntry, ...] = Field(min_length=1, max_length=7)
+    rest_s: float = Field(gt=0, le=86400)            # after each verified completion
+    max_count: int = Field(ge=1, le=96)
+
+
+Trigger = Union[ManualTrigger, WeeklyTrigger, ConditionTrigger, ContinuousTrigger, WindowRepeatTrigger]
 
 
 class RunFor(_M):
@@ -151,6 +191,14 @@ class ProgramBody(_M):
     action: Action = Field(discriminator="type")
     on_failure: Literal["STOP_AND_ALARM"] = "STOP_AND_ALARM"
     enabled: bool = True
+    permissives: tuple[Condition, ...] = Field(default=(), max_length=8)     # 0.7.0
+    guards: tuple[Condition, ...] = Field(default=(), max_length=8)          # 0.7.0
+    authoring: dict | None = None           # 0.7.0: the form this body was compiled from (programs/authoring.py)
+    basis: Literal["WATERING_AFTER_STARTUP"] | None = None   # what a timed run's duration counts
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        return _drop_defaults(handler(self), {"permissives": [], "guards": [], "authoring": None, "basis": None})
 
     @model_validator(mode="after")
     def _v(self):
@@ -161,6 +209,11 @@ class ProgramBody(_M):
             raise ValueError("a CONTINUOUS trigger is for KEEP_BETWEEN only")
         if a == "RUN_FOR" and self.action.duration_s is None and t != "WEEKLY":
             raise ValueError("RUN_FOR without a duration runs for its weekly window; give a duration otherwise")
+        if t == "WINDOW_REPEAT" and a not in ("SEQUENCE", "RUN_FOR", "DELIVER_VOLUME"):
+            raise ValueError("a repeat inside a window runs a sequence, a timed run or a volume")
+        if self.authoring is not None:
+            from .authoring import WateringForm
+            WateringForm.model_validate(self.authoring)     # a stored form is a valid form
         return self
 
 
@@ -185,6 +238,8 @@ def sensors(p: ProgramBody) -> list[tuple[str, str]]:
     a, t = p.action, p.trigger
     if t.type == "CONDITION":
         out.append((t.when.item, t.when.role))
+    for c in p.permissives + p.guards:
+        out.append((c.item, c.role))
     if a.type == "DELIVER_VOLUME":
         out.append((a.meter, a.meter_role))
     if a.type == "KEEP_BETWEEN":
@@ -272,12 +327,18 @@ def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int]
                     x for x in (", ".join(rd["missing_required"]) and f"no channel for {', '.join(rd['missing_required'])}",
                                 ", ".join(rd["unverified"]) and f"not verified: {', '.join(rd['unverified'])}") if x))
     t = p.trigger
-    if t.type == "CONDITION":
-        it, tb = item(t.when.item)
+    conds = ([("the trigger", t.when)] if t.type == "CONDITION" else []) + \
+        [(f"start condition {i + 1}", c) for i, c in enumerate(p.permissives)] + \
+        [(f"stop condition {i + 1}", c) for i, c in enumerate(p.guards)]
+    for what, c in conds:
+        it, tb = item(c.item)
         if tb is not None:
-            r = next((x for x in tb.roles if x.role == t.when.role), None)
-            if r is not None and (r.signal.value == "ANALOG") != (t.when.op in ("ABOVE", "BELOW")):
-                out.append("the trigger's comparison does not fit its signal (ABOVE/BELOW for analog, IS_ON/IS_OFF for digital)")
+            r = next((x for x in tb.roles if x.role == c.role), None)
+            if r is not None and (r.signal.value == "ANALOG") != (c.op in ("ABOVE", "BELOW")):
+                out.append(f"{what}: the comparison does not fit its signal (above/below for a measurement, "
+                           "is on/is off for an on/off input)")
+            if r is not None and r.purpose == Purpose.COMMAND:
+                out.append(f"{what}: a command output is not independent evidence")
     if t.type == "WEEKLY" and p.action.type == "RUN_FOR" and p.action.duration_s is None:
         longest = max(written_length_s(e.start, e.end) for e in t.entries)
         it, tb = item(p.action.item)

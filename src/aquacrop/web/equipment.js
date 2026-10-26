@@ -29,7 +29,8 @@
       const taken = E.bindings.find(x => x.point === p.point && !(x.item_id === it.item_id && x.role === role.role));
       return h("option", { value: p.point, disabled: !!taken }, p.point + (taken ? ` (${taken.item_id})` : ""));
     });
-    const sel = h("select", { "aria-label": `Channel for ${it.name} ${role.label}`, disabled: !can("io_assign") },
+    const lockedVerified = b && b.status === "VERIFIED" && !can("io_assign");
+    const sel = h("select", { "aria-label": `Channel for ${it.name} ${role.label}`, disabled: !can("equipment_edit") || lockedVerified },
       h("option", { value: "" }, "— choose a channel —"), opts);
     if (b) sel.value = b.point;
     const obs = h("input", { placeholder: "what you saw the device do", maxlength: 300, "aria-label": "Observation" });
@@ -41,7 +42,7 @@
     return h("tr", null,
       h("td", null, role.label, role.required ? "" : h("span", { class: "muted small" }, " (optional)")),
       h("td", null, `${role.direction.toLowerCase()} ${role.signal.toLowerCase()} · ${role.purpose.toLowerCase()}`),
-      h("td", null, sel, " ", h("button", { class: "small", disabled: !can("io_assign"), onclick: () =>
+      h("td", null, sel, " ", h("button", { class: "small", disabled: !can("equipment_edit") || lockedVerified, onclick: () =>
         act("POST", "/api/equipment/bind", { item_id: it.item_id, role: role.role, point: sel.value || null }, sel.value ? "channel proposed" : "channel cleared") },
         sel.value || !b ? "Set" : "Clear")),
       h("td", null, b ? pill(b.status, STATUS_CLS[b.status]) : pill("NO CHANNEL", role.required ? "bad" : "")),
@@ -66,44 +67,108 @@
         r.unscaled.length ? `No scaling: ${r.unscaled.join(", ")}.` : ""].join("")) : null,
       latest && latest.version !== it.type_version ? h("p", { class: "warn small" }, `Type v${latest.version} is active; this item stays on v${it.type_version} until you upgrade it.`,
         " ", h("button", { class: "small", disabled: !can("equipment_edit"), onclick: () => upgrade(it, latest.version) }, "Preview upgrade")) : null,
+      upgradeBox(it),
       props.length ? h("p", { class: "small" }, props.map(p => `${p.label}: ${it.body.properties[p.key] ?? p.default ?? "—"}${p.unit ? " " + p.unit : ""}`).join(" · ")) : null,
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Role", "Signal", "Channel", "State", "Check"].map(x => h("th", null, x)))),
         h("tbody", null, roles.map(role => roleRow(E, it, role, board)))),
       h("p", { class: "muted small" }, "Commanded state, coil readback and independent feedback are shown separately on the twin and bench pages; a missing feedback is UNKNOWN, never OFF."),
-      it.status === "ACTIVE" ? itemDetails(it) : null,
-      it.status === "ACTIVE" && can("equipment_activate") ? h("button", { class: "small ghost", onclick: () => {
-        const why = prompt(`Retire ${it.name}? Its history and records are kept. Reason:`); if (why) act("POST", `/api/equipment/items/${it.item_id}/retire`, { reason: why }, "retired");
-      } }, "Retire") : null);
+      it.status === "ACTIVE" ? itemDetails(it, t) : null,
+      it.status === "ACTIVE" && can("equipment_activate") ? retireRow(it) : null);
+  }
+  function retireRow(it) {
+    const why = h("input", { maxlength: 200, placeholder: "why it is retired", "aria-label": `Reason to retire ${it.name}` });
+    return h("details", null, h("summary", { class: "small" }, `Retire ${it.name}`),
+      h("div", { class: "row" }, why, h("button", { class: "small ghost", onclick: () => {
+        if (why.value.trim().length < 3) { why.focus(); return; }
+        act("POST", `/api/equipment/items/${it.item_id}/retire`, { reason: why.value }, "retired; its history and records are kept");
+      } }, `Retire ${it.name}`)), h("p", { class: "muted small" }, "Retiring keeps the item's history and records; programs that use it must be changed first."));
   }
 
-  function itemDetails(it) {
-    // properties, analog scaling, alarm limits and twin links, as the item's JSON body (validated by the server)
-    const ta = h("textarea", { rows: 10, spellcheck: "false", "aria-label": `Details of ${it.name} (JSON)` });
-    ta.value = JSON.stringify(it.body, null, 2);
-    const name = h("input", { maxlength: 80, value: it.name, "aria-label": "Name" });
-    const save = () => {
-      let body; try { body = JSON.parse(ta.value); } catch (e) { toast("not valid JSON: " + e.message, true); return; }
-      act("POST", "/api/equipment/items", { item_id: it.item_id, name: name.value, type_id: it.type_id, type_version: it.type_version,
-        icon: it.icon, body, expected_version: it.version }, "saved as a new equipment version");
+  // 0.7.0: the item's details as typed fields (no JSON): properties of its type, the scaling and alarm limits of
+  // each measurement. Values the user typed survive the page's refresh; problems come back beside the button.
+  const ED = {};
+  function itemDetails(it, t) {
+    const d = ED[it.item_id] = ED[it.item_id] || { name: it.name, body: JSON.parse(JSON.stringify(it.body)), msg: null, version: it.version };
+    if (d.version !== it.version && !d.dirty) Object.assign(d, { name: it.name, body: JSON.parse(JSON.stringify(it.body)), version: it.version });
+    const b = d.body;
+    b.properties = b.properties || {}; b.scaling = b.scaling || {}; b.alarms = b.alarms || [];
+    const mark = () => { d.dirty = true; };
+    const props = (t ? t.body.properties || [] : []).map(p => {
+      const cur = b.properties[p.key];
+      let inp;
+      if (p.kind === "CHOICE") inp = h("select", { "aria-label": p.label, onchange: ev => { b.properties[p.key] = ev.target.value; mark(); } },
+        h("option", { value: "" }, "— not set —"), p.choices.map(c => h("option", { value: c, selected: cur === c ? true : null }, c)));
+      else if (p.kind === "BOOLEAN") inp = h("input", { type: "checkbox", checked: cur ? true : null, "aria-label": p.label, onchange: ev => { b.properties[p.key] = ev.target.checked; mark(); } });
+      else if (p.kind === "TEXT") inp = h("input", { maxlength: 200, value: cur == null ? "" : cur, "aria-label": p.label, oninput: ev => { b.properties[p.key] = ev.target.value; mark(); } });
+      else inp = h("input", { type: "number", step: p.kind === "INTEGER" ? 1 : "any", min: p.min == null ? null : p.min, max: p.max == null ? null : p.max, class: "w-num",
+        value: cur == null ? "" : cur, "aria-label": p.label,
+        oninput: ev => { if (ev.target.value === "") delete b.properties[p.key]; else b.properties[p.key] = Number(ev.target.value); mark(); } });
+      return h("label", null, `${p.label}${p.unit ? " (" + p.unit + ")" : ""}${p.required ? " *" : ""}`, inp);
+    });
+    const meas = t ? t.body.roles.filter(r => r.purpose === "MEASUREMENT") : [];
+    const scaleRows = meas.map(r => {
+      const sc = b.scaling[r.role];
+      const set = (k, v) => { b.scaling[r.role] = Object.assign(b.scaling[r.role] || { raw_min: 4, raw_max: 20, raw_unit: "mA", eng_min: 0, eng_max: 100, unit: r.unit || "", provenance: "PROPOSED" }, { [k]: v }); mark(); };
+      const num = (k, label) => h("input", { type: "number", step: "any", class: "w-num", value: sc && sc[k] != null ? sc[k] : "", "aria-label": `${r.label} ${label}`, oninput: ev => set(k, Number(ev.target.value)) });
+      return h("tr", null, h("td", null, r.label),
+        h("td", null, sc ? null : h("span", { class: "muted small" }, "not scaled "), num("raw_min", "signal at minimum"), " – ", num("raw_max", "signal at maximum"), " ",
+          h("select", { "aria-label": `${r.label} signal unit`, onchange: ev => set("raw_unit", ev.target.value) }, ["mA", "V"].map(u => h("option", { value: u, selected: sc && sc.raw_unit === u ? true : null }, u)))),
+        h("td", null, num("eng_min", "value at minimum"), " – ", num("eng_max", "value at maximum"), " ",
+          h("input", { maxlength: 16, class: "w-num", value: sc ? sc.unit : (r.unit || ""), "aria-label": `${r.label} unit`, oninput: ev => set("unit", ev.target.value) })),
+        h("td", null, h("select", { "aria-label": `${r.label} provenance`, onchange: ev => set("provenance", ev.target.value) },
+          ["PROPOSED", "DATASHEET", "CALIBRATED", "DEMO"].map(v => h("option", { value: v, selected: sc && sc.provenance === v ? true : null }, v.toLowerCase()))),
+          sc && sc.provenance === "CALIBRATED" ? h("input", { maxlength: 120, placeholder: "calibration record", value: sc.calibration_ref || "", "aria-label": `${r.label} calibration record`, oninput: ev => set("calibration_ref", ev.target.value) }) : null),
+        h("td", null, sc ? h("button", { class: "small ghost", onclick: () => { delete b.scaling[r.role]; mark(); U.refresh(); } }, "Remove") : null));
+    });
+    const alarmRows = meas.map(r => {
+      let a = b.alarms.find(x => x.role === r.role);
+      const ensure = () => { if (!a) { a = { role: r.role, low: null, high: null, deadband: 0, delay_s: 0 }; b.alarms.push(a); } return a; };
+      const num = (k, label) => h("input", { type: "number", step: "any", min: k === "low" || k === "high" ? null : 0, class: "w-num", value: a && a[k] != null ? a[k] : "", "aria-label": `${r.label} ${label}`,
+        oninput: ev => { ensure()[k] = ev.target.value === "" ? (k === "low" || k === "high" ? null : 0) : Number(ev.target.value); mark(); } });
+      return h("tr", null, h("td", null, r.label), h("td", null, num("low", "low alarm")), h("td", null, num("high", "high alarm")),
+        h("td", null, num("deadband", "deadband")), h("td", null, num("delay_s", "delay seconds")),
+        h("td", null, a ? h("button", { class: "small ghost", onclick: () => { b.alarms = b.alarms.filter(x => x !== a); mark(); U.refresh(); } }, "Remove") : null));
+    });
+    const save = async () => {
+      b.alarms = b.alarms.filter(x => x.low != null || x.high != null);
+      try {
+        await api("POST", "/api/equipment/items", { item_id: it.item_id, name: d.name, type_id: it.type_id, type_version: it.type_version,
+          icon: it.icon, body: b, expected_version: it.version });
+        d.msg = { text: "Saved as a new version of this equipment.", bad: false }; d.dirty = false;
+      } catch (e) { d.msg = { text: String(e.message || e), bad: true }; }
+      U.refresh();
     };
-    return h("details", null, h("summary", { class: "small" }, "Edit details (properties, scaling, alarm limits, twin links)"),
-      h("p", { class: "muted small" }, 'Examples: "properties": {"rated_flow_l_min": 20} · "scaling": {"flow": {"raw_min": 4, "raw_max": 20, "raw_unit": "mA", "eng_min": 0, "eng_max": 100, "unit": "L/min", "provenance": "DEMO"}} · "sim_links": {"flow_item": "flow-1"} (a pump drives that flow meter in the twin)'),
-      h("label", null, "Name ", name), ta,
-      h("button", { class: "small", disabled: !can("equipment_edit"), onclick: save }, "Save details"));
+    return h("details", { "data-item-details": it.item_id }, h("summary", { class: "small" }, `Details of ${it.name}: name, properties, scaling, alarm limits`),
+      h("div", { class: "row wrap" }, h("label", null, "Name", h("input", { maxlength: 80, value: d.name, "aria-label": `Name of ${it.item_id}`, oninput: ev => { d.name = ev.target.value; mark(); } })), props),
+      meas.length ? [h("h4", null, "Scaling (the module's signal to the engineering value)"),
+        h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Reading", "Signal range", "Value range and unit", "Where it comes from", ""].map(x => h("th", null, x)))), h("tbody", null, scaleRows)),
+        h("h4", null, "Alarm limits"),
+        h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Reading", "Low", "High", "Deadband", "Delay (s)", ""].map(x => h("th", null, x)))), h("tbody", null, alarmRows)),
+        h("p", { class: "muted small" }, "A limit raises an alarm after its delay and clears once the value is back inside by the deadband. A reading that is missing or stale neither raises nor clears it.")] : null,
+      h("div", { class: "row" }, h("button", { class: "small", disabled: !can("equipment_edit"), onclick: save }, "Save details"),
+        d.msg ? h("span", { class: "inline-msg " + (d.msg.bad ? "bad" : "ok"), role: "status" }, d.msg.text) : null));
   }
 
+  const UP = {};
   async function upgrade(it, to) {
-    const p = await api("GET", `/api/equipment/items/${it.item_id}/upgrade?to_version=${to}`).catch(e => { toast(String(e.message), true); return null; });
-    if (!p) return;
-    const lines = [`Upgrade ${it.name} from type v${p.from} to v${p.to}?`,
-      p.roles_added.length ? `Roles added: ${p.roles_added.join(", ")}` : null,
+    const p = await api("GET", `/api/equipment/items/${it.item_id}/upgrade?to_version=${to}`).catch(e => ({ error: String(e.message || e) }));
+    UP[it.item_id] = { p, to };
+    U.refresh();
+  }
+  function upgradeBox(it) {
+    const u = UP[it.item_id]; if (!u) return null;
+    const p = u.p;
+    if (p.error) return h("p", { class: "bad small" }, p.error);
+    const lines = [p.roles_added.length ? `Roles added: ${p.roles_added.join(", ")}` : null,
       p.roles_removed.length ? `Roles removed: ${p.roles_removed.join(", ")}` : null,
       p.bindings_cleared.length ? `Channels cleared: ${p.bindings_cleared.join(", ")}` : null,
       p.bindings_back_to_proposed.length ? `Verify again: ${p.bindings_back_to_proposed.join(", ")}` : null,
-      p.programs.length ? `Programs to revalidate: ${p.programs.join(", ")}` : null,
-      p.item_issues.length ? `Problems: ${p.item_issues.join("; ")}` : null].filter(Boolean);
-    if (p.item_issues.length) { alert(lines.join("\n")); return; }
-    if (confirm(lines.join("\n"))) act("POST", `/api/equipment/items/${it.item_id}/upgrade`, { to_version: p.to, expected_version: it.version }, "upgraded");
+      p.programs.length ? `Programs to revalidate: ${p.programs.join(", ")}` : null].filter(Boolean);
+    return h("div", { class: "confirm", role: "group", "aria-label": `Upgrade ${it.name}` },
+      h("p", null, h("strong", null, `Upgrade ${it.name} from type v${p.from} to v${p.to}?`)), h("ul", { class: "small" }, lines.map(x => h("li", null, x))),
+      p.item_issues.length ? h("p", { class: "bad small" }, `Not possible: ${p.item_issues.join("; ")}`) : null,
+      h("div", { class: "row" }, h("button", { class: "ghost small", onclick: () => { delete UP[it.item_id]; U.refresh(); } }, "Cancel"),
+        p.item_issues.length ? null : h("button", { class: "small", onclick: () => { delete UP[it.item_id]; act("POST", `/api/equipment/items/${it.item_id}/upgrade`, { to_version: p.to, expected_version: it.version }, "upgraded"); } }, "Upgrade")));
   }
 
   function newItemCard(E) {

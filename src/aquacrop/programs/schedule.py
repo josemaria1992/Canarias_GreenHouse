@@ -6,6 +6,8 @@ Owner policy (24 October 2026: "if there is no watering, plants die; make sure t
   starts at the first valid local minute after the gap, 03:00, and keeps its full written length.
 * A start time that occurs twice on the day clocks go back (02:00-03:00 on the last Sunday of October) starts
   once, at the first occurrence (fold 0). Its end follows from the length, not from the second 02:xx.
+* A date range (0.7.0) belongs to the occurrence's local start date, both ends inclusive: an overnight window that
+  starts on the last eligible date still runs to its end.
 * A window's length is its written wall-clock length: 01:30-02:30 lasts 60 minutes on every day, including
   both change days. An overnight window (end at or before start) ends on the next local day.
 * Each window of each day has one occurrence key: `<program>@<version>:<local start date>:<entry>`. The engine
@@ -79,6 +81,11 @@ def windows(program_ref: str, entries: list[dict], tz_name: str, start_day: date
         dow = DAYS[d.weekday()]
         for i, e in enumerate(entries):
             if dow not in e["days"]:
+                continue
+            lo, hi = e.get("from_date"), e.get("to_date")
+            if lo is not None and d < (lo if isinstance(lo, date) else date.fromisoformat(lo)):
+                continue
+            if hi is not None and d > (hi if isinstance(hi, date) else date.fromisoformat(hi)):
                 continue
             s_utc, shifted = resolve_local(d, e["start"], tz)
             length = written_length_s(e["start"], e["end"])      # kept in full from a shifted start

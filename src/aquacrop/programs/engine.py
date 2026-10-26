@@ -25,6 +25,11 @@ Rules that the tests hold it to:
   later ON steps of a sequence, and the usage behind them survives a restart (0.7.0, F02).
 * A FAULT input that reads fault, or that is required and unknown, prevents a start and the re-arm after a
   restart; during a run it stops the operation and holds a persistent EQUIPMENT_FAULT alarm (0.7.0, F03).
+* Start conditions (permissives) must hold for their debounce when an operation starts; UNKNOWN prevents it. Stop
+  conditions (guards) stop a running operation through its plan when one holds for its debounce; UNKNOWN stops
+  it too. A stop always wins over a start in the same tick (0.7.0).
+* A repeat inside a window starts its next cycle only after the previous one ended verified plus the rest time,
+  never after the window's end; a cycle still running at the end is stopped and reported WINDOW_ENDED (0.7.0).
 """
 from __future__ import annotations
 
@@ -107,6 +112,7 @@ class Op:
     last_rate: tuple[datetime, float] | None = None
     last_flow_ok_mono: float | None = None
     step_base_L: float = 0.0
+    guard_since: dict = field(default_factory=dict)  # stop condition index -> mono since it holds
     reason: str | None = None
     result: str | None = None
     stop_since: float | None = None
@@ -155,6 +161,8 @@ class Engine:
         self.last_tick_utc: datetime | None = None
         self._pending_stop: str | None = None
         self._faults: dict[str, str] = {}        # item -> fault inputs while its EQUIPMENT_FAULT alarm is raised
+        self._perm_since: dict[tuple, float | None] = {}   # (program, start condition) -> mono since it holds
+        self._rep: dict[str, dict] = {}          # repeat window key -> {"n": cycles requested, "last_end": mono}
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> dict:
@@ -313,10 +321,13 @@ class Engine:
     def _skip_open_windows(self, at: datetime, why: str) -> None:
         for pid, (ver, body) in self.programs().items():
             t = body.trigger
-            if t.type in ("WEEKLY",) and body.enabled:
+            if t.type in ("WEEKLY", "WINDOW_REPEAT") and body.enabled:
                 for w in sc.due(f"{pid}@{ver}", [e.model_dump() for e in t.entries], self.tz, at):
-                    if self.store.occurrence_claim(w.key, pid, ver, w.start_utc, "MISSED", {"why": why}):
-                        self.event("PROGRAM_OCCURRENCE_MISSED", {"key": w.key, "why": why}, "system")
+                    key = w.key if t.type == "WEEKLY" else f"{w.key}#0"
+                    if t.type == "WINDOW_REPEAT":
+                        self._rep[w.key] = {"n": t.max_count, "last_end": None}      # the whole window is skipped
+                    if self.store.occurrence_claim(key, pid, ver, w.start_utc, "MISSED", {"why": why}):
+                        self.event("PROGRAM_OCCURRENCE_MISSED", {"key": key, "why": why}, "system")
 
     def approve_recovery(self, actor: str, target: str) -> dict:
         """The authorized user's re-arm after a restart. Refused while any check fails."""
@@ -456,15 +467,17 @@ class Engine:
                            "system")
             if self.last_tick_utc is not None and now_utc > self.last_tick_utc + timedelta(minutes=5) and self.mode == "AUTO":
                 for pid, (ver, body) in self.programs().items():
-                    if body.trigger.type == "WEEKLY":
+                    if body.trigger.type in ("WEEKLY", "WINDOW_REPEAT"):
                         for w in sc.ended_between(f"{pid}@{ver}", [e.model_dump() for e in body.trigger.entries],
                                                   self.tz, self.last_tick_utc, now_utc):
-                            if self.store.occurrence_claim(w.key, pid, ver, w.start_utc, "MISSED",
+                            key = w.key if body.trigger.type == "WEEKLY" else f"{w.key}#0"
+                            if self.store.occurrence_claim(key, pid, ver, w.start_utc, "MISSED",
                                                            {"why": "the clock passed the whole window"}):
-                                self.event("PROGRAM_OCCURRENCE_MISSED", {"key": w.key, "why": "clock jump"}, "system")
+                                self.event("PROGRAM_OCCURRENCE_MISSED", {"key": key, "why": "clock jump"}, "system")
             self.last_tick_utc = now_utc
             self._items = self.resolve()
             self._faults_tick()
+            self._permissives_tick()
             if self._pending_stop is not None:
                 why, self._pending_stop = self._pending_stop, None
                 for o in list(self.ops.values()):
@@ -519,6 +532,26 @@ class Engine:
                 self._condition(pid, ver, body, now_utc)
             elif t.type == "CONTINUOUS":
                 self._keep_between(pid, ver, body, now_utc)
+            elif t.type == "WINDOW_REPEAT":
+                self._repeat(pid, ver, body, now_utc)
+
+    def _repeat(self, pid, ver, body, now_utc) -> None:
+        t = body.trigger
+        for w in sc.due(f"{pid}@{ver}", [e.model_dump() for e in t.entries], self.tz, now_utc):
+            if self.auto_since_utc and w.start_utc < self.auto_since_utc:
+                continue                            # already marked MISSED when AUTO began
+            st = self._rep.setdefault(w.key, {"n": 0, "last_end": None})
+            if st["n"] >= t.max_count:
+                continue
+            if any(o.program_id == pid for o in self.ops.values()):
+                continue                            # the current cycle runs; the rest starts after it ends
+            if any(c["waiting"]["program_id"] == pid for c in self.conflicts.values()):
+                continue
+            if st["n"] and (st["last_end"] is None or self.clock.mono() - st["last_end"] < t.rest_s):
+                continue
+            key = f"{w.key}#{st['n']}"
+            st["n"] += 1
+            self._request(pid, ver, body, key, w.start_utc, w.end_utc)
 
     def _request(self, pid, ver, body, key, start_utc, end_utc) -> None:
         if any(o.occurrence_key == key for o in self.ops.values()):
@@ -624,6 +657,10 @@ class Engine:
                     self.store.occurrence_update(key, "FAILED", outcome=why)
                 raise Refused(why)
         if (why := self._limit_refusal(body, need)) is not None:
+            if key:
+                self.store.occurrence_update(key, "FAILED", outcome=why)
+            raise Refused(why)
+        if (why := self._permissive_refusal(pid, body)) is not None:
             if key:
                 self.store.occurrence_update(key, "FAILED", outcome=why)
             raise Refused(why)
@@ -767,6 +804,62 @@ class Engine:
             return f"{asked:g} L is above the equipment's maximum volume {cap:g} L"
         return None
 
+    # ------------------------------------------------------------------ start and stop conditions
+    def _permissives_tick(self) -> None:
+        """How long each active program's start conditions have held (UNKNOWN and FALSE reset it)."""
+        live = set()
+        for pid, (ver, body) in self.programs().items():
+            for i, c in enumerate(body.permissives):
+                k = (pid, i)
+                live.add(k)
+                v = self._cond_holds(c) if c.item in self._items else None
+                if v is True:
+                    self._perm_since[k] = self._perm_since.get(k) or self.clock.mono()
+                else:
+                    self._perm_since[k] = None
+        for k in [k for k in self._perm_since if k not in live]:
+            del self._perm_since[k]
+
+    def _permissive_refusal(self, pid: str, body: ProgramBody) -> str | None:
+        mono = self.clock.mono()
+        for i, c in enumerate(body.permissives):
+            it = self._items.get(c.item)
+            v = self._cond_holds(c) if it is not None else None
+            name = f"{it.name if it else c.item} {c.role}"
+            if v is None:
+                return f"start condition {i + 1}: {name} is UNKNOWN (missing, stale or bad): not started"
+            if v is False:
+                return f"start condition {i + 1} does not hold: {name} {c.op.lower().replace('_', ' ')}" \
+                       f"{'' if c.value is None else ' ' + format(c.value, 'g')} is not true"
+            since = self._perm_since.get((pid, i))
+            if c.debounce_s and (since is None or mono - since < c.debounce_s):
+                return f"start condition {i + 1} has not held for {c.debounce_s:g} s yet"
+        return None
+
+    def _guards(self, op: Op) -> bool:
+        """True when a stop condition stopped the operation now."""
+        mono = self.clock.mono()
+        for i, g in enumerate(op.body.guards):
+            it = self._items.get(g.item)
+            v = self._cond_holds(g) if it is not None else None
+            name = f"{it.name if it else g.item} {g.role}"
+            if v is None:
+                self.alarm("PROGRAM_GUARD", op.program_id, True, {"op_id": op.op_id, "why": f"{name} UNKNOWN"})
+                self._fail(op, f"stop condition {i + 1}: {name} is UNKNOWN (missing, stale or bad)")
+                return True
+            if v is False:
+                op.guard_since.pop(i, None)
+                continue
+            since = op.guard_since.setdefault(i, mono)
+            if mono - since >= g.debounce_s:
+                why = (f"stop condition {i + 1}: {name} {g.op.lower().replace('_', ' ')}"
+                       f"{'' if g.value is None else ' ' + format(g.value, 'g')} for {g.debounce_s:g} s")
+                self.alarm("PROGRAM_GUARD", op.program_id, True, {"op_id": op.op_id, "why": why})
+                self.event("PROGRAM_GUARD_STOP", {"op_id": op.op_id, "why": why}, "system")
+                self._begin_stop(op, why, result="GUARD_STOPPED")
+                return True
+        return False
+
     def _held(self, op: Op, iid: str) -> ItemView | None:
         """The channels an item had when this operation switched it ON: a binding changed or cleared while it runs
         must not redirect or drop the OFF that the original output still needs."""
@@ -860,6 +953,11 @@ class Engine:
                                               "requested_L": op.requested_L})
         if op.body.action.type == "KEEP_BETWEEN":
             self._keep.setdefault(op.program_id, {"since": None, "last_end": None, "n": 0})["last_end"] = self.clock.mono()
+        if op.body.trigger.type == "WINDOW_REPEAT" and op.occurrence_key and "#" in op.occurrence_key:
+            st = self._rep.setdefault(op.occurrence_key.rsplit("#", 1)[0], {"n": 0, "last_end": None})
+            st["last_end"] = self.clock.mono()
+            if res != "DONE":                         # a cycle that did not complete ends the window's repeats
+                st["n"] = op.body.trigger.max_count
         self.event("PROGRAM_OP_ENDED", rec, "system")
 
     def _advance(self, op: Op) -> None:
@@ -875,8 +973,14 @@ class Engine:
                 self._begin_stop(op, "maximum runtime reached", result="RUNTIME_GUARD")
             return
         a = op.body.action
-        if op.window_end_utc is not None and a.type in ("RUN_FOR", "KEEP_BETWEEN") and self.clock.utc() >= op.window_end_utc:
+        if op.window_end_utc is not None and a.type in ("RUN_FOR", "KEEP_BETWEEN") and self.clock.utc() >= op.window_end_utc \
+                and op.body.trigger.type != "WINDOW_REPEAT":
             self._begin_stop(op, "window ended", result="DONE")
+            return
+        if op.body.trigger.type == "WINDOW_REPEAT" and op.window_end_utc is not None and self.clock.utc() >= op.window_end_utc:
+            self._begin_stop(op, "the window ended before this cycle completed", result="WINDOW_ENDED")
+            return
+        if self._guards(op):
             return
         for iid in list(op.on):                      # a fault input on running equipment stops the operation
             held = self._held(op, iid)

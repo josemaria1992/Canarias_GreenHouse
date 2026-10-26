@@ -186,7 +186,7 @@
   }
   // 0.7.0 role navigation (ADR-0023): exactly the pages of the role. The server refuses the rest anyway.
   const VIEW_NAV = { overview: "overview", blocks: "blocks", twin: "twin", "hw-add": "hw-add", programs: "programs",
-    history: "history", alarms: "alarms", equipment: "equipment", "equipment-types": "equipment", operation: "programs",
+    history: "history", alarms: "alarms", equipment: "blocks", "equipment-types": "equipment", operation: "programs",
     io: "hardware", board: "hardware", discovery: "hw-add", control: "hardware", settings: "settings", start: "settings" };
   function applyNav() {
     document.querySelectorAll("#nav [data-nav]").forEach(a => {

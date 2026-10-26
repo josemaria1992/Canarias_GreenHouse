@@ -57,6 +57,11 @@ class TicketIn(_B):
     ticket: str = Field(max_length=512)
 
 
+class GraphLevelIn(_B):
+    node: str = Field(max_length=48)
+    litres: float = Field(ge=0, le=1e7)
+
+
 class LayoutIn(_B):
     layout: dict
 
@@ -483,6 +488,29 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             _lay_cache.update(mt=mt, digest=layout.digest(lay), doc=layout.canonical(lay))
         return _lay_cache["digest"], _lay_cache["doc"]
     svc.layout_fn = layout_now
+
+    # ------------------------------------------------------------------ blocks and the explicit graph (0.7.0)
+    from ..blocks.store import BlockStore
+    from ..equipment.views import views_hydraulic
+    from . import blocks as block_routes
+    svc.blocks = BlockStore(hist, items=lambda: views_hydraulic(svc.items.views()))
+    app.state.blocks = svc.blocks
+    block_routes.register(app, require, svc.blocks, legacy_layout=lambda: (draft()[0], draft()[1]))
+
+    @app.post("/api/twin/graph/level")
+    def graph_level(body: GraphLevelIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
+        """A tank's water in the graph model, as a recorded mass adjustment of this run (0.7.0)."""
+        from ..twin.graph_water import params_from
+        with svc.lock:
+            g = svc.graph()
+            if g is None:
+                raise HTTPException(409, "this twin has no installation graph yet")
+            try:
+                svc.gwater.set_level(body.node, body.litres, params_from(g, svc.items.views()), f"set by {p.username}")
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+        hist.event("TWIN_GRAPH_LEVEL", {"tank": body.node, "litres": body.litres, "run_id": svc.run_id}, actor=p.username)
+        return {"ok": True}
 
     @app.post("/api/twin/water/level")
     def water_level(body: WaterLevelIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):

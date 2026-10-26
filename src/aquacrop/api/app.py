@@ -817,9 +817,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         if feed_dir is None:
             return None
         try:
+            blk = getattr(app.state, "blocks", None)
             return twin_feed.publish_snapshot(feed_dir, cfg=cfg, equipment=equipment, programs=programs, hist=hist,
                                               software_version=__version__,
-                                              layout=layout_mod.canonical(layouts.current()[0]))
+                                              layout=layout_mod.canonical(layouts.current()[0]),
+                                              hydraulics=blk.export() if blk is not None else None)
         except OSError as e:
             hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
             return None
@@ -830,7 +832,31 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     if feed_dir is not None:
         with contextlib.suppress(OSError):
             handoff_key = twin_feed.write_handoff_key(feed_dir)
-    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
+    # ------------------------------------------------------------------ blocks and the hydraulic graph (0.7.0)
+    from ..blocks.store import BlockStore
+    from ..equipment.views import design_views, hydraulic_items
+    from . import blocks as block_routes
+    blocks = BlockStore(hist, items=lambda: hydraulic_items(equipment))
+    app.state.blocks = blocks
+    if not is_sim:                                   # item alarm limits on the real readings (0.7.0, ALM-01)
+        import time as _time
+        from ..equipment.views import limit_inputs
+        _lim: dict = {"t": -1e9, "views": {}}
+
+        def item_limits():
+            now = _time.monotonic()
+            if now - _lim["t"] > 5:                  # the item records are re-read every 5 s, not every poll
+                _lim["views"], _lim["t"] = design_views(equipment, verified_only=True), now
+            return limit_inputs(_lim["views"], svc.samples, datetime.now(timezone.utc))
+        svc.item_limits = item_limits
+
+    def block_dependents(block_id: str) -> list[str]:
+        return sorted({v["program_id"] for v in programs.versions() if v["status"] != "RETIRED"
+                       and (v["body"].get("authoring") or {}).get("block_id") == block_id})
+    block_routes.register(app, require, blocks, dependents=block_dependents,
+                          legacy_layout=lambda: (layouts.current()[0], "the real system's drawing"))
+    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish, blocks=blocks,
+                            views=lambda: design_views(equipment))
 
     # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
     from . import operation as operation_routes

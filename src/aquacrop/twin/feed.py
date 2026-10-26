@@ -45,7 +45,7 @@ def _atomic(path: Path, doc: dict) -> None:
 
 
 def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software_version: str,
-                     layout: dict | None = None) -> dict:
+                     layout: dict | None = None, hydraulics: dict | None = None) -> dict:
     users = [dict(r) for r in hist.query("SELECT username, password_hash, role, commissioning, disabled, "
                                          "must_change_password FROM users")]
     doc = {"kind": KIND, "software_version": software_version, "written_utc": datetime.now(timezone.utc).isoformat(),
@@ -55,7 +55,7 @@ def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software
                         for v in equipment.bindings().values()],
            "programs": [{k: v[k] for k in ("program_id", "version", "status", "name", "digest", "body")}
                         for v in programs.versions()],
-           "users": users, "layout": layout}
+           "users": users, "layout": layout, "hydraulics": hydraulics}     # 0.7.0: graph, drawing and blocks
     _atomic(Path(feed_dir) / SNAPSHOT, doc)
     hist.event("TWIN_SNAPSHOT_PUBLISHED", {"config_version": cfg.config_version, "items": len(doc["equipment"]["items"]),
                                            "programs": len(doc["programs"]), "users": len(users)}, actor="system")

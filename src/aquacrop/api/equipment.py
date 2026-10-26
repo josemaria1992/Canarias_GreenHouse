@@ -141,7 +141,12 @@ def register(app, require, store, samples, edges) -> None:
             refused(e)
 
     @app.post("/api/equipment/bind")
-    def bind(body: BindIn, p: Principal = Depends(require(Perm.IO_ASSIGN))):
+    def bind(body: BindIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        # 0.7.0 (ADR-0023): any operator proposes a channel (PROPOSED: no output right, not ready for a physical run);
+        # replacing or clearing a VERIFIED channel is wiring work and needs commissioning
+        cur = store.bindings(body.item_id).get(body.role)
+        if not p.can(Perm.IO_ASSIGN) and cur is not None and cur["status"] == "VERIFIED":
+            raise HTTPException(403, "this channel is verified at the bench: changing it needs commissioning")
         try:
             return store.bind(p.username, body.item_id, body.role, body.point or None, body.note)
         except EquipmentRefused as e:

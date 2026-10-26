@@ -30,6 +30,7 @@ from ..programs.definitions import digest as program_digest, parse
 from ..programs.engine import Clock, Engine, ItemView
 from ..programs.store import ProgramStore, SqlEngineStore
 from .equipment_twin import EquipmentTwin, SimClock
+from .graph_water import MODEL as GRAPH_MODEL, GraphWater, ModelError, params_from
 from .water import Water
 from . import feed
 
@@ -113,9 +114,18 @@ class EquipmentTwinService:
         self.frames: deque[dict] = deque(maxlen=FRAMES)
         self.water = Water()                      # 0.6.4: water along the drawing's pipes
         self.layout_fn = None                     # () -> (digest, layout doc), set by the app
+        self.blocks = None                        # BlockStore of the twin (0.7.0), set by the app
+        self.gwater = GraphWater()                # 0.7.0: water over the explicit graph, when the twin has one
+        self.model_error: str | None = None
         self.loop_error: str | None = None
         self._op_context: dict[str, str] = {}     # op -> the context digest it started in
         self.engine = self._engine()
+        self.alarms = self._alarm_engine()        # 0.7.0: item alarm limits evaluated in the twin as on the real system
+
+    def _alarm_engine(self):
+        from ..control.alarms import AlarmEngine
+        return AlarmEngine(self.cfg, emit=lambda kind, payload: self.hist.event(
+            "TWIN_" + kind, payload | {"run_id": self.run_id}, actor="system"))
 
     @property
     def runtime_id(self) -> str:
@@ -167,6 +177,7 @@ class EquipmentTwinService:
             if self.changes is not None:
                 self.changes.reconcile(snap)         # what the real system now has is no longer a change
             self.items.load(self.changes.overlay(snap) if self.changes is not None else snap)
+            hyd = self.blocks.import_snapshot(snap.get("hydraulics")) if self.blocks is not None else None
             rebuilt = False
             if f"{snap['config_version']}-twin" != self.cfg.config_version:
                 self._rebuild(snap["config"], actor)  # modules changed on the real system: a controlled reset
@@ -195,7 +206,8 @@ class EquipmentTwinService:
                 imported += 1
             self.snapshot_utc = snap["written_utc"]
             self.hist.event("TWIN_SNAPSHOT_IMPORTED", {"written_utc": snap["written_utc"], "items": len(self.items.items),
-                                                       "programs_new": imported, "config_rebuilt": rebuilt}, actor=actor)
+                                                       "programs_new": imported, "config_rebuilt": rebuilt,
+                                                       "hydraulics": hyd}, actor=actor)
             return {"written_utc": snap["written_utc"], "items": len(self.items.items), "programs_new": imported,
                     "config_rebuilt": rebuilt}
 
@@ -270,6 +282,9 @@ class EquipmentTwinService:
             self.engine.start()
             self.frames.clear()
             self.water.reset()
+            self.gwater.reset()
+            self.alarms = self._alarm_engine()
+            self.model_error = None
             self._frame()
             self.hist.event("TWIN_RESET", {"start_utc": self.clock.start_utc.isoformat(), "run_id": self.run_id},
                             actor=actor)
@@ -291,13 +306,44 @@ class EquipmentTwinService:
         if done:
             with self.lock:
                 self.water.publish()                  # the page's picture: once per batch
+                if self.alarms is not None:
+                    from ..equipment.views import limit_inputs
+                    self.alarms.evaluate_item_limits(limit_inputs(self.items.views(), self.twin.samples(), self.clock.utc()),
+                                                     self.clock.sim_s, self.clock.sim_s)
                 self._frame()
         return done
 
+    def graph(self):
+        """The twin's explicit graph when it has one (0.7.0); None: the older drawing model runs."""
+        if self.blocks is None:
+            return None
+        g = self.blocks.graph()
+        return g if g.nodes else None
+
     def _water_observed(self, dt: float) -> None:
-        self.step_water(dt, publish=False)
-        if self.layout_fn is not None:
-            self.twin.external = self.water.observe()
+        g = self.graph()
+        if g is None:
+            self.step_water(dt, publish=False)
+            if self.layout_fn is not None:
+                self.twin.external = self.water.observe()
+            return
+        if self.model_error is not None:
+            return
+        views = self.items.views()
+        p = params_from(g, views)
+        node_item = {n.id: n.item for n in g.nodes}
+        try:
+            self.gwater.step(dt, g, p, lambda n: bool(node_item.get(n)) and self._item_on(node_item[n]))
+        except ModelError as e:                    # an invalid model run: paused and reported, never evidence
+            self.model_error = str(e)
+            self.running = False
+            self.hist.event("TWIN_MODEL_ERROR", {"error": str(e), "run_id": self.run_id}, actor="system")
+            return
+        ext = {}
+        for nid, v in self.gwater.readings(g, p).items():
+            if v is not None and node_item.get(nid):
+                ext[node_item[nid]] = v
+        self.twin.external = ext
 
     def _item_on(self, iid: str) -> bool:
         """A pump runs or a valve is open: its twin output is on and its start or travel time has passed."""
@@ -418,14 +464,19 @@ class EquipmentTwinService:
             items[iid] = None if it is None else {
                 "type": it.type.model_dump(mode="json"), "body": it.body.model_dump(mode="json"),
                 "points": dict(sorted(it.points.items()))}
-        water = None
-        if self.layout_fn is not None:
+        water, model = None, WATER_MODEL
+        g = self.graph()
+        if g is not None:                          # the graph's connections and the numbers it runs with; no drawing
+            from ..topology.definitions import digest as topo_digest
+            p = params_from(g, views)
+            water, model = {"topology": topo_digest(g), "params": p.digest_parts()}, GRAPH_MODEL
+        elif self.layout_fn is not None:
             with contextlib.suppress(Exception):
                 water = self.layout_fn()[0]
-        doc = {"program": v["digest"], "items": items, "water_network": water, "water_model": WATER_MODEL}
+        doc = {"program": v["digest"], "items": items, "water_network": water, "water_model": model}
         import hashlib
         d = hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
-        return {"digest": d, "items": names, "water_network": water, "water_model": WATER_MODEL}
+        return {"digest": d, "items": names, "water_network": water, "water_model": model}
 
     def current_proof(self, program_id: str, version: int) -> list[dict]:
         """Results of this program version from the current twin run in the current context; older ones are history."""
@@ -451,6 +502,12 @@ class EquipmentTwinService:
         path = feed.write_evidence(self.feed_dir, ev)
         self.hist.event("TWIN_EVIDENCE_WRITTEN", {"program": f"{program_id}@{version}", "path": str(path)}, actor=actor)
         return ev
+
+    def _graph_view(self) -> dict | None:
+        g = self.graph()
+        if g is None:
+            return None
+        return self.gwater.view(g, params_from(g, self.items.views()))
 
     def view(self) -> dict:
         with self.lock:
@@ -479,7 +536,9 @@ class EquipmentTwinService:
                     "effective_speed": round(self.effective_speed, 1), "speeds": SPEEDS,
                     "sim_utc": self.clock.utc().isoformat(), "sim_s": round(self.clock.sim_s, 1),
                     "timezone": self.cfg.site.timezone, "snapshot_utc": self.snapshot_utc, "engine": e, "items": items,
-                    "results": self.results[-50:],
+                    "results": self.results[-50:], "model_error": self.model_error,
+                    "alarms": [o.to_dict() for o in self.alarms.open.values()],
+                    "graph_water": self._graph_view(),
                     "label": "DIGITAL TWIN: virtual modules and DEMO dynamics. A pass here is a logic test, not "
                              "physical verification."}
 

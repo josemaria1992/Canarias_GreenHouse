@@ -119,7 +119,17 @@ CREATE UNIQUE INDEX ux_commissioning_reserved ON commissioning_tx(bus_id, addres
     6: ("equipment usage across restarts (starts, last verified OFF), functional blocks, explicit hydraulic "
         "topology and layout revisions, twin run records and durable change journal (0.7.0)", """
 CREATE TABLE equipment_usage (runtime_id TEXT NOT NULL, item_id TEXT NOT NULL, updated_utc TEXT NOT NULL,
-    json TEXT NOT NULL, PRIMARY KEY (runtime_id, item_id))
+    json TEXT NOT NULL, PRIMARY KEY (runtime_id, item_id));
+CREATE TABLE topology_revisions (workspace TEXT NOT NULL, rev INTEGER NOT NULL, status TEXT NOT NULL,
+    digest TEXT NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL, note TEXT, json TEXT NOT NULL,
+    PRIMARY KEY (workspace, rev));
+CREATE TABLE diagram_revisions (view TEXT NOT NULL, rev INTEGER NOT NULL, topology_rev INTEGER,
+    digest TEXT NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY (view, rev));
+CREATE TABLE blocks (block_id TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL, name TEXT NOT NULL,
+    digest TEXT NOT NULL, topology_rev INTEGER, created_utc TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_utc TEXT NOT NULL, json TEXT NOT NULL, validation_json TEXT, PRIMARY KEY (block_id, version));
+CREATE TABLE twin_runs (run_id TEXT PRIMARY KEY, started_utc TEXT NOT NULL, ended_utc TEXT, actor TEXT NOT NULL,
+    model TEXT NOT NULL, context_json TEXT NOT NULL, summary_json TEXT)
 """),
 }
 
