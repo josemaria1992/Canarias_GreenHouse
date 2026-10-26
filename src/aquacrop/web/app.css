@@ -50,8 +50,18 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
 .narrow { max-width: 360px; margin: 10vh auto; display: flex; flex-direction: column; gap: 10px; }
 label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; letter-spacing: .32px; color: var(--muted); }
-input, select { font: inherit; min-height: 40px; padding: 7px 16px; border: 0; border-bottom: 1px solid var(--line-strong); border-radius: 0; background: var(--field); color: var(--ink); }
-input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+input:not([type=checkbox]):not([type=radio]), select { font: inherit; min-height: 40px; padding: 7px 16px; border: 0; border-bottom: 1px solid var(--line-strong); border-radius: 0; background: var(--field); color: var(--ink); }
+input:not([type=checkbox]):not([type=radio]):focus, select:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 0.7.1 (UX-04, owner report): a checkbox or option circle keeps its own square box. The field rule above used to
+   give it 40 px height and 16 px side padding, which stretched the circle and pushed it off centre. Every one is the
+   same 18 px, on the text's centre line, with the whole label as its hit area and a visible keyboard focus ring. */
+input[type=checkbox], input[type=radio] { box-sizing: border-box; width: 18px; height: 18px; min-height: 0; flex: 0 0 18px; margin: 0; padding: 0;
+  align-self: center; vertical-align: middle; accent-color: var(--accent); cursor: pointer; }
+input[type=checkbox]:disabled, input[type=radio]:disabled { cursor: not-allowed; opacity: .55; }
+input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+label:has(> input[type=checkbox]), label:has(> input[type=radio]), label.check { flex-direction: row; align-items: center; gap: 8px;
+  min-height: 32px; font-size: 14px; letter-spacing: 0; color: var(--ink); cursor: pointer; }
+label:has(> input:disabled) { cursor: not-allowed; color: var(--muted); }
 button { font: inherit; min-height: 40px; padding: 8px 16px; border-radius: 0; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
 button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 button:active:not(:disabled) { background: var(--accent-active); }

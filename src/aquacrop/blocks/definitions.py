@@ -11,6 +11,11 @@
 `check` says what is missing before a block validates: the members exist, an explicit path joins supply and
 destination through members only, every actuator on that path is operated by the plan, a meter really sits on the
 path, and each started item is stopped again by both stop plans.
+
+Safety settings (0.7.1, owner decision 26 October 2026): the independent maximum runtime of one operation through
+this block is configured once here, not in every program. It is finite, the engine enforces it on every start (by
+hand or scheduled) and, when it is reached, follows the block's normal stop with every stop verified. No value is
+proposed: a block without it says so, and a program cannot be saved over it until it is set.
 """
 from __future__ import annotations
 
@@ -62,6 +67,10 @@ class Plan(_B):
     provenance: Literal["TEMPLATE_EXAMPLE", "OWNER_CONFIGURED", "REVIEWED"] = "TEMPLATE_EXAMPLE"
 
 
+class Safety(_B):
+    max_runtime_s: float | None = Field(default=None, gt=0, le=86400)    # one operation, startup to verified stop
+
+
 class BlockBody(_B):
     template: Template = "GENERIC"
     description: str = Field(default="", max_length=500)
@@ -70,6 +79,7 @@ class BlockBody(_B):
     destination: str | None = Field(default=None, pattern=ID)
     meter: str | None = Field(default=None, pattern=ID)
     plan: Plan = Plan()
+    safety: Safety = Safety()
 
     @model_validator(mode="after")
     def _check(self):
@@ -80,7 +90,10 @@ class BlockBody(_B):
 
 
 def digest(body: BlockBody) -> str:
-    return hashlib.sha256(json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    d = body.model_dump(mode="json")
+    if body.safety == Safety():
+        d.pop("safety")                       # blocks written before 0.7.1 keep their digest
+    return hashlib.sha256(json.dumps(d, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def parse(doc: dict) -> BlockBody:
@@ -162,6 +175,10 @@ def check(b: BlockBody, t: Topology, names: dict[str, str] | None = None) -> lis
         if not started:
             _issue(out, "PLAN_EMPTY", "plan", "the startup does nothing", "add the steps that open and start the path",
                    field="plan.startup")
+    if b.safety.max_runtime_s is None:
+        _issue(out, "SAFETY_RUNTIME_MISSING", "safety", "no maximum runtime is set in the safety settings",
+               "set the longest one operation through this block may run (startup to verified stop); programs over this "
+               "block cannot be saved until it is set", severity="WARNING", field="safety.max_runtime_s")
     return out
 
 

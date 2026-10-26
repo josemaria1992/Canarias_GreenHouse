@@ -160,14 +160,38 @@ class SqlEngineStore:
 
 
 class ProgramStore:
+    """Program versions. The key (`program_id`) of a program never changes; its public ID can (0.7.1, `aquacrop.ids`):
+    renaming touches no version, so a VALIDATED version and its twin proof stay exactly as they were."""
+
     def __init__(self, hist):
         self.h = hist
         self._lock = threading.RLock()
+        from ..ids import PublicIds
+        self.ids = PublicIds(hist, "program")
 
     def versions(self) -> list[dict]:
         rows = self.h.query("SELECT * FROM programs ORDER BY program_id, version")
+        ids = self.ids.all()
         return [dict(r) | {"body": json.loads(r["json"]), "validation": json.loads(r["validation_json"] or "null"),
-                           "simulation": json.loads(r["simulation_json"] or "null")} for r in rows]
+                           "simulation": json.loads(r["simulation_json"] or "null"),
+                           "public_id": ids[r["program_id"]]["public_id"] if r["program_id"] in ids else r["program_id"],
+                           "id_rev": ids[r["program_id"]]["rev"] if r["program_id"] in ids else 0} for r in rows]
+
+    def keys(self) -> set[str]:
+        return {r["program_id"] for r in self.h.query("SELECT DISTINCT program_id FROM programs")}
+
+    def resolve(self, given: str) -> str | None:
+        return self.ids.resolve(given, self.keys())
+
+    def rename(self, actor: str, program_id: str, new_id: str, expected_rev: int) -> dict:
+        from ..ids import IdRefused
+        if program_id not in self.keys():
+            raise ProgramRefused(f"program {program_id} does not exist")
+        try:
+            r = self.ids.rename(program_id, new_id, expected_rev, self.keys(), actor)
+        except IdRefused as e:
+            raise ProgramRefused(str(e))
+        return r | {"id_history": self.ids.history(program_id)}
 
     def get(self, program_id: str, version: int) -> dict:
         hit = [v for v in self.versions() if v["program_id"] == program_id and v["version"] == version]
@@ -175,10 +199,29 @@ class ProgramStore:
             raise ProgramRefused(f"program {program_id} v{version} does not exist")
         return hit[0]
 
-    def save_draft(self, actor: str, program_id: str, name: str, body: dict, *, version: int | None = None) -> dict:
+    def save_draft(self, actor: str, program_id: str, name: str, body: dict, *, version: int | None = None,
+                   public_id: str | None = None) -> dict:
+        """A new program's `program_id` may be the ID typed in any case (`IrrigationPump_2`): its key is derived
+        from it; an existing program is named by its key or its public ID."""
         import re
+        from ..ids import IdRefused, check_public, key_for
+        keys = self.keys()
+        new_public = None
+        if program_id not in keys:
+            known = self.ids.resolve(program_id, keys)
+            if known is not None:
+                program_id = known
+            else:
+                new_public = public_id or program_id
+                try:
+                    check_public(new_public)
+                except IdRefused as e:
+                    raise ProgramRefused(f"program {e}")
+                if (clash := self.ids._clash(new_public, "", keys)) is not None:
+                    raise ProgramRefused(f"ID {new_public} is already used by {self.ids.public(clash)}")
+                program_id = key_for(new_public, keys)
         if not re.fullmatch(r"[a-z0-9][a-z0-9_\-]{0,47}", program_id or ""):
-            raise ProgramRefused("program id: 1-48 lower-case letters, digits, - or _")
+            raise ProgramRefused("program id: 1-48 letters, digits, - or _")
         name = (name or "").strip()
         if not 1 <= len(name) <= 80:
             raise ProgramRefused("give the program a name of 1-80 characters")
@@ -205,6 +248,11 @@ class ProgramStore:
                 "digest=excluded.digest, updated_utc=excluded.updated_utc, json=excluded.json, validation_json=NULL "
                 "WHERE programs.status='DRAFT'", row), wait=True)
             self.h.event("PROGRAM_DRAFT_SAVED", {"program": f"{program_id}@{version}", "digest": digest(canon)}, actor=actor)
+            if new_public is not None:
+                try:
+                    self.ids.claim(program_id, new_public, keys | {program_id}, actor)
+                except IdRefused:
+                    pass                               # lost a race for the same ID: the program keeps its key as ID
             return self.get(program_id, version)
 
     def mark_validated(self, actor: str, program_id: str, version: int, issues: list[str], context: dict) -> dict:

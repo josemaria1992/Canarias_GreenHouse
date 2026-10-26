@@ -30,6 +30,11 @@ Rules that the tests hold it to:
   it too. A stop always wins over a start in the same tick (0.7.0).
 * A repeat inside a window starts its next cycle only after the previous one ended verified plus the rest time,
   never after the window's end; a cycle still running at the end is stopped and reported WINDOW_ENDED (0.7.0).
+* Windows (0.7.1, owner decisions): a window's first cycle starts without a rest; the next one only after the previous
+  cycle ended verified plus the rest. At the finish the running cycle is stopped (WINDOW_ENDED, never DONE). A window
+  that follows another requests its first cycle once the earlier operation is verified stopped and its equipment is
+  free: it inherits neither the earlier rest nor the earlier litres. A window that ends before its first cycle could
+  start is recorded MISSED with what it was waiting for, and never starts late.
 * An item verified OFF stays the operation's duty until the operation ends (RR-01): if it reads ON or UNKNOWN again
   during the stop, the rest of the plan holds (no dependent valve closes), the stop is STOP_UNVERIFIED with an alarm
   and OFF is sent again; the operation never ends while any item it switched ON is not verified OFF. Escalation
@@ -253,6 +258,7 @@ class Engine:
                     "auto_since_utc": self.auto_since_utc.isoformat() if self.auto_since_utc else None,
                     "ops": [o.public(now) for o in self.ops.values()], "finished": self.finished[-20:],
                     "conflicts": list(self.conflicts.values()),
+                    "programs": self.program_states(),
                     "owners": dict(self.arbiter.owner),
                     "items": {iid: self.item_state(iid) for iid in self._items}}
 
@@ -555,17 +561,67 @@ class Engine:
             if self.auto_since_utc and w.start_utc < self.auto_since_utc:
                 continue                            # already marked MISSED when AUTO began
             st = self._rep.setdefault(w.key, {"n": 0, "last_end": None})
+            st.update(pid=pid, ver=ver, start=w.start_utc, end=w.end_utc)
             if st["n"] >= t.max_count:
+                st["waiting"] = None
                 continue
-            if any(o.program_id == pid for o in self.ops.values()):
-                continue                            # the current cycle runs; the rest starts after it ends
+            holder = next((o for o in self.ops.values() if o.program_id == pid), None)
+            if holder is not None:                  # a cycle runs, or the earlier window's operation is still stopping
+                st["waiting"] = None if holder.occurrence_key and holder.occurrence_key.startswith(w.key + "#") else (
+                    "the earlier operation is not verified stopped yet" if holder.state == "STOP_UNVERIFIED"
+                    else "the earlier operation is still stopping")
+                continue
             if any(c["waiting"]["program_id"] == pid for c in self.conflicts.values()):
+                st["waiting"] = "its equipment is used by another program (conflict)"
                 continue
             if st["n"] and (st["last_end"] is None or self.clock.mono() - st["last_end"] < t.rest_s):
+                st["waiting"] = None
                 continue
             key = f"{w.key}#{st['n']}"
             st["n"] += 1
+            st["waiting"] = None
             self._request(pid, ver, body, key, w.start_utc, w.end_utc)
+            if not any(o.occurrence_key == key for o in self.ops.values()):
+                st["waiting"] = "its first cycle could not start; see the occurrence"
+        self._windows_ended(pid, now_utc)
+
+    def _windows_ended(self, pid: str, now_utc: datetime) -> None:
+        """A window of this program that ended: if no cycle ever started in it, record it MISSED with the reason it was
+        waiting for, so it never starts late and the record says why (PRG-05)."""
+        for k, st in list(self._rep.items()):
+            if st.get("pid") != pid or st.get("end") is None or now_utc < st["end"]:
+                continue
+            if st["n"] == 0:
+                why = "the window ended before its first cycle could start" + (
+                    f" ({st['waiting']})" if st.get("waiting") else "")
+                if self.store.occurrence_claim(f"{k}#0", pid, st["ver"], st["start"], "MISSED", {"why": why}):
+                    self.event("PROGRAM_OCCURRENCE_MISSED", {"key": f"{k}#0", "why": why}, "system")
+            if not any(o.occurrence_key and o.occurrence_key.startswith(k + "#") for o in self.ops.values()):
+                del self._rep[k]
+
+    def program_states(self) -> dict[str, dict]:
+        """What each active program is doing now, in the owner's words: watering, stopping, waiting for a verified stop
+        or for its equipment, resting between cycles, or idle until its next window."""
+        now = self.clock.mono()
+        out = {}
+        for pid, (ver, body) in self.programs().items():
+            op = next((o for o in self.ops.values() if o.program_id == pid), None)
+            doc = {"program_id": pid, "version": ver}
+            if op is not None:
+                doc |= {"state": {"RUNNING": "WATERING", "STOPPING": "STOPPING", "STOP_UNVERIFIED": "STOP_UNVERIFIED"}.get(
+                    op.state, op.state), "op_id": op.op_id, "reason": op.reason}
+            else:
+                doc["state"] = "IDLE"
+                for k, st in self._rep.items():
+                    if st.get("pid") != pid or st.get("end") is None:
+                        continue
+                    if st.get("waiting"):
+                        doc |= {"state": "WAITING", "why": st["waiting"], "window_end_utc": st["end"].isoformat()}
+                    elif st["n"] and st["n"] < body.trigger.max_count and st.get("last_end") is not None:
+                        left = max(0.0, body.trigger.rest_s - (now - st["last_end"]))
+                        doc |= {"state": "RESTING", "next_cycle_in_s": round(left), "window_end_utc": st["end"].isoformat()}
+            out[pid] = doc
+        return out
 
     def _request(self, pid, ver, body, key, start_utc, end_utc) -> None:
         if any(o.occurrence_key == key for o in self.ops.values()):
@@ -702,8 +758,11 @@ class Engine:
         if not limit or limit <= 0:
             self.arbiter.release(f"op:{pid}")
             raise Refused("no bounded runtime")
+        asked = getattr(a, "target_L", None)
+        if a.type == "SEQUENCE" and any(s_.do == "DELIVER" for s_ in a.steps):
+            asked = sum(s_.target_L for s_ in a.steps if s_.do == "DELIVER")       # each operation its own target
         op = Op(new_id("op"), pid, ver, origin, body, key, actor, mono, mono + limit, window_end_utc=window_end,
-                step_since=mono, requested_L=getattr(a, "target_L", None))
+                step_since=mono, requested_L=asked)
         # the arbiter's owner names the op, so a conflict can point at it
         self.arbiter.release(f"op:{pid}")
         self.arbiter.acquire(op.op_id, need)
@@ -1106,14 +1165,17 @@ class Engine:
         if op.occurrence_key:
             self.store.occurrence_update(op.occurrence_key, res, outcome=op.reason,
                                          doc={"measured_L": op.measured_L, "uncertain_L": op.uncertain_L,
-                                              "requested_L": op.requested_L})
+                                              "requested_L": op.requested_L,
+                                              "unmet_L": None if op.requested_L is None or res == "DONE"
+                                              else max(0.0, round(op.requested_L - op.measured_L, 3))})
         if op.body.action.type == "KEEP_BETWEEN":
             self._keep.setdefault(op.program_id, {"since": None, "last_end": None, "n": 0})["last_end"] = self.clock.mono()
         if op.body.trigger.type == "WINDOW_REPEAT" and op.occurrence_key and "#" in op.occurrence_key:
-            st = self._rep.setdefault(op.occurrence_key.rsplit("#", 1)[0], {"n": 0, "last_end": None})
-            st["last_end"] = self.clock.mono()
-            if res != "DONE":                         # a cycle that did not complete ends the window's repeats
-                st["n"] = op.body.trigger.max_count
+            st = self._rep.get(op.occurrence_key.rsplit("#", 1)[0])
+            if st is not None:                        # the window may have ended and been settled meanwhile
+                st["last_end"] = self.clock.mono()
+                if res != "DONE":                     # a cycle that did not complete ends the window's repeats
+                    st["n"] = op.body.trigger.max_count
         self.event("PROGRAM_OP_ENDED", rec, "system")
 
     def _advance(self, op: Op) -> None:

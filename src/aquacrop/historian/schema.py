@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-CURRENT_VERSION = 6
+CURRENT_VERSION = 7
 
 MIGRATIONS: dict[int, tuple[str, str]] = {
     1: ("initial AquaCrop v0.2 schema", """
@@ -130,6 +130,28 @@ CREATE TABLE blocks (block_id TEXT NOT NULL, version INTEGER NOT NULL, status TE
     updated_utc TEXT NOT NULL, json TEXT NOT NULL, validation_json TEXT, PRIMARY KEY (block_id, version));
 CREATE TABLE twin_runs (run_id TEXT PRIMARY KEY, started_utc TEXT NOT NULL, ended_utc TEXT, actor TEXT NOT NULL,
     model TEXT NOT NULL, context_json TEXT NOT NULL, summary_json TEXT)
+"""),
+    7: ("editable public ids of equipment and programs over their stable keys, with a rename log; module requests "
+        "as a tracked workflow (0.7.1)", """
+CREATE TABLE public_ids (kind TEXT NOT NULL, key TEXT NOT NULL, public_id TEXT NOT NULL, rev INTEGER NOT NULL,
+    actor TEXT NOT NULL, utc TEXT NOT NULL, PRIMARY KEY (kind, key));
+CREATE UNIQUE INDEX ux_public_ids ON public_ids(kind, lower(public_id));
+CREATE TABLE public_id_log (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, old_id TEXT,
+    new_id TEXT NOT NULL, rev INTEGER NOT NULL, actor TEXT NOT NULL, utc TEXT NOT NULL);
+CREATE TABLE module_requests (request_id INTEGER PRIMARY KEY, utc TEXT NOT NULL, requester TEXT NOT NULL,
+    model TEXT NOT NULL, purpose TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL, status_utc TEXT NOT NULL, handler TEXT, reason TEXT, tx_id TEXT, device_uid TEXT,
+    json TEXT NOT NULL DEFAULT '{}');
+INSERT INTO module_requests(request_id, utc, requester, model, purpose, location, note, status, status_utc, handler,
+    reason, json)
+  SELECT e.id, e.utc, coalesce(e.actor, 'unknown'), coalesce(json_extract(e.payload_json, '$.model'), ''),
+    coalesce(json_extract(e.payload_json, '$.purpose'), ''), coalesce(json_extract(e.payload_json, '$.location'), ''),
+    coalesce(json_extract(e.payload_json, '$.note'), ''),
+    CASE WHEN c.id IS NULL THEN 'REQUESTED' ELSE 'CLOSED' END, coalesce(c.utc, e.utc), c.actor,
+    json_extract(c.payload_json, '$.outcome'), '{"from": "0.7.0 event log"}'
+  FROM events e LEFT JOIN events c ON c.kind = 'MODULE_REGISTRATION_CLOSED'
+    AND json_extract(c.payload_json, '$.request_id') = e.id
+  WHERE e.kind = 'MODULE_REGISTRATION_REQUESTED'
 """),
 }
 

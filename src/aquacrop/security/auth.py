@@ -56,7 +56,8 @@ class Perm(str, enum.Enum):
     IO_ASSIGN = "io_assign"              # assign and verify I/O channels on the I/O board; needs commissioning
     EQUIPMENT_EDIT = "equipment_edit"    # equipment type drafts, items and program drafts (0.5.0)
     EQUIPMENT_ACTIVATE = "equipment_activate"  # activate or retire equipment types; activate programs
-    MODULE_SETUP = "module_setup"        # module wizard: reserve and write a new module's address; administrators only (0.7.0)
+    MODULE_SETUP = "module_setup"        # module wizard: reserve and write a new module's address; administrators and
+    #                                      operators with commissioning (owner decision 26 Oct 2026, 0.7.1)
 
 
 PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.OPS_READ: Role.OPERATOR, Perm.ADMIN_READ: Role.ADMIN,
@@ -66,19 +67,19 @@ PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.OPS_READ: Role.OPERATOR, Perm.ADMI
                  Perm.PROCESS_CONTROL: Role.OPERATOR, Perm.RECIPE_EDIT: Role.OPERATOR,
                  Perm.RECIPE_ACTIVATE: Role.ADMIN, Perm.IO_ASSIGN: Role.OPERATOR,
                  Perm.EQUIPMENT_EDIT: Role.OPERATOR, Perm.EQUIPMENT_ACTIVATE: Role.ADMIN,
-                 Perm.MODULE_SETUP: Role.ADMIN}
+                 Perm.MODULE_SETUP: Role.OPERATOR}
 
-# The role matrix of 0.7.0 (UI_UX_SPECIFICATION, ADR-0023): physical address/mode writes are for administrators only,
-# including through the older wizard routes; the commissioning flag still lets an operator verify wiring and arm
-# approved bench tests.
-COMMISSIONING_PERMS = (Perm.BENCH_ARM, Perm.IO_ASSIGN)
+# Rights that need the commissioning flag (administrators always have it): arm bench tests, assign and verify channels,
+# and (0.7.1, owner decision 26 Oct 2026, ADR-0023 amended) prepare a new module with the address wizard. Every other
+# operator sends a module request instead.
+COMMISSIONING_PERMS = (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP)
 
 # Navigation per role (exactly the specified pages; the web shell and the tests read this).
 NAVIGATION = {
     "viewer": ["overview", "programs", "alarms"],
-    "operator": ["overview", "blocks", "twin", "hw-add", "programs", "history", "alarms"],
-    "admin": ["overview", "blocks", "twin", "hw-add", "programs", "history", "alarms",
-              "equipment", "hardware", "settings"],
+    "operator": ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms"],
+    "admin": ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms",
+              "equipment-types", "hardware", "settings"],
 }
 
 # What each role may do, shown when a user is created or changed. Owner decision 2026-10-24: an administrator
@@ -89,17 +90,18 @@ ROLE_TEXT = {
                "cannot": ["Change, start, stop or acknowledge anything",
                           "Open the digital twin, history, events, equipment or module pages, or export data"]},
     "operator": {"title": "Operator", "summary": "Runs the installation day to day.",
-                 "can": ["Overview, Blocks, Digital Twin, Add Module, Programs, Operation History, Alarms & Events",
+                 "can": ["Overview, Equipment, Blocks, Digital Twin, Add Module, Programs, Operation History, Alarms & Events",
                          "Acknowledge alarms and reset process faults",
                          "Switch the installation between AUTO and MANUAL, approve the restart checklist, choose "
                          "between conflicting programs, run or stop a program by hand",
                          "Create and edit equipment, blocks and program drafts, and validate them",
                          "Use the digital twin: run it, inject faults, accept a twin result",
-                         "Register a detected module or prepare a module request; export operational history"],
+                         "Send a module request and follow it; export operational history",
+                         "With Commissioning: prepare a new module with the address wizard, verify wiring, arm bench tests"],
                  "cannot": ["Activate equipment types or programs on the real system",
                             "Manage users, backups, retention or settings",
-                            "Write a module's address or modes (administrators only)",
-                            "Verify wiring or switch real outputs at the bench, unless Commissioning is ticked"]},
+                            "Write a module's address or modes, verify wiring or switch real outputs at the bench, "
+                            "unless Commissioning is ticked"]},
     "admin": {"title": "Administrator", "summary": "Every right, including commissioning.",
               "can": ["Everything an operator can, and commissioning",
                       "Activate and retire equipment types, activate programs",
@@ -107,10 +109,10 @@ ROLE_TEXT = {
                       "Backups, retention, off-site copies and every other setting"],
               "cannot": []},
 }
-COMMISSIONING_TEXT = ("Commissioning is the right to work on the real modules at the bench: switch real outputs during an "
-                      "armed test session and verify which module channel each piece of equipment uses. Preparing a new "
-                      "module (writing its address and modes) is for administrators only. Give it to an operator who "
-                      "works at the bench. Administrators always have it.")
+COMMISSIONING_TEXT = ("Commissioning is the right to work on the real modules at the bench: prepare a new module with the "
+                      "address wizard (USB adapter on the controller), switch real outputs during an armed test session and "
+                      "verify which module channel each piece of equipment uses. Give it to an operator who works at the "
+                      "bench. Administrators always have it.")
 
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library

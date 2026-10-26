@@ -4,7 +4,8 @@ Who may do what (server-side, on every request):
 * read everything: any signed-in user;
 * save type drafts, create and edit items, preview upgrades: operators (EQUIPMENT_EDIT);
 * activate or retire a type, retire an item: administrators (EQUIPMENT_ACTIVATE);
-* choose and verify a channel for a role: commissioning users (IO_ASSIGN), as on the I/O board.
+* choose and verify a channel for a role: commissioning users (IO_ASSIGN), as on the I/O board;
+* change an item's public ID (0.7.1, `aquacrop.ids`): operators (EQUIPMENT_EDIT), unique and under a revision check.
 Nothing here sends anything to a module.
 """
 from __future__ import annotations
@@ -38,13 +39,18 @@ class RetireIn(_B):
 
 
 class ItemIn(_B):
-    item_id: str = Field(max_length=48)
+    item_id: str = Field(max_length=48)              # an existing item's key or ID; for a new item, the ID typed
     name: str = Field(max_length=80)
     type_id: str = Field(max_length=48)
     type_version: int | None = Field(default=None, ge=1)
     icon: str = Field(max_length=24)
     body: dict = {}
     expected_version: int | None = Field(default=None, ge=1)
+
+
+class RenameIn(_B):
+    public_id: str = Field(max_length=48)
+    expected_rev: int = Field(ge=0)
 
 
 class UpgradeIn(_B):
@@ -117,6 +123,19 @@ def register(app, require, store, samples, edges) -> None:
                                    body.body, expected_version=body.expected_version)
         except EquipmentRefused as e:
             refused(e)
+
+    @app.post("/api/equipment/items/{item_id}/id")
+    def item_rename(item_id: str, body: RenameIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Change the public ID. The item's key and every reference to it stay; nothing runs or stops."""
+        try:
+            return store.rename_item(p.username, store.resolve(item_id), body.public_id, body.expected_rev)
+        except EquipmentRefused as e:
+            refused(e)
+
+    @app.get("/api/ids/suggest")
+    def id_suggest(name: str = Query("", max_length=80), p: Principal = Depends(require(Perm.OPS_READ))):
+        from ..ids import id_from_name
+        return {"name": name, "id": id_from_name(name)}
 
     @app.get("/api/equipment/items/{item_id}/upgrade")
     def item_upgrade_preview(item_id: str, to_version: int | None = Query(None, ge=1),

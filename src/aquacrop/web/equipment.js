@@ -1,4 +1,7 @@
 /* AquaCrop equipment pages (0.5.0): equipment types, individual equipment, and the channel of each role.
+ * 0.7.1 (owner decisions): Equipment is the one page where equipment is created and configured, for operators and
+ * administrators; Digital Twin only places it in the drawing. Name then ID: the ID follows the name (`Valve 1` ->
+ * `Valve_1`) until the user edits it, and stays editable after creation (a rename keeps every reference).
  * Loaded after app.js and built on window.AqUI. All text is inserted with textContent. Icons are drawn from the
  * built-in set (icons.js); an icon never decides what a channel does. A chosen channel is PROPOSED until the same
  * server-side check as on the I/O board plus your observation make it VERIFIED. Nothing on these pages sends
@@ -9,6 +12,14 @@
   const { h, api, act, pill, fmtTime, can, mount, toast, S, VIEWS } = U;
 
   const icon = window.AqIcons.icon;
+  const cap = s => String(s || "").charAt(0).toUpperCase() + String(s || "").slice(1);
+  const MSG = {};
+  const say = (k, text, bad) => { MSG[k] = { text, bad: !!bad }; };
+  const note = k => MSG[k] ? h("span", { class: "inline-msg " + (MSG[k].bad ? "bad" : "ok"), role: "status" }, MSG[k].text) : null;
+  async function send(k, method, path, body, ok) {
+    try { const r = await api(method, path, body); say(k, ok); U.refresh(); return r; }
+    catch (e) { say(k, String(e.message || e), true); U.refresh(); return null; }
+  }
   const STATUS_CLS = { ACTIVE: "ok", DRAFT: "warn", SUPERSEDED: "", RETIRED: "", VERIFIED: "ok", PROPOSED: "warn" };
 
   // ---------------------------------------------------------------- equipment items
@@ -58,9 +69,10 @@
     const roles = t ? t.body.roles : [];
     const props = t ? t.body.properties || [] : [];
     return h("div", { class: "card eq-item" },
-      h("div", { class: "row" }, icon(it.icon), h("h3", null, it.name),
+      h("div", { class: "row" }, icon(it.icon), h("h3", null, it.name), h("span", { class: "mono small", "data-public-id": it.item_id }, it.public_id || it.item_id),
         pill(it.status, STATUS_CLS[it.status]), h("span", { class: "muted" }, `${t ? t.name : it.type_id} v${it.type_version} · equipment v${it.version}`),
-        r ? (r.ready ? pill("READY FOR PROGRAMS", "ok") : pill("NOT READY", "warn")) : null),
+        r ? (r.ready ? pill("READY FOR PROGRAMS", "ok") : roles.some(x => E.bindings.find(b => b.item_id === it.item_id && b.role === x.role))
+          ? pill("NOT READY", "warn") : pill("PLANNED · UNASSIGNED", "warn")) : null),
       r && !r.ready ? h("p", { class: "muted small" }, [
         r.missing_required.length ? `No channel: ${r.missing_required.join(", ")}. ` : "",
         r.unverified.length ? `Not verified: ${r.unverified.join(", ")}. ` : "",
@@ -138,8 +150,19 @@
       } catch (e) { d.msg = { text: String(e.message || e), bad: true }; }
       U.refresh();
     };
-    return h("details", { "data-item-details": it.item_id }, h("summary", { class: "small" }, `Details of ${it.name}: name, properties, scaling, alarm limits`),
-      h("div", { class: "row wrap" }, h("label", null, "Name", h("input", { maxlength: 80, value: d.name, "aria-label": `Name of ${it.item_id}`, oninput: ev => { d.name = ev.target.value; mark(); } })), props),
+    const idIn = h("input", { maxlength: 48, value: d.pid == null ? (it.public_id || it.item_id) : d.pid, "aria-label": `ID of ${it.name}`, class: "mono",
+      oninput: ev => { d.pid = ev.target.value; } });
+    const rename = async () => {
+      const want = idIn.value.trim(), bad = window.AqIds.problem(want);
+      if (bad) { say("id:" + it.item_id, bad, true); U.refresh(); return; }
+      const r = await send("id:" + it.item_id, "POST", `/api/equipment/items/${encodeURIComponent(it.item_id)}/id`, { public_id: want, expected_rev: it.id_rev || 0 },
+        `ID is now ${want}. Blocks, programs, channels and history keep pointing at this equipment.`);
+      if (r) d.pid = null;
+    };
+    return h("details", { "data-item-details": it.item_id }, h("summary", { class: "small" }, `Details of ${it.name}: name, ID, properties, scaling, alarm limits`),
+      h("div", { class: "row wrap" }, h("label", null, "Name", h("input", { maxlength: 80, value: d.name, "aria-label": `Name of ${it.item_id}`, oninput: ev => { d.name = ev.target.value; mark(); } })),
+        h("label", null, "ID", idIn), h("button", { class: "small", disabled: !can("equipment_edit"), onclick: rename }, "Change ID"), note("id:" + it.item_id)),
+      h("div", { class: "row wrap" }, props),
       meas.length ? [h("h4", null, "Scaling (the module's signal to the engineering value)"),
         h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Reading", "Signal range", "Value range and unit", "Where it comes from", ""].map(x => h("th", null, x)))), h("tbody", null, scaleRows)),
         h("h4", null, "Alarm limits"),
@@ -174,22 +197,29 @@
   function newItemCard(E) {
     const types = activeTypes(E);
     const tsel = h("select", { "aria-label": "Type" }, types.map(t => h("option", { value: t.type_id }, `${t.name} (v${t.version})`)));
-    const name = h("input", { maxlength: 80, placeholder: "e.g. LED 1 on digital_A" });
-    const id = h("input", { maxlength: 48, placeholder: "led-1", pattern: "[a-z0-9][a-z0-9_-]*" });
-    const isel = h("select", { "aria-label": "Icon" }, E.icons.map(i => h("option", { value: i }, i)));
+    const name = h("input", { maxlength: 80, placeholder: "e.g. Valve 1", "aria-label": "Name" });
+    const id = h("input", { maxlength: 48, placeholder: "Valve_1", class: "mono", "aria-label": "ID" });
+    window.AqIds.follow(name, id);
+    const isel = h("select", { "aria-label": "Icon" }, E.icons.map(i => h("option", { value: i }, cap(i))));
     const preview = h("span", null);
     const showIcon = () => preview.replaceChildren(icon(isel.value));
     isel.addEventListener("change", showIcon);
     tsel.addEventListener("change", () => { const t = types.find(x => x.type_id === tsel.value); if (t && !isel.dataset.dirty) { isel.value = t.body.default_icon; showIcon(); } });
     if (types[0]) isel.value = types[0].body.default_icon;
     showIcon();
+    const create = async () => {
+      const bad = !name.value.trim() ? "Give it a name." : window.AqIds.problem(id.value.trim());
+      if (bad) { say("new", bad, true); U.refresh(); return; }
+      const r = await send("new", "POST", "/api/equipment/items", { item_id: id.value.trim(), name: name.value, type_id: tsel.value, icon: isel.value, body: {} },
+        `${name.value} created as ${id.value.trim()}. It is planned and unassigned until a channel is chosen; place it in the drawing from Digital Twin.`);
+      if (r) [name, id].forEach(f => { f.value = ""; delete f.dataset.dirty; delete f.dataset.owned; });
+    };
     return h("div", { class: "card" }, h("h3", null, "New equipment"),
-      types.length ? h("div", { class: "row" },
-        h("label", null, "Type ", tsel), h("label", null, "Name ", name), h("label", null, "Id ", id), h("label", null, "Icon ", isel), preview,
-        h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/items",
-          { item_id: id.value, name: name.value, type_id: tsel.value, icon: isel.value, body: {} }, "equipment created") }, "Create"))
-        : h("p", { class: "muted" }, "No active equipment type yet. Activate one on Equipment types first."),
-      h("p", { class: "muted small" }, "Properties, scaling and alarm limits are edited after creation. The icon is only a picture."));
+      types.length ? h("div", { class: "row wrap" },
+        h("label", null, "Name ", name), h("label", null, "ID ", id), h("label", null, "Type ", tsel), h("label", null, "Icon ", isel), preview,
+        h("button", { disabled: !can("equipment_edit"), onclick: create }, "Create"), note("new"))
+        : h("p", { class: "muted" }, can("equipment_activate") ? "No active equipment type yet. Activate one on Equipment types first." : "No active equipment type yet: an administrator activates the types on Equipment types."),
+      h("p", { class: "muted small" }, "The ID fills in from the name (Valve 1 → Valve_1) until you change it, and can be changed later. Properties, scaling and alarm limits are edited after creation. The icon is only a picture."));
   }
 
   VIEWS.equipment = async function () {
@@ -199,7 +229,8 @@
     mount("v-equipment",
       h("div", { class: "card" }, h("div", { class: "row" }, h("h2", null, "Equipment"),
         h("span", { class: "muted" }, `${live.length} items · ${E.bindings.filter(b => b.status === "VERIFIED").length} verified channels`),
-        h("a", { href: "/api/equipment/export", download: "aquacrop-equipment.json" }, "Export")),
+        h("a", { href: "/api/equipment/export", download: "aquacrop-equipment.json" }, "Export"),
+        can("equipment_activate") ? h("a", { href: "#equipment-types" }, "Equipment types") : null),
         h("p", { class: "muted" }, "Each item is made from an equipment type. Choose the channel of each role, then verify it with the device connected. A verified channel is still not an output permission: physical switching also needs the bench-test profile and an armed test session.")),
       newItemCard(E), live.map(it => itemCard(E, it, pts)),
       retired.length ? h("details", { class: "card" }, h("summary", null, `Retired (${retired.length})`), retired.map(it => h("p", null, `${it.name} · retired ${fmtTime(it.updated_utc)}`))) : null);

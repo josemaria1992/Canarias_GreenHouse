@@ -1,5 +1,8 @@
 """0.7.0 role matrix (UI_UX_SPECIFICATION, ADR-0023): exact navigation per role and backend enforcement.
-RBAC-01/02/03 through the real app; hidden navigation is never the only protection."""
+RBAC-01/02/03 through the real app; hidden navigation is never the only protection.
+
+0.7.1 (owner decisions 26 October 2026, ADR-0023 amended): Equipment is a page of its own for operators; the module
+address wizard is for administrators and operators with commissioning (MOD-01); other operators send requests."""
 import re
 
 import pytest
@@ -14,7 +17,7 @@ VIEWER_READS = {"/api/auth/session", "/api/status", "/api/layout", "/api/plant",
 
 
 def test_rbac01_navigation_is_exactly_the_specified_pages(tmp_path, icfg):
-    assert NAVIGATION["operator"] == ["overview", "blocks", "twin", "hw-add", "programs", "history", "alarms"]
+    assert NAVIGATION["operator"] == ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms"]
     assert NAVIGATION["viewer"] == ["overview", "programs", "alarms"]
     assert set(NAVIGATION["operator"]) < set(NAVIGATION["admin"])
     with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
@@ -64,31 +67,36 @@ def test_rbac02_operator_and_admin_reads(tmp_path, icfg):
             assert c.get(ok, headers=h).status_code == 200, ok
 
 
-def test_rbac03_physical_module_setup_is_for_administrators_only_even_with_commissioning():
+def test_mod01_module_setup_is_for_administrators_and_commissioning_operators():
     op = Principal("bench", Role.OPERATOR, True, "x", False)
     admin = Principal("vicente", Role.ADMIN, False, "y", False)
-    assert not op.can(Perm.MODULE_SETUP) and admin.can(Perm.MODULE_SETUP)
+    assert op.can(Perm.MODULE_SETUP) and admin.can(Perm.MODULE_SETUP)
     assert op.can(Perm.MODULE_REGISTER) and op.can(Perm.IO_ASSIGN) and op.can(Perm.BENCH_ARM)
     plain = Principal("op", Role.OPERATOR, False, "z", False)
-    assert plain.can(Perm.MODULE_REGISTER) and not plain.can(Perm.IO_ASSIGN) and not plain.can(Perm.BENCH_ARM)
+    assert plain.can(Perm.MODULE_REGISTER) and not plain.can(Perm.MODULE_SETUP)
+    assert not plain.can(Perm.IO_ASSIGN) and not plain.can(Perm.BENCH_ARM)
+    viewer = Principal("v", Role.VIEWER, True, "w", False)            # a flag on a viewer gives nothing
+    assert not viewer.can(Perm.MODULE_SETUP) and not viewer.can(Perm.MODULE_REGISTER)
 
 
-def test_rbac03_old_wizard_routes_refuse_a_commissioning_operator(tmp_path, icfg):
+def test_mod01_wizard_routes_are_enforced_on_the_server_by_role_and_flag(tmp_path, icfg):
+    """A commissioning operator passes the permission (the simulation then says it has no USB adapter); an
+    operator without the flag is refused 403 before anything else; a flag removed later counts at once."""
     app = _app(tmp_path, icfg)
     app.state.accounts.create_user("bench9", "bench password 999", Role.OPERATOR, commissioning=True)
     from tests.integration import test_api_installation as t
     t.PW["bench9"] = "bench password 999"
+    body = {"adapter": "/dev/ttyUSB0", "bus_id": "rs485_a", "read": True}
     with TestClient(app, base_url=ORIGIN) as c:
         h = login(c, "bench9")
-        for path, body in (("/api/commissioning/open", {"adapter": "/dev/ttyUSB0", "bus_id": "rs485_a", "read": True}),
-                           ("/api/commissioning/x/reserve", {}), ("/api/commissioning/x/commit", {})):
-            r = c.post(path, json=body, headers=h)
-            assert r.status_code in (403, 422), (path, r.status_code)
-            if r.status_code == 422:
-                assert c.post(path, json={}, headers=h).status_code in (403, 422)
-        r = c.post("/api/commissioning/open", json={"adapter": "/dev/ttyUSB0", "bus_id": "rs485_a", "read": True},
-                   headers=h)
-        assert r.status_code == 403
+        r = c.post("/api/commissioning/open", json=body, headers=h)
+        assert r.status_code == 409 and "hardware profile" in r.text, r.text
+        app.state.accounts.set_role("bench9", Role.OPERATOR, False)    # commissioning revoked: that session ends
+        assert c.post("/api/commissioning/open", json=body, headers=h).status_code in (401, 403)   # session ended
+        h2 = login(c, "oper1")
+        for path, b in (("/api/commissioning/open", body), ("/api/commissioning/x/reserve", {"address": 9}),
+                        ("/api/commissioning/x/commit", {"confirm": True})):
+            assert c.post(path, json=b, headers=h2).status_code == 403, path
 
 
 def test_mod02_an_operator_request_is_a_record_never_configuration(tmp_path, icfg):

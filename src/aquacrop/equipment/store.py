@@ -13,6 +13,10 @@ most one role of one item. VERIFIED needs the same server-side check as an assig
 confirmed by readback, DI both ways, AI a fresh reading within tolerance) plus the user's observation,
 or an earlier VERIFIED I/O assignment of the same channel, which is cited, not copied. A changed item
 version or a type upgrade that alters a role sends its binding back to PROPOSED.
+
+IDs (0.7.1, `aquacrop.ids`): an item's key (`item_id`) never changes; its public ID is what people see and edit. A
+new item may be given any-case ID (`Valve_1`): its key is derived from it (`valve_1`). `rename_item` changes the
+public ID only, under a revision check; no binding, graph node, block, program or history row is touched.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ from typing import Callable
 from pydantic import ValidationError
 
 from ..control.assignments import AssignmentRefused, EdgeWatch
+from ..ids import IdRefused, PublicIds, check_public, key_for
 from .definitions import (ICONS, ID_RE, TEMPLATES, ItemBody, Purpose, RoleDef, TypeBody, channel_issues, digest,
                           errors_text, item_issues)
 
@@ -49,6 +54,7 @@ class EquipmentStore:
         self.h, self.cfg, self.assignments = hist, cfg, assignments
         self.dependents = dependents or (lambda item_id: [])
         self._lock = threading.RLock()
+        self.ids = PublicIds(hist, "item")
 
     # ------------------------------------------------------------------ helpers
     def _log(self, actor: str, kind: str, ref: str, action: str, payload: dict) -> None:
@@ -162,8 +168,33 @@ class EquipmentStore:
         rows = self.h.query(
             "SELECT i.* FROM equipment_items i JOIN (SELECT item_id, max(version) AS v FROM equipment_items "
             "GROUP BY item_id) m ON i.item_id=m.item_id AND i.version=m.v ORDER BY i.name")
-        out = [dict(r) | {"body": json.loads(r["json"])} for r in rows]
+        ids = self.ids.all()
+        out = [dict(r) | {"body": json.loads(r["json"]),
+                          "public_id": ids[r["item_id"]]["public_id"] if r["item_id"] in ids else r["item_id"],
+                          "id_rev": ids[r["item_id"]]["rev"] if r["item_id"] in ids else 0} for r in rows]
         return [x for x in out if include_retired or x["status"] != "RETIRED"]
+
+    def keys(self) -> set[str]:
+        return {r["item_id"] for r in self.h.query("SELECT DISTINCT item_id FROM equipment_items")}
+
+    def resolve(self, given: str) -> str:
+        """The key of an item named by its key or its public ID (any case)."""
+        k = self.ids.resolve(given, self.keys())
+        if k is None:
+            raise EquipmentRefused(f"equipment {given} does not exist")
+        return k
+
+    def rename_item(self, actor: str, item_id: str, new_id: str, expected_rev: int) -> dict:
+        """Change the public ID only: references keep the key, history keeps the earlier ID in the log."""
+        with self._lock:
+            it = self.item(item_id)
+            try:
+                r = self.ids.rename(item_id, new_id, expected_rev, self.keys(), actor)
+            except IdRefused as e:
+                raise EquipmentRefused(str(e))
+            if not r.get("unchanged"):
+                self._log(actor, "ITEM", item_id, "ID_CHANGED", {"from": r["previous"], "to": new_id, "name": it["name"]})
+            return self.item(item_id) | {"id_history": self.ids.history(item_id)}
 
     def item(self, item_id: str) -> dict:
         hit = [i for i in self.items() if i["item_id"] == item_id]
@@ -172,7 +203,27 @@ class EquipmentStore:
         return hit[0]
 
     def save_item(self, actor: str, item_id: str, name: str, type_id: str, type_version: int | None, icon: str,
-                  body: dict, *, expected_version: int | None = None, reactivate: bool = False) -> dict:
+                  body: dict, *, expected_version: int | None = None, reactivate: bool = False,
+                  public_id: str | None = None) -> dict:
+        """Create (expected_version None) or change an item. `item_id` is the key of an existing item, or, for a new
+        one, the ID typed (any case, unless `public_id` gives it): the key is derived from it."""
+        keys = self.keys()
+        new_public = None
+        if item_id in keys and expected_version is None and not reactivate:
+            raise EquipmentRefused(f"ID {self.ids.public(item_id)} is already used: choose another ID")
+        if item_id not in keys:
+            known = self.ids.resolve(item_id, keys)
+            if known is not None and expected_version is None and not reactivate:
+                raise EquipmentRefused(f"ID {item_id} is already used by {self.ids.public(known)}")
+            if known is not None:
+                item_id = known
+            else:
+                new_public = public_id or item_id
+                try:
+                    check_public(new_public)
+                except IdRefused as e:
+                    raise EquipmentRefused(f"equipment {e}")
+                item_id = key_for(new_public, keys)
         self._check_id(item_id, "equipment id")
         name = (name or "").strip()
         if not 1 <= len(name) <= 80:
@@ -199,6 +250,8 @@ class EquipmentStore:
             for other in self.items(include_retired=False):
                 if other["item_id"] != item_id and other["name"].casefold() == name.casefold():
                     raise EquipmentRefused(f"another equipment item is already called {name}")
+            if new_public is not None and (clash := self.ids._clash(new_public, item_id, keys)) is not None:
+                raise EquipmentRefused(f"ID {new_public} is already used by {self.ids.public(clash)}")
             prev = self.h.query("SELECT max(version) AS v, status FROM equipment_items WHERE item_id=?", (item_id,))
             cur = prev[0]["v"] if prev and prev[0]["v"] is not None else None
             if expected_version != cur:
@@ -214,6 +267,11 @@ class EquipmentStore:
             self.h.submit(lambda c: c.execute(
                 "INSERT INTO equipment_items(item_id, version, status, type_id, type_version, name, icon, digest, "
                 "created_utc, created_by, updated_utc, json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", row), wait=True)
+            if new_public is not None:
+                try:
+                    self.ids.claim(item_id, new_public, keys | {item_id}, actor)
+                except IdRefused as e:              # lost a race for the same ID: the item keeps its key as ID
+                    self._log(actor, "ITEM", item_id, "ID_REFUSED", {"wanted": new_public, "why": str(e)})
             self._log(actor, "ITEM", f"{item_id}@{version}", "SAVED",
                       {"name": name, "type": f"{type_id}@{type_version}", "icon": icon})
             if cur is not None:

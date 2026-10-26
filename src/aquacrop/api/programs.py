@@ -51,6 +51,12 @@ class PreviewIn(_B):
     form: dict
 
 
+class RenameIn(_B):
+    program_id: str = Field(max_length=48)
+    public_id: str = Field(max_length=48)
+    expected_rev: int = Field(ge=0)
+
+
 def describe(body: dict) -> str:
     """Plain words for a program written before the forms (its definition is kept as it is)."""
     t, a = body["trigger"], body["action"]
@@ -232,7 +238,8 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                 if proof_context is not None:
                     why = proof_refusal(v["simulation"], v["digest"], proof_context(v["program_id"], v["version"]))
                     sim |= {"current": why is None, "why_not_current": why}
-            row = {k: v[k] for k in ("program_id", "version", "status", "name", "digest", "updated_utc")} | {
+            row = {k: v[k] for k in ("program_id", "public_id", "id_rev", "version", "status", "name", "digest",
+                                     "updated_utc")} | {
                 "next": nxt, "form": form, "summary": words, "describe": describe(body), "simulation": sim}
             if ops:                                  # a viewer reads summaries, not definitions or readiness details
                 row |= {"body": body, "validation": v["validation"], "created_by": v["created_by"],
@@ -248,6 +255,20 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                           for i in items.values() if i["status"] == "ACTIVE"],
                 "live_activation": ("not available on this profile: the real system is read-only. Physical bench "
                                     "tests need the bench-test profile and an armed test session.")}
+
+    @app.post("/api/programs/rename")
+    def rename(body: RenameIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Change a program's public ID (0.7.1). No version changes: a VALIDATED version, its activation and its twin
+        proof stay valid, since none of them names the ID."""
+        key = programs.resolve(body.program_id)
+        if key is None:
+            raise HTTPException(404, f"program {body.program_id} does not exist")
+        try:
+            r = programs.rename(p.username, key, body.public_id, body.expected_rev)
+        except ProgramRefused as e:
+            raise HTTPException(409, str(e))
+        publish()
+        return r
 
     @app.post("/api/programs/draft")
     def draft(body: DraftIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

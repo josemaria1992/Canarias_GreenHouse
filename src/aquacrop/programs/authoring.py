@@ -17,6 +17,16 @@ by step with their waits and verified stops (programs/engine.py). The body carri
 itself (`authoring`), so the program reopens in the same form, and its digest covers both. Time is a watering time
 after the startup steps (labelled); the guard bounds the whole operation. A volume needs the block's inline meter,
 in L/min, on the block's path: elapsed time or a pump's rated flow is never a volume.
+
+Form version 2 (0.7.1, owner decisions 26 October 2026). How much is one endpoint per cycle: water for a time, or
+deliver litres (measured; a litre cycle ends at its measured target, with no second duration). When is a set of
+windows on chosen days, each with a start and a finish, and the wait after each verified cycle before the next one is
+requested. The first cycle of a window does not wait. At the finish the cycle is stopped through the block's normal
+stop, whatever it had left (an unmet volume is WINDOW_ENDED, never DONE). A window that follows another starts its own
+first cycle once the earlier operation is verified stopped and its equipment is free; it never inherits the earlier
+wait or the earlier litres. The independent maximum runtime is the block's safety setting (Blocks), configured once:
+a form never carries it, and a program cannot be saved over a block without one, or whose watering time does not fit
+inside it. Version 1 forms (with `max_minutes`) keep compiling exactly as before.
 """
 from __future__ import annotations
 
@@ -30,7 +40,7 @@ from ..blocks.definitions import BlockBody
 from ..equipment.definitions import ID_RE, Purpose
 from . import schedule as sc
 
-FORM_VERSION = 1
+FORM_VERSION = 2
 UNITS = {"L/min": "flow", "L": "volume", "bar": "pressure", "cm": "length", "%": "fraction", "pH": "ph",
          "mS/cm": "conductivity", "°C": "temperature"}
 
@@ -43,18 +53,31 @@ class Endpoint(_F):
     kind: Literal["TIME", "VOLUME", "MANUAL"]
     minutes: float | None = Field(default=None, gt=0, le=1440)      # TIME: watering after the startup steps
     litres: float | None = Field(default=None, gt=0, le=1e6)        # VOLUME: measured litres
-    max_minutes: float = Field(gt=0, le=1440)                         # the guard on the whole operation
+    max_minutes: float | None = Field(default=None, gt=0, le=1440)  # form 1 only: the guard (form 2: block safety)
     no_flow_s: float = Field(default=20, gt=0, le=600)               # VOLUME: no measured flow for this long stops
     min_flow_L_min: float = Field(default=0.5, gt=0, le=1e4)
 
     @model_validator(mode="after")
     def _check(self):
         if self.kind == "TIME" and self.minutes is None:
-            raise ValueError("run for a time: give the minutes")
+            raise ValueError("water for a time: give the minutes")
         if self.kind == "VOLUME" and self.litres is None:
-            raise ValueError("deliver a volume: give the litres")
-        if self.kind == "TIME" and self.minutes >= self.max_minutes:
+            raise ValueError("deliver litres: give the litres")
+        if self.kind == "TIME" and self.litres is not None or self.kind == "VOLUME" and self.minutes is not None:
+            raise ValueError("a cycle has one endpoint: a watering time or a volume, not both")
+        if self.max_minutes is not None and self.kind == "TIME" and self.minutes >= self.max_minutes:
             raise ValueError("the maximum operation time must be longer than the watering time (startup and stop take time)")
+        return self
+
+
+class Window(_F):
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    finish: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.start == self.finish:
+            raise ValueError(f"the window {self.start}-{self.finish} has no length")
         return self
 
 
@@ -67,13 +90,35 @@ class Repeat(_F):
 class Schedule(_F):
     kind: Literal["NOW_ONLY", "WEEKLY"]
     days: tuple[Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"], ...] = ()
-    times: tuple[str, ...] = ()
+    times: tuple[str, ...] = ()                       # form 1
     from_date: date | None = None
     to_date: date | None = None
-    repeat: Repeat | None = None
+    repeat: Repeat | None = None                      # form 1
+    windows: tuple[Window, ...] = ()                  # form 2: start and finish of each watering window
+    rest_minutes: float | None = Field(default=None, gt=0, le=1440)   # form 2: wait after each verified cycle
+    max_cycles: int | None = Field(default=None, ge=1, le=96)         # form 2, optional: cycles per window
 
     @model_validator(mode="after")
     def _check(self):
+        if self.kind == "WEEKLY" and self.windows:
+            if not self.days:
+                raise ValueError("choose at least one day")
+            if len(self.windows) > 12:
+                raise ValueError("at most twelve windows")
+            if self.times or self.repeat:
+                raise ValueError("windows replace start times and repeats: give one or the other")
+            if self.rest_minutes is None:
+                raise ValueError("give the wait after each cycle (minutes)")
+            if self.from_date and self.to_date and self.from_date > self.to_date:
+                raise ValueError("the date range ends before it starts")
+            spans = sorted((sc._minutes(w.start), sc._minutes(w.start) + sc.written_length_s(w.start, w.finish) // 60)
+                           for w in self.windows)
+            for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+                if b0 < a1:
+                    raise ValueError("two windows overlap: one window must finish before (or when) the next starts")
+            if spans and spans[-1][1] > 1440 and spans[-1][1] - 1440 > spans[0][0]:
+                raise ValueError("an overnight window runs into the next day's first window")
+            return self
         if self.kind == "WEEKLY":
             if not self.days:
                 raise ValueError("choose at least one day")
@@ -87,8 +132,8 @@ class Schedule(_F):
                 raise ValueError("the date range ends before it starts")
             if self.repeat and len(self.times) != 1:
                 raise ValueError("repeating within a window starts from one start time")
-        elif self.days or self.times or self.repeat:
-            raise ValueError("run now only takes no days, times or repeats")
+        elif self.days or self.times or self.repeat or self.windows:
+            raise ValueError("run now only takes no days, windows, times or repeats")
         return self
 
 
@@ -109,7 +154,7 @@ class Rule(_F):
 
 class WateringForm(_F):
     form: Literal["WATERING"] = "WATERING"
-    form_version: Literal[1] = FORM_VERSION
+    form_version: Literal[1, 2] = FORM_VERSION
     block_id: str = Field(pattern=ID_RE)
     block_version: int = Field(ge=1)
     endpoint: Endpoint
@@ -117,6 +162,35 @@ class WateringForm(_F):
     permissives: tuple[Rule, ...] = Field(default=(), max_length=8)
     guards: tuple[Rule, ...] = Field(default=(), max_length=8)
     description: str = Field(default="", max_length=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_version(cls, data):
+        """A form sent without its version is version 1 when it has the old fields (a maximum time, start times),
+        else version 2. The Programs page always names it."""
+        if isinstance(data, dict) and "form_version" not in data:
+            e, s = data.get("endpoint") or {}, data.get("schedule") or {}
+            old = isinstance(e, dict) and e.get("max_minutes") is not None or isinstance(s, dict) and (
+                s.get("times") or s.get("repeat"))
+            data = dict(data, form_version=1 if old else 2)
+        return data
+
+    @model_validator(mode="after")
+    def _version(self):
+        e, s = self.endpoint, self.schedule
+        if self.form_version == 1:
+            if e.max_minutes is None:
+                raise ValueError("give the maximum operation time")
+            if s.windows:
+                raise ValueError("windows need form version 2")
+        else:
+            if e.kind == "MANUAL":
+                raise ValueError("how much: water for a time, or deliver litres")
+            if e.max_minutes is not None:
+                raise ValueError("the maximum runtime is the block's safety setting, not part of the program")
+            if s.kind == "WEEKLY" and not s.windows:
+                raise ValueError("give at least one watering window (start and finish)")
+        return self
 
 
 class FormRefused(ValueError):
@@ -199,10 +273,26 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
         _check_rule(r, views, f"start condition {i + 1}")
     for i, r in enumerate(f.guards):
         _check_rule(r, views, f"stop condition {i + 1}")
-    guard_s = e.max_minutes * 60
+    bound = block.safety.max_runtime_s
+    if f.form_version == 1:
+        guard_s = e.max_minutes * 60 if bound is None else min(e.max_minutes * 60, bound)   # the stricter one
+    else:
+        if bound is None:
+            raise FormRefused("the block has no maximum runtime: set it once in the block's safety settings (Blocks), "
+                              "then save the program", "block_id")
+        guard_s = bound
+        if e.kind == "TIME" and e.minutes * 60 >= bound:
+            raise FormRefused(f"watering {e.minutes:g} min does not fit inside the block's maximum runtime of "
+                              f"{bound / 60:g} min (the startup and the verified stop need time too): water for less, "
+                              "or change the block's safety setting", "endpoint.minutes")
     sch = f.schedule
     if sch.kind == "NOW_ONLY":
         trigger = {"type": "MANUAL"}
+    elif sch.windows:
+        trigger = {"type": "WINDOW_REPEAT", "entries": [{"days": list(sch.days), "start": w.start, "end": w.finish,
+                                                          "from_date": _iso(sch.from_date), "to_date": _iso(sch.to_date)}
+                                                         for w in sch.windows],
+                   "rest_s": sch.rest_minutes * 60, "max_count": sch.max_cycles or 96}
     else:
         if sch.repeat:
             end = sch.repeat.window_end
@@ -261,9 +351,23 @@ def summary(f: WateringForm, block_name: str, names: dict[str, str], tz: str, no
     what = (f"water for {e.minutes:g} min (after the startup steps)" if e.kind == "TIME" else
             f"deliver {e.litres:g} L, measured" if e.kind == "VOLUME" else
             f"run by hand until stopped")
-    guard = f"never longer than {e.max_minutes:g} min in all"
+    guard = (f"never longer than {e.max_minutes:g} min in all" if e.max_minutes is not None else
+             "never longer than the block's maximum runtime")
     if s.kind == "NOW_ONLY":
         when, nxt = "when someone starts it", []
+    elif s.windows:
+        days = ", ".join(d.title() for d in s.days)
+        wins = ", ".join(f"{w.start}-{w.finish}" for w in s.windows)
+        when = (f"on {days} in the window{'s' if len(s.windows) > 1 else ''} {wins} ({tz}), a cycle at the start of each "
+                f"window and the next {s.rest_minutes:g} min after each verified cycle"
+                + (f", at most {s.max_cycles} per window" if s.max_cycles else "")
+                + "; a cycle still running at the finish is stopped")
+        if s.from_date or s.to_date:
+            when += f", from {s.from_date or 'now'} to {s.to_date or 'no end date'}"
+        entries = [{"days": list(s.days), "start": w.start, "end": w.finish, "from_date": _iso(s.from_date),
+                    "to_date": _iso(s.to_date)} for w in s.windows]
+        nxt = [w.start_local for w in sc.upcoming("preview", entries, tz, now_utc, 30) if w.start_utc > now_utc][:3]
+        what = what.replace("water for", "water for", 1) + " per cycle"
     else:
         days = ", ".join(d.title() for d in s.days)
         when = f"on {days} at {', '.join(s.times)} ({tz})"
