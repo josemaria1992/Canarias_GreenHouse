@@ -221,7 +221,7 @@ def route_issues(d: Diagram, t: Topology) -> list[dict]:
         if doubles_back(pts):
             issue("ROUTE_BACKTRACK", r.edge, f"pipe {r.edge} runs back over itself", "reroute it")
             continue
-        for end, ref, pt in (("start", e.src, pts[0]), ("end", e.dst, pts[-1])):
+        for end, ref, pt, nxt in (("start", e.src, pts[0], pts[1]), ("end", e.dst, pts[-1], pts[-2])):
             s = syms.get(ref.node)
             n = nodes.get(ref.node)
             if s is None or n is None:
@@ -230,10 +230,16 @@ def route_issues(d: Diagram, t: Topology) -> list[dict]:
                 continue
             if ref.port not in ports_of(n.kind):
                 continue                         # the graph's own check reports it
-            a, _ = anchor(n.kind, s, ref.port)
+            a, side = anchor(n.kind, s, ref.port)
             if pt != a:
                 issue("ROUTE_DETACHED", r.edge, f"pipe {r.edge}: its {end} is not on {ref.node}'s {ref.port} port",
                       "reroute it; a pipe end stays on its port")
+                continue
+            vx, vy = SIDE_VEC[side]                # the pipe runs out of the port along the side it faces
+            dx, dy = nxt[0] - pt[0], nxt[1] - pt[1]
+            if (dx > 0) - (dx < 0) != vx or (dy > 0) - (dy < 0) != vy or abs(dx) + abs(dy) < 5:
+                issue("ROUTE_PORT_SIDE", r.edge, f"pipe {r.edge}: its {end} does not run straight out of "
+                      f"{ref.node}'s {ref.port} port", "reroute it; a pipe leaves and enters a port straight")
         if any(not (0 - 100 <= x <= d.width + 100 and -100 <= y <= d.height + 100) for x, y in pts):
             issue("ROUTE_BOUNDS", r.edge, f"pipe {r.edge} leaves the drawing", "reroute it", "WARNING")
     # unrelated pipes drawn on top of each other look connected: warn, never merge

@@ -43,6 +43,22 @@
     }
     return points.length >= 2;
   }
+  /** A pipe leaves its first port and enters its last one straight, along the side the port faces, for at least
+      MIN_STUB: never along a symbol's edge or into a port from the side. */
+  const MIN_STUB = 5;
+  function portsStraight(points, startSide, endSide) {
+    if (points.length < 2) return false;
+    const seg = (a, b) => [Math.sign(b[0] - a[0]), Math.sign(b[1] - a[1]), Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1])];
+    if (startSide) {
+      const [dx, dy, len] = seg(points[0], points[1]), v = DIR[startSide];
+      if (dx !== v[0] || dy !== v[1] || len < MIN_STUB) return false;
+    }
+    if (endSide) {
+      const n = points.length, [dx, dy, len] = seg(points[n - 2], points[n - 1]), v = DIR[endSide];
+      if (dx !== -v[0] || dy !== -v[1] || len < MIN_STUB) return false;
+    }
+    return true;
+  }
   /** Two consecutive segments on one line: the pipe doubles back over itself. */
   function doublesBack(points) {
     for (let i = 2; i < points.length; i++) {
@@ -87,6 +103,7 @@
   /** Validity and cost of a whole route (points from the start anchor to the end anchor). */
   function evaluate(points, ctx) {
     if (!orthogonal(points) || doublesBack(points)) return null;
+    if (!portsStraight(points, ctx.startSide, ctx.endSide)) return null;
     const b = ctx.bounds;
     for (const p of points) if (b && (p[0] < b.x || p[0] > b.x + b.w || p[1] < b.y || p[1] > b.y + b.h)) return null;
     const ss = segs(points);
@@ -292,7 +309,8 @@
   function route1(q, clearance, stub) {
     const ctx = { obstacles: (q.obstacles || []).map(r => ({ id: r.id, x: r.x - clearance, y: r.y - clearance, w: r.w + 2 * clearance, h: r.h + 2 * clearance })),
       others: (q.others || []).filter(o => o && o.length >= 2), previous: q.previous || null, bounds: q.bounds || null,
-      startOwner: q.start.owner, endOwner: q.end.owner, clearance, track: q.track == null ? 10 : q.track };
+      startOwner: q.start.owner, endOwner: q.end.owner, clearance, track: q.track == null ? 10 : q.track,
+      startSide: q.start.side, endSide: q.end.side };
     const A = [snap(q.start.x), snap(q.start.y)], B = [snap(q.end.x), snap(q.end.y)];
     if (same(A, B)) return { ok: false, reason: "both ends are at the same point" };
     const s = stubPoint(q.start, stub), e = stubPoint(q.end, stub);
@@ -323,7 +341,8 @@
     const clearance = q.clearance == null ? 10 : q.clearance;
     const ctx = { obstacles: (q.obstacles || []).map(r => ({ id: r.id, x: r.x - clearance, y: r.y - clearance, w: r.w + 2 * clearance, h: r.h + 2 * clearance })),
       others: (q.others || []).filter(o => o && o.length >= 2), previous: null, bounds: q.bounds || null,
-      startOwner: q.start && q.start.owner, endOwner: q.end && q.end.owner, clearance };
+      startOwner: q.start && q.start.owner, endOwner: q.end && q.end.owner, clearance,
+      startSide: q.start && q.start.side, endSide: q.end && q.end.side };
     return evaluate(canonical(points), ctx) != null;
   }
   function pinsKept(points, pins) {
@@ -372,7 +391,7 @@
     return out;
   }
 
-  const api = { route, valid, dragSegment, canonical, orthogonal, doublesBack, crossings, gaps, length, bends, evaluate, snap, EPS, COST, LIMIT };
+  const api = { route, valid, portsStraight, dragSegment, canonical, orthogonal, doublesBack, crossings, gaps, length, bends, evaluate, snap, EPS, COST, LIMIT };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.AqRouter = api;
 })(typeof window !== "undefined" ? window : this);

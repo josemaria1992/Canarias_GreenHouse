@@ -113,18 +113,15 @@ def test_validation_rejects_duplicates_and_bad_values():
 # ---------------------------------------------------------------------- the drawing
 def drawing(t, moves=None):
     pos = {"src": (20, 40), "tank": (120, 20), "pump": (300, 100), "meter": (400, 100), "valve": (500, 100),
-           "sector": (620, 90), "lvl": (240, 20), "drain": (620, 260), "rpump": (500, 300)} | (moves or {})
+           "sector": (620, 90), "lvl": (240, 20), "drain": (620, 260), "rpump": (780, 300)} | (moves or {})
     syms = [dg.Symbol(node=n, x=pos[n][0], y=pos[n][1]) for n in pos]
     d = dg.Diagram(symbols=syms)
     kinds = {n.id: n.kind for n in t.nodes}
     sym = {s.node: s for s in syms}
     routes = []
+    from tests.integration.test_blocks_070 import straight_route
     for e in t.edges:
-        a, _ = dg.anchor(kinds[e.src.node], sym[e.src.node], e.src.port)
-        b, _ = dg.anchor(kinds[e.dst.node], sym[e.dst.node], e.dst.port)
-        pts = [a, (a[0] + 10, a[1])] if a[0] != b[0] or a[1] != b[1] else [a]
-        pts += [(pts[-1][0], b[1]), b]                 # a simple elbow route for the test
-        routes.append(dg.Route(edge=e.id, points=dg.canonical_points(pts)))
+        routes.append(dg.Route(edge=e.id, points=straight_route(kinds, sym, e)))
     return d.model_copy(update={"routes": routes})
 
 

@@ -20,6 +20,7 @@ function assertRoute(r, a, b, msg) {
   assert.ok(!R.doublesBack(p), `${msg}: doubles back ${JSON.stringify(p)}`);
   assert.deepEqual(p[0], [R.snap(a.x), R.snap(a.y)], `${msg}: start detached`);
   assert.deepEqual(p[p.length - 1], [R.snap(b.x), R.snap(b.y)], `${msg}: end detached`);
+  assert.ok(R.portsStraight(p, a.side, b.side), `${msg}: does not leave/enter its ports straight ${JSON.stringify(p)}`);
 }
 
 test("RTE-01 every relative arrangement and every pair of port sides gives an attached H/V route", () => {
@@ -83,6 +84,7 @@ test("RTE-03 dragging a segment keeps H/V, keeps both ends, and returns a pin th
       assert.deepEqual(m.points[0], r.points[0]);
       assert.deepEqual(m.points[m.points.length - 1], r.points[r.points.length - 1]);
       assert.ok(m.pin && (m.pin.axis === "x" || m.pin.axis === "y"));
+      if (R.valid(m.points, q)) assert.ok(R.portsStraight(m.points, q.start.side, q.end.side), `seg ${i} by ${d}: accepted a side entry`);
     }
   }
   const mid = r.points.findIndex((p, i) => i > 0 && i < r.points.length - 2);

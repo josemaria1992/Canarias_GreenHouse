@@ -11,6 +11,7 @@
 "use strict";
 (function () {
   const U = window.AqUI;
+  const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));   // never a "null" text
   const { h, api, can, mount, S, VIEWS } = U;
   const KIND_WORD = { source: "water source", tank: "tank", pump: "pump", valve: "valve", meter: "flow meter", sensor: "sensor", sector: "sector", junction: "junction" };
   const B = S.blocksUi = S.blocksUi || { tab: "blocks", msg: {}, form: null, editor: null, loaded: null };
@@ -156,12 +157,14 @@
     const items = topo.items;
     const ed = window.AqHydraulicEditor.create(box, { symbols: topo.symbols, items, graph: topo.graph, diagram: dia.diagram, readOnly: ro,
       serverIssues: topo.issues, onChange: () => {} });
-    B.editor = ed; B.loaded = { trev: topo.rev, drev: dia.rev };
+    // the page adopts this editor only once it is on screen (a skipped redraw keeps the one the user sees)
+    const loaded = { trev: topo.rev, drev: dia.rev };
+    const adopt = () => { if (box.isConnected && B.editor !== ed) { B.editor = ed; B.loaded = loaded; } };
     const save = async () => {
       const cur = ed.get();
-      const r = await call("draw", "POST", "/api/drawing/installation", { graph: cur.graph, diagram: cur.diagram, expected_topology_rev: B.loaded.trev, expected_diagram_rev: B.loaded.drev });
+      const r = await call("draw", "POST", "/api/drawing/installation", { graph: cur.graph, diagram: cur.diagram, expected_topology_rev: loaded.trev, expected_diagram_rev: loaded.drev });
       if (r) {
-        B.loaded = { trev: r.topology.rev, drev: r.diagram.rev }; ed.clean();
+        loaded.trev = r.topology.rev; loaded.drev = r.diagram.rev; ed.clean();
         tell("draw", r.semantic_change ? `Saved. The connections changed (graph revision ${r.topology.rev}): blocks and twin results that used the old connections must be checked again.`
           : "Saved. Only the drawing changed; the connections are the same.");
         ed.set(cur.graph, cur.diagram, r.issues);
@@ -182,7 +185,7 @@
     const foot = h("div", null);
     function footer() {
       const m = B.migration;
-      foot.replaceChildren(h("div", { class: "row" }, h("button", { disabled: ro, onclick: save }, "Save drawing"), h("button", { class: "ghost", disabled: ro, onclick: cancel }, "Cancel changes"),
+      put(foot, h("div", { class: "row" }, h("button", { disabled: ro, onclick: save }, "Save drawing"), h("button", { class: "ghost", disabled: ro, onclick: cancel }, "Cancel changes"),
         !topo.graph.nodes.length && !ro ? h("button", { class: "ghost", onclick: migrate }, "Start from the old drawing") : null, note("draw")),
         m ? h("div", { class: "card" }, h("h3", null, "From the old drawing: decide these"),
           h("p", { class: "muted small" }, `Source: ${m.from}, digest ${m.source.digest.slice(0, 12)}. It stays unchanged as a reference. ${m.meaning}.`),
@@ -191,7 +194,7 @@
         h("p", { class: "muted small" }, topo.meaning));
     }
     footer();
-    return [box, foot];
+    return { parts: [box, foot], adopt };
   }
 
   VIEWS.blocks = async function () {
@@ -209,8 +212,9 @@
     const [T, topo] = await Promise.all([api("GET", "/api/blocks"), api("GET", "/api/topology")]);
     if (B.tab === "drawing") {
       const dia = await api("GET", "/api/diagram/installation");
-      B.editor = null;
-      mount("v-blocks", h("div", { class: "card" }, h("h2", null, "Blocks"), tabs()), h("div", { class: "card" }, drawingTab(topo, dia)));
+      const d = drawingTab(topo, dia);
+      mount("v-blocks", h("div", { class: "card" }, h("h2", null, "Blocks"), tabs()), h("div", { class: "card" }, d.parts));
+      d.adopt();
       return;
     }
     mount("v-blocks",

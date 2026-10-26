@@ -5,6 +5,7 @@
 "use strict";
 (function () {
   const T = window.AqTwin, { h, api, can } = T;
+  const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));   // never a "null" text
   const G = { card: null, body: null, ed: null, editing: false, msg: {}, loaded: null, last: 0, host: null };
   function note(k) { const m = G.msg[k]; return m ? h("span", { class: "inline-msg " + (m.bad ? "bad" : "ok"), role: "status" }, m.text) : null; }
   async function call(k, method, path, body, ok) {
@@ -30,7 +31,7 @@
   function draw(v) {
     const gw = v.graph_water;
     if (!gw) {
-      G.body.replaceChildren(h("h2", null, "Installation graph"),
+      put(G.body, h("h2", null, "Installation graph"),
         h("p", { class: "muted" }, "This twin has no explicit graph yet: its water still follows the older drawing below (a reference)."),
         can("equipment_edit") ? h("button", { onclick: async () => { await load(); G.editing = true; G.ed = null; build(v); } }, "Draw the installation graph") : null);
       return;
@@ -39,7 +40,7 @@
     if (G.ed && !G.editing) G.ed.setOverlay({ edges: gw.edges, tanks: gw.tanks, notModelled: gw.not_modelled });
     G.lastRev = G.loaded && G.loaded.topo.rev;
     const nm = Object.entries(gw.not_modelled || {});
-    G.side.replaceChildren(
+    put(G.side, 
       h("h3", null, "Water now"), h("p", { class: "small" }, `Model ${gw.model}: a bounded water balance over the explicit pipes. Pressure, chemistry and suction are NOT MODELLED.`),
       v.model_error ? h("p", { class: "bad" }, `The model stopped: ${v.model_error}. This run is not valid evidence; reset the twin.`) : null,
       ledgerTable(gw),
@@ -71,13 +72,13 @@
       if (r) { G.editing = false; await load(); build(v); }
       else bar();
     };
-    const bar = () => G.bar.replaceChildren(
+    const bar = () => put(G.bar, 
       G.editing ? [h("button", { onclick: save }, "Save in the twin"), h("button", { class: "ghost", onclick: async () => { G.editing = false; await load(); build(v); } }, "Cancel")]
         : can("equipment_edit") ? h("button", { onclick: async () => { await load(); G.editing = true; build(v); } }, "Edit the drawing") : null,
       note("save"));
     G.bar = h("div", { class: "row" });
     bar();
-    G.body.replaceChildren(h("h2", null, "Installation graph"), G.bar, host, side,
+    put(G.body, h("h2", null, "Installation graph"), G.bar, host, side,
       h("p", { class: "muted small" }, "The water follows only the connections drawn here; a crossing never joins pipes. Saving here changes the twin, not the real system."));
   }
   async function update(v) {

@@ -38,16 +38,24 @@ def graph():
                       edge("e5", "valve-1.out", "sector-1.in")]}
 
 
+def straight_route(kinds, syms, e):
+    """A simple route that leaves and enters each port straight: stub, elbow, stub (test layouts only)."""
+    a, sa = dg.anchor(kinds[e.src.node], syms[e.src.node], e.src.port)
+    b, sb = dg.anchor(kinds[e.dst.node], syms[e.dst.node], e.dst.port)
+    va, vb = dg.SIDE_VEC[sa], dg.SIDE_VEC[sb]
+    s1 = (a[0] + 20 * va[0], a[1] + 20 * va[1])
+    e1 = (b[0] + 20 * vb[0], b[1] + 20 * vb[1])
+    elbow = (s1[0], e1[1]) if va[0] else (e1[0], s1[1])
+    return dg.canonical_points([a, s1, elbow, e1, b])
+
+
 def drawing(g, symbols):
     t = parse(g)
     syms = {s.node: s for s in symbols}
     kinds = {n.id: n.kind for n in t.nodes}
     routes = []
     for e in t.edges:
-        a, _ = dg.anchor(kinds[e.src.node], syms[e.src.node], e.src.port)
-        b, _ = dg.anchor(kinds[e.dst.node], syms[e.dst.node], e.dst.port)
-        mid = (a[0] + b[0]) / 2
-        routes.append({"edge": e.id, "points": dg.canonical_points([a, (mid, a[1]), (mid, b[1]), b])})
+        routes.append({"edge": e.id, "points": straight_route(kinds, syms, e)})
     return {"symbols": [s.model_dump() for s in symbols], "routes": routes}
 
 

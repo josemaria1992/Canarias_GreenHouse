@@ -12,6 +12,7 @@
 "use strict";
 (function () {
   const NS = "http://www.w3.org/2000/svg";
+  const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));   // never a "null" text
   const R = window.AqRouter;
   const ROT_SIDE = { 0: "NESW", 90: "ESWN", 180: "SWNE", 270: "WNES" };
   const KIND_ICON = { source: "drop", tank: "tank", pump: "pump", valve: "valve", meter: "flow", sensor: "sensor", sector: "drop", junction: null };
@@ -234,14 +235,14 @@
     const canvas = svg("svg", { class: "hed-canvas", role: "application", tabindex: "0", "aria-label": "Hydraulic drawing editor" });
     const side = el("div", { class: "hed-side" });
     wrap.append(bar, status, el("div", { class: "hed-body" }, el("div", { class: "hed-wrap diagram-wrap" }, canvas), side));
-    root.replaceChildren(wrap);
+    put(root, wrap);
 
     function toolButton(label, on, active, disabled, title) {
       return el("button", { class: "small" + (active ? "" : " ghost"), "aria-pressed": active ? "true" : null, disabled: !!disabled, title, onclick: on }, label);
     }
     function drawBar() {
       const ro = opt.readOnly;
-      bar.replaceChildren(
+      put(bar, 
         toolButton("Select", () => { st.tool = "select"; st.pending = null; draw(); }, st.tool === "select"),
         toolButton("Connect pipe", () => { st.tool = "connect"; st.pending = null; draw(); say("Choose an outlet port, then the port it feeds."); }, st.tool === "connect", ro),
         toolButton("Junction", () => { st.tool = "junction"; st.pending = null; draw(); say("Choose the point of a pipe where a branch joins it."); }, st.tool === "junction", ro),
@@ -352,7 +353,7 @@
         if (m.edge && routes[m.edge]) { const p = routes[m.edge]; to = p[Math.floor(p.length / 2)]; }
         if (to) kids.push(svg("path", { d: `M${b.x + b.w / 2} ${b.y + b.h / 2}L${to[0]} ${b.y + b.h / 2}L${to[0]} ${to[1]}`, class: "hed-tap" }, svg("title", null, `${nameOf(m.sensor)} measures this (a tap: it carries no water)`)));
       }
-      canvas.replaceChildren(...kids);
+      put(canvas, ...kids);
       drawSide();
     }
     function iconAt(name, b) {
@@ -401,7 +402,7 @@
       parts.push(el("h3", null, "Checks"), checks.length ? el("ul", { class: "hed-issues" }, checks.map(i => el("li", { class: i.severity === "ERROR" ? "bad" : "warn" },
         `${i.message}. ${i.fix}. `, objectOf(i) ? el("button", { class: "small ghost", onclick: () => { st.sel = objectOf(i); draw(); } }, "Show on diagram") : null)))
         : el("p", { class: "muted small" }, "No problem found in the drawing. Save, then validate the blocks that use it."));
-      side.replaceChildren(...parts);
+      put(side, ...parts);
     }
     function objectOf(i) {
       const o = (i.object || "").split(".")[0];

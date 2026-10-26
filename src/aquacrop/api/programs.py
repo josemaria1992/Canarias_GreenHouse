@@ -218,7 +218,7 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                 "simulation": {k: (v["simulation"] or {}).get(k) for k in ("passed", "accepted_by", "accepted_utc", "meaning")}
                 if v["simulation"] else None}
             if ops:                                  # a viewer reads summaries, not definitions or readiness details
-                row |= {"body": body, "validation": v["validation"], "created_by": v["created_by"]}
+                row |= {"body": body, "validation": v["validation"], "created_by": v["created_by"], "simulation": v["simulation"]}
             out.append(row)
         if not ops:
             return {"programs": out, "timezone": cfg.site.timezone, "blocks": [], "readings": [], "items": []}
