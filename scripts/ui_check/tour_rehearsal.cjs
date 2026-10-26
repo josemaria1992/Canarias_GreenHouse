@@ -28,6 +28,12 @@ async function shot(p, name, full = true) {
   await p.screenshot({ path: path.join(OUT, name + ".jpg"), type: "jpeg", quality: 72, fullPage: full, clip: { x: 0, y: 0, width: vp.width, height: h } });
   await p.waitForTimeout(1000);      // a full-page capture resizes the page: let the layout settle before the next click
 }
+async function capture(loc, file) {  // the page may rebuild the element between finding it and capturing it
+  for (let i = 0; ; i++) {
+    try { return await loc.screenshot({ path: path.join(OUT, file) }); }
+    catch (e) { if (i >= 4 || !/not attached/.test(String(e))) throw e; await loc.page().waitForTimeout(300); }
+  }
+}
 const api = (p, url, method = "GET", body) => p.evaluate(async ([url, method, body]) => {
   const csrf = window.AqUI && window.AqUI.S.csrf;
   const r = await fetch(url, { method, credentials: "same-origin",
@@ -251,10 +257,7 @@ CASES["UAT-01"] = async (p) => {
   check("Settings, Versions: inventory", inv === "6 modules: 16 AI + 32 DI + 32 DO = 80 points", inv);
   check("Settings, Versions: config", /installation-80@2026-10-13\.80\.1 \(SIMULATED\)/.test(t), (t.match(/Config\n(.*)/) || [])[1]);
   check("Settings, Versions: release line", process.env.AQ_EXPECT_RELEASE ? rel.includes("wheel verified") && rel.includes(process.env.AQ_EXPECT_RELEASE) : rel.length > 0, rel);
-  for (let i = 0; ; i++) {         // the page may rebuild the card between finding it and capturing it
-    try { await p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Versions" }) }).first().screenshot({ path: path.join(OUT, "UAT-01-versions.png") }); break; }
-    catch (e) { if (i >= 4 || !/not attached/.test(String(e))) throw e; await p.waitForTimeout(300); }
-  }
+  await capture(p.locator("section.view:not(.hidden) .card", { has: p.locator("h2", { hasText: "Versions" }) }).first(), "UAT-01-versions.png");
 };
 
 CASES["UAT-02"] = async (p) => {
@@ -326,7 +329,7 @@ CASES["UAT-03"] = async (p) => {
   await p.waitForTimeout(600);
   const histTxt = await icard.locator("details.tech").innerText();
   check("the card's Details show the history of this process", /History of this process/.test(histTxt) && /STOP_DRIVE/.test(histTxt), (histTxt.match(/History of this process[^\n]*/) || [""])[0]);
-  await icard.screenshot({ path: path.join(OUT, "UAT-03-transition-history.png") });
+  await capture(icard, "UAT-03-transition-history.png");
   const log = (await proc(p, "IRRIGATION")).cycles || [];
   check("cycle log", log.length >= 1 && log[0].sector === "S1" && log[0].pump === "MP1" && Math.abs(log[0].irrigated_s - 300) < 2,
     JSON.stringify(log.map(x => [x.sector, x.pump, Math.round(x.irrigated_s)])));
@@ -832,7 +835,7 @@ CASES["UAT-14"] = async (p, b) => {
     const start = card(q, "IRRIGATION").locator("button", { hasText: exact("Start automatic watering") });
     const disabled = await start.isDisabled();
     const title = await start.getAttribute("title");
-    await q.locator("section.view:not(.hidden)").screenshot({ path: path.join(OUT, `UAT-14-${role}-main-pumps.png`) });
+    await capture(q.locator("section.view:not(.hidden)"), `UAT-14-${role}-main-pumps.png`);
     if (role === "viewer") check("viewer: controls disabled, the account needed named", disabled && /needs an operator or administrator account/.test(title || ""), title);
     else check("operator: Start automatic watering available", !disabled, `disabled=${disabled}`);
     if (role === "operator") {
