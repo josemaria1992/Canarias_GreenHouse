@@ -22,7 +22,8 @@ evidence. This brief is the map.
 | `c5ac7cb` | M5–M7: history runs, simulated modules, graph export, module requests, browser journey, docs |
 | `d3ef78e` | Test record (suite, browser journey, release) |
 | `66ac861` | CI fix: a run's timeline starts at its own `PROGRAM_OP_STARTED`; UI-01 nav label |
-| (this commit) | This brief; CM4 OS recorded; results branch name corrected |
+| `bd6ab4e` | This brief; CM4 OS recorded; results branch name corrected. The release ZIP is built from this commit |
+| (next commit) | New release SHA-256 recorded |
 
 ## M0: review defects (`4560471`)
 
@@ -127,11 +128,12 @@ evidence. This brief is the map.
 | Full suite (Windows, Python 3.12) | 694 passed, 8 skipped (Linux/POSIX-only by design), 0 failed |
 | Browser journey (simulation) | 29/29 checks |
 | Existing UI check | 100/101 on CI before `66ac861` (label only); fixed |
-| Release build + `verify_release.py` with its own Python | 28/28. ZIP sha256 `fdd274b4…b8730a`, built from `c5ac7cb` |
+| Release build + `verify_release.py` with its own Python | 28/28. ZIP sha256 `ee71716f9e93aca14cf821fc91c9eca34c67766f336516e0f5a61f7d909f327b`, 2265 files, built from a clean worktree of `bd6ab4e` |
 | CI on PR #11 | failed on `d3ef78e` (timeline order, UI-01 label); fixed in `66ac861`, re-run pending |
 
-**The release ZIP is stale.** It was built from `c5ac7cb`, and `66ac861` changed `historian/runs.py`. Rebuild from
-the final head before any install.
+**Release ZIP.** It was rebuilt from `bd6ab4e` and includes the `66ac861` fix. The earlier build from `c5ac7cb`
+(`fdd274b4…`) is superseded. The documents inside the ZIP still name the earlier build, because they were
+written before this rebuild. Commits after `bd6ab4e` change documents only.
 
 ## Not done or not verified
 

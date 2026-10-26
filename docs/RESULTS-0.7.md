@@ -152,11 +152,11 @@ Playwright for the browser journey. Branch `feat/operator-upgrade-0.7` (base `fe
 ## Packaged release
 
 `python scripts/build_release.py --out <dir> --windows-runtime download --wheelhouse aarch64:3.11 --wheelhouse aarch64:3.13`
-from a clean worktree of commit `c5ac7cb0f0b03a4afae66cf30dadc1e3bf44cd83`: `aquacrop-0.7.0.zip`, 2264 files, SHA-256
-`fdd274b4e0aef0f84382644363467987cc46e9f2ae1359a3eb26b98262b8730a`. `scripts/verify_release.py` with the
+from a clean worktree of commit `bd6ab4e92711ab4a6f31bb53820a555872b85c07`: `aquacrop-0.7.0.zip`, 2265 files, SHA-256
+`ee71716f9e93aca14cf821fc91c9eca34c67766f336516e0f5a61f7d909f327b`. `scripts/verify_release.py` with the
 release's own `runtime/python.exe`: 28 passed, 0 failed. The ZIP carries the documents as they stood at that commit
-(this record without its final numbers). Commit `66ac861` (CI fix: a run's timeline begins at its own start) changed
-`historian/runs.py` after this build, so the ZIP must be rebuilt from the final head before any install.
+(this record still names the earlier build). It contains the CI fix of `66ac861` (a run's timeline begins at its own
+start). It replaces the build from `c5ac7cb` (SHA-256 `fdd274b4…b8730a`), which predates that fix and must not be used.
 
 ## CM4
 
