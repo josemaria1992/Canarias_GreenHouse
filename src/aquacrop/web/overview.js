@@ -64,9 +64,12 @@
       readOnly: true, viewOnly: true, highlight: O.sel ? [O.sel] : [], onSelect: id => { O.sel = O.sel === id ? null : id; U.refresh(); } });
     ed.setOverlay({ states });
     const planned = Object.values(states).filter(s => s.cls === "planned").length;
+    const TC = U.can("ops_read") ? await api("GET", "/api/twin-changes").catch(() => null) : null;   // viewers never see it
     return h("div", { class: "card", id: "overview-diagram", "data-overview": "graph" },
       h("div", { class: "row" }, h("h2", null, "Installation"), h("span", { class: "muted small" }, `drawing revision ${D.diagram.rev}, connections revision ${D.topology.rev}`)),
       h("div", { class: "diagram-layout" }, h("div", { class: "diagram-wrap" }, host), sidePanel(D)),
+      TC && TC.pending.length ? h("p", { class: "warn small" }, `${TC.pending.length} change(s) exported from the Digital Twin wait for approval: `,
+        h("a", { href: "#twin" }, "review them on the Digital Twin page"), ". The drawing above stays as it is until one is applied.") : null,
       planned ? h("p", { class: "small" }, U.pill("PLANNED · UNASSIGNED", "warn"), ` ${planned} item(s) are drawn but have no channel yet: they cannot run and show no state.`) : null,
       h("p", { class: "muted small", "data-migration": "" }, D.migration, " The drawing is changed in the Digital Twin and exported here; it never changes equipment channels or runs anything."));
   }

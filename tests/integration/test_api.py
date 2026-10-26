@@ -46,7 +46,7 @@ PW = {"admin1": "correct horse battery", "oper1": "operator password 1", "view1"
 def test_health_is_minimal_and_status_needs_auth(env):
     app, c = env
     h = c.get("/api/health").json()
-    assert set(h) == {"ok", "storage_ok", "acquisition_ok"}
+    assert set(h) == {"ok", "storage_ok", "acquisition_ok", "runtime", "version", "build"}   # 0.7.1: the build, no user data
     assert c.get("/api/status").status_code == 401
     assert c.get("/api/openapi.json").status_code == 401
     assert c.get("/docs").status_code == 404

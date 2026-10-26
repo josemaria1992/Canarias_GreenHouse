@@ -182,8 +182,22 @@
     $("who").textContent = `${sess.username} (${sess.role}${sess.commissioning ? ", commissioning" : ""})`;
     S.role = sess.role; S.nav = sess.navigation || [];
     applyNav();
-    route(); refresh();
+    route(); refresh(); identity();
   }
+  /** 0.7.1: which build runs here and whether the Digital Twin runs the same one; a mismatch is said, never hidden. */
+  async function identity() {
+    let v;
+    try { v = await api("GET", "/api/version"); } catch (e) { return; }
+    const short = v.build.replace(/\.w[0-9a-f]+$/, "");
+    $("build").textContent = `${v.version} · build ${(v.commit || "unknown").slice(0, 7)}${v.tree_clean === false ? " (changed)" : ""} · ${v.project.config_id}`;
+    $("build").title = `Program ${v.build} (${v.source}), main dashboard, profile ${v.profile}, project ${v.project.config_id} ${v.project.config_version}`;
+    const warn = [];
+    if (v.web_drift) warn.push(`This dashboard's files changed after it started: ${v.web_drift}.`);
+    if (v.partner && v.partner.match === false) warn.push(`The Digital Twin runs another build (${v.partner.build}); this dashboard runs ${short}. Install both from the same release before relying on twin results.`);
+    $("identity-warn").textContent = warn.join(" ");
+    $("identity-warn").classList.toggle("hidden", !warn.length);
+  }
+  setInterval(() => { if (S.user) identity(); }, 60000);
   // 0.7.0 role navigation (ADR-0023): exactly the pages of the role. The server refuses the rest anyway.
   const VIEW_NAV = { overview: "overview", blocks: "blocks", twin: "twin", "hw-add": "hw-add", programs: "programs",
     history: "history", alarms: "alarms", equipment: "equipment", "equipment-types": "equipment-types", operation: "programs",

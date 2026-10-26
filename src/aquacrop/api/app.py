@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import __version__
+from ..build import identity as build_identity
 from ..config.catalog import CATALOG
 from ..config.schema import InstallationConfig
 from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
@@ -370,7 +371,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             return JSONResponse({"detail": "chunked bodies not accepted"}, status_code=411)
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers[pages.VERSION_HEADER] = __version__
+        resp.headers[pages.VERSION_HEADER] = build_identity()["build"]
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -542,10 +543,24 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     # ------------------------------------------------------------------ health / status
     @app.get("/api/health")
     def health():
-        """Unauthenticated, minimal: no values, no identities."""
+        """Unauthenticated, minimal: no values, no user identities; the software build, so an installation can be
+        checked without signing in (0.7.1)."""
         ok_store, _ = hist.can_accept_starts()
         task = svc.task_health()
-        return {"ok": ok_store and task["ok"], "storage_ok": ok_store, "acquisition_ok": task["ok"]}
+        return {"ok": ok_store and task["ok"], "storage_ok": ok_store, "acquisition_ok": task["ok"],
+                "runtime": "MAIN", "version": __version__, "build": build_identity()["build"]}
+
+    @app.get("/api/version")
+    def version_view(p: Principal = Depends(require(Perm.READ))):
+        """Which program is running here (0.7.1): the build (version, source commit, web files), the runtime, the profile
+        and the project, and whether the Digital Twin runs the same build. No filesystem paths."""
+        from ..build import partner, web_drift
+        ident = build_identity()
+        return {"runtime": "MAIN", "version": __version__, "build": ident["build"], "commit": ident["commit"],
+                "tree_clean": ident["tree_clean"], "source": ident["source"], "built_utc": ident["built_utc"],
+                "started_utc": ident["started_utc"], "web_drift": web_drift(), "profile": cfg.profile.value,
+                "project": {"config_id": cfg.config_id, "config_version": cfg.config_version, "timezone": cfg.site.timezone},
+                "partner": partner(feed_dir, "TWIN")}
 
     def _freshness() -> dict:
         now = datetime.now(timezone.utc)
@@ -570,6 +585,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         alarms = list(r.alarms.open.values())
         return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
                 "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
+                "build": build_identity()["build"],
                 "timezone": cfg.site.timezone, "topology": cfg.topology, "controller": _controller_summary(r),
                 "twin": {"activity": svc.clock.activity.value, "speed": svc.clock.speed, "run_id": r.run_id,
                          "sim_s": r.sim_s, "tick": r.tick, "source": r.backend.source.value, "scenario": svc.scenario,
@@ -612,6 +628,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         lease = svc.lease_view()
         return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
                 "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
+                "build": build_identity()["build"],
                 "timezone": cfg.site.timezone, "controller": None, "twin": None,
                 "devices": _devices_view(), "drives": svc.drive_view(), "relay_modes": svc.relay_mode_view(),
                 "bench_lease": lease,
@@ -811,6 +828,9 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     equipment.dependents = programs.dependents
     app.state.programs = programs
     feed_dir = Path(os.environ["AQUACROP_FEED_DIR"]) if os.environ.get("AQUACROP_FEED_DIR") else None
+    from ..build import publish as publish_identity
+    publish_identity(feed_dir, "MAIN", {"profile": cfg.profile.value, "config_id": cfg.config_id,
+                                        "config_version": cfg.config_version})
     twin_url = os.environ.get("AQUACROP_TWIN_URL")
 
     def publish():

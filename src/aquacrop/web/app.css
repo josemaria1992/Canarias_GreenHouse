@@ -418,3 +418,10 @@ label.check.member { gap: 8px; }
 .hed-palette-group > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .hed-anchor select { min-height: 28px; padding: 2px 6px; font-size: 12px; }
 .hed-anchor input[type=range] { width: 90px; min-height: 0; padding: 0; }
+.member-group > summary { list-style: none; }
+.member-group > summary::-webkit-details-marker { display: none; }
+.member-group > summary::before { content: "▸"; display: inline-block; width: 1em; color: var(--accent); }
+.member-group[open] > summary::before { content: "▾"; }
+/* 0.7.1 build identity and main/twin mismatch */
+.build-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+.identity-warn { background: var(--bad); color: #fff; padding: 8px 16px; font-weight: 600; }

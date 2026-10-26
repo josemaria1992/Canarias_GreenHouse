@@ -36,6 +36,7 @@ from ..twin import feed
 from . import pages
 from ..equipment.definitions import TypeBody, channel_issues
 from ..blocks.store import BlockRefused
+from ..build import identity as build_identity, publish as publish_identity
 from ..twin.changes import ChangeRefused, TwinChanges, preview as changes_preview, program_items, write_export
 from ..twin.equipment_service import EquipmentTwinService, twin_config
 from .app import safe_validation_response
@@ -176,6 +177,7 @@ class DesignImportIn(BaseModel):
 def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_hosts: list[str],
                     allowed_origins: list[str], bind_host: str = "127.0.0.1", session_id: str | None = None) -> FastAPI:
     feed_dir, state_dir = Path(feed_dir), Path(state_dir)
+    publish_identity(feed_dir, "TWIN")
     snap = feed.read_snapshot(feed_dir)
     if snap is None:
         raise RuntimeError(f"no live snapshot in {feed_dir}: start the live service first")
@@ -265,7 +267,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             request.state.principal = p
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers[pages.VERSION_HEADER] = __version__
+        resp.headers[pages.VERSION_HEADER] = build_identity()["build"]
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -358,7 +360,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         if svc.loop_error:
             return JSONResponse({"ok": False, "runtime": "TWIN", "error": "simulation loop failed; it is paused"},
                                 status_code=503)
-        return {"ok": True, "runtime": "TWIN"}
+        return {"ok": True, "runtime": "TWIN", "version": __version__, "build": build_identity()["build"]}
 
     # ------------------------------------------------------------------ the twin
     @app.get("/api/twin")
@@ -368,6 +370,10 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         v["checklist"] = svc.engine.checklist() if svc.engine.mode == "RECOVERY" else None
         v["consequences"] = ({t: svc.engine.approval_consequences(t) for t in ("AUTO", "MANUAL")}
                              if svc.engine.mode == "RECOVERY" else None)
+        from ..build import partner, web_drift
+        v["identity"] = {"runtime": "TWIN", "build": build_identity()["build"], "web_drift": web_drift(),
+                         "partner": partner(feed_dir, "MAIN"),
+                         "project": {"config_id": cfg.config_id, "config_version": cfg.config_version}}
         return v
 
     def _programs() -> list[dict]:

@@ -241,11 +241,19 @@ def main() -> int:
     shutil.rmtree(work, ignore_errors=True)
     wheels = work / "wheels"
     wheels.mkdir(parents=True)
+    built_utc = args.built_utc or datetime.now(timezone.utc).isoformat(timespec="seconds")
     if args.wheel:
         shutil.copy2(args.wheel, wheels / args.wheel.name)
     else:
-        subprocess.run([sys.executable, "-m", "build", "--wheel", "-o", str(wheels), str(ROOT)], check=True,
-                       capture_output=True)
+        # 0.7.1: the wheel carries its own build identity (aquacrop.build), so the running program can say which
+        # commit it is without its release folder; the file exists only while the wheel is built
+        stamp = ROOT / "src" / "aquacrop" / "_build.json"
+        stamp.write_text(json.dumps({"commit": commit, "tree_clean": not dirty, "built_utc": built_utc}), encoding="utf-8")
+        try:
+            subprocess.run([sys.executable, "-m", "build", "--wheel", "-o", str(wheels), str(ROOT)], check=True,
+                           capture_output=True)
+        finally:
+            stamp.unlink(missing_ok=True)
     built = sorted(wheels.glob("aquacrop_greenhouse-*.whl"))
     if len(built) != 1:
         raise SystemExit(f"expected one aquacrop wheel, got {[w.name for w in built]}")
@@ -278,7 +286,7 @@ def main() -> int:
     (stage / "acceptance-manifest.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n",
                                                     encoding="utf-8")
     info = {"name": "aquacrop-greenhouse", "version": version, "commit": commit, "tree_clean": not dirty,
-            "built_utc": args.built_utc or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "built_utc": built_utc,
             "builder": f"python {sys.version.split()[0]} on {sys.platform}",
             "python_supported": ["3.11", "3.12", "3.13", "3.14"],
             "wheel": {"file": f"wheels/{built[0].name}", "sha256": sha256(stage / "wheels" / built[0].name)},

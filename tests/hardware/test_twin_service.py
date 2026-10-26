@@ -452,17 +452,39 @@ def test_an_export_that_can_no_longer_be_applied_can_be_dismissed(live_and_twin)
     assert live.get("/api/twin-changes", headers=hl).json()["pending"] == []
 
 
-def test_pages_name_their_scripts_by_version_and_say_which_version_answers(live_and_twin):
+def test_pages_name_their_scripts_by_build_and_say_which_build_answers(live_and_twin):
+    """0.7.1: the cache key and the header are the build identity (version, commit, web files), not the version alone:
+    a browser can never keep scripts of another build under the same version. Main and twin report each other."""
     from aquacrop import __version__
+    from aquacrop.build import identity
+    build = identity()["build"]
+    assert build.startswith(__version__ + "+") and ".w" in build
     app, live, twin_app, twin, bus, hl = live_and_twin
     for client, page in ((live, "/"), (twin, "/")):
         r = client.get(page)
-        assert r.headers["cache-control"].startswith("no-cache") and r.headers["x-aquacrop-version"] == __version__
-        assert f'<meta name="aquacrop-version" content="{__version__}">' in r.text
-        assert f'app.css?v={__version__}"' in r.text and ".js\"" not in r.text      # every script is versioned
-    assert "immutable" in live.get(f"/static/app.js?v={__version__}").headers["cache-control"]
+        assert r.headers["cache-control"].startswith("no-cache") and r.headers["x-aquacrop-version"] == build
+        assert f'<meta name="aquacrop-version" content="{build}">' in r.text
+        assert f'app.css?v={identity()["asset_key"]}"' in r.text and ".js\"" not in r.text      # every script is versioned
+    assert "immutable" in live.get(f"/static/app.js?v={identity()['asset_key']}").headers["cache-control"]
+    assert live.get(f"/static/app.js?v={__version__}").headers["cache-control"] == "no-cache"   # another build's key
     assert live.get("/static/app.js").headers["cache-control"] == "no-cache"
-    assert live.get("/api/health").headers["x-aquacrop-version"] == __version__
+    h = live.get("/api/health")
+    assert h.headers["x-aquacrop-version"] == build and h.json()["build"] == build and h.json()["runtime"] == "MAIN"
+    assert twin.get("/api/health").json() | {} == twin.get("/api/health").json() and twin.get("/api/health").json()["build"] == build
+    v = live.get("/api/version", headers=hl).json()
+    assert v["build"] == build and v["runtime"] == "MAIN" and v["project"]["config_id"] == app.state.cfg.config_id
+    assert v["partner"]["runtime"] == "TWIN" and v["partner"]["match"] is True, v["partner"]
+    assert "state_dir" not in v and not any("\\" in str(x) or "/var/" in str(x) for x in v.values())   # no paths
+    H = _twin_h(twin, "bench1")
+    assert twin.get("/api/twin", headers=H).json()["identity"]["partner"]["match"] is True
+    # a twin of another build is reported, never assumed to match
+    import json
+    import os
+    from pathlib import Path
+    f = Path(os.environ["AQUACROP_FEED_DIR"]) / "identity-twin.json"
+    f.write_text(json.dumps(json.loads(f.read_text()) | {"build": "0.7.0+old"}), encoding="utf-8")
+    v = live.get("/api/version", headers=hl).json()
+    assert v["partner"]["match"] is False and "0.7.0+old" in v["partner"]["detail"]
 
 
 def test_after_approval_the_twin_no_longer_lists_what_the_real_system_has(live_and_twin):

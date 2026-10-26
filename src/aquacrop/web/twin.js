@@ -213,6 +213,15 @@
     try {
       const v = await api("GET", "api/twin");
       S.v = v;
+      if (v.identity) {                                   // 0.7.1: the twin's build and whether the main dashboard matches
+        const id = v.identity, warn = [];
+        $("build").textContent = `build ${id.build.split("+")[1] ? id.build.split("+")[1].slice(0, 7) : id.build} · ${id.project.config_id}`;
+        $("build").title = `Program ${id.build}, Digital Twin, project ${id.project.config_id} ${id.project.config_version}`;
+        if (id.web_drift) warn.push(`This twin's files changed after it started: ${id.web_drift}.`);
+        if (id.partner && id.partner.match === false) warn.push(`The main dashboard runs another build (${id.partner.build}); this twin runs ${id.build}. Install both from the same release.`);
+        $("identity-warn").textContent = warn.join(" ");
+        $("identity-warn").classList.toggle("hidden", !warn.length);
+      }
       if (v.runtime_id !== S.rid) S.rid = v.runtime_id;
       // the diagram and change cards stay in the page (never detached) and refresh themselves, so a drag or an
       // open editor there is not cut off; the other parts are not redrawn under a field being used

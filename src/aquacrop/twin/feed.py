@@ -62,7 +62,9 @@ def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software
                      layout: dict | None = None, hydraulics: dict | None = None) -> dict:
     users = [dict(r) for r in hist.query("SELECT username, password_hash, role, commissioning, disabled, "
                                          "must_change_password FROM users")]
-    doc = {"kind": KIND, "software_version": software_version, "written_utc": datetime.now(timezone.utc).isoformat(),
+    from ..build import identity
+    doc = {"kind": KIND, "software_version": software_version, "build": identity()["build"],
+           "written_utc": datetime.now(timezone.utc).isoformat(),
            "config": cfg.model_dump(mode="json", exclude_none=True), "config_version": cfg.config_version,
            "equipment": equipment.export(),
            "bindings": [{"item_id": v["item_id"], "role": v["role"], "point": v["point"], "status": v["status"]}

@@ -20,7 +20,10 @@
     catch (e) { G.msg[k] = { text: String(e.message || e), bad: true }; return null; }
   }
   function card() {
-    if (!G.card) { G.body = h("div"); G.card = h("div", { class: "card", id: "twin-graph" }, G.body); }
+    if (!G.card) {
+      G.body = h("div"); G.card = h("div", { class: "card", id: "twin-graph" }, G.body);
+      G.host = h("div", { class: "hed-host" }); G.side = h("div", { class: "hed-side-twin" }); G.flow = h("div");
+    }
     return G.card;
   }
   const revs = l => `${l.topo.rev}/${l.dia.rev}`;
@@ -54,7 +57,7 @@
     if (G.editing) return h("span", { class: "pill warn" }, G.draft ? `${G.draft} — not saved` : "editing — not saved");
     if (!G.loaded || !G.loaded.topo.graph.nodes.length) return h("span", { class: "pill" }, "no design yet");
     if (!hyd) return h("span", { class: "pill ok" }, "same as the Overview");
-    return h("span", { class: "pill warn" }, hyd.graph_changed ? "connections changed in the twin: not exported" : "drawing changed in the twin: not exported");
+    return h("span", { class: "pill warn" }, hyd.graph_changed ? "connections differ from the Overview" : "drawing differs from the Overview");
   }
   async function importOverview(v) {
     const replace = G.arm === "import";
@@ -123,11 +126,21 @@
       m.unresolved.length ? h("ul", { class: "small" }, m.unresolved.map(a => h("li", null, `${a.label}: ${a.why}. ${a.fix}.`))) : null);
   }
 
+  /** What the card's buttons and texts depend on: they are rebuilt only when it changes, so a click or a note being
+   *  typed is never lost to the once-a-second refresh (the water panel beside the drawing still follows every second). */
+  function signature() {
+    const pv = G.ch && G.ch.preview;
+    return JSON.stringify({ e: G.editing, a: G.arm, m: G.msg, d: G.draft, b: G.built, mig: !!G.migration, ld: !!G.loaded,
+      pv: pv ? [pv.empty, pv.hydraulics && [pv.hydraulics.graph_changed, pv.hydraulics.drawing_changed], pv.items.length, pv.bindings.length,
+        pv.programs.length, pv.missing.length, (pv.twin_only || []).length] : null });
+  }
   function draw(v) {
     if (!G.body) return;
+    const sig = signature();
+    if (sig === G.sig) return drawSide(v);
+    G.sig = sig;
     const gw = v && v.graph_water;
     const ed = can("equipment_edit");
-    if (!G.host) { G.host = h("div", { class: "hed-host" }); G.side = h("div", { class: "hed-side-twin" }); G.flow = h("div"); }
     put(G.flow, h("div", { class: "row wrap", role: "group", "aria-label": "Design workflow" },
       G.editing ? [h("button", { onclick: () => save(v) }, "Save in the twin"), h("button", { class: "ghost", onclick: async () => { G.editing = false; G.migration = null; G.draft = null; await load(); build(v); draw(v); } }, "Cancel")]
         : [h("button", { disabled: !ed, class: G.arm === "import" ? "danger" : "", onclick: () => importOverview(v) }, G.arm === "import" ? "Replace with the Overview's drawing" : "Import from Overview"),
@@ -138,7 +151,12 @@
       h("p", { class: "muted small" }, "1 Import from Overview, or start a new design · 2 place the equipment from the Equipment page and connect it · 3 save, then run it below · 4 Export to Overview."),
       G.flow, h("div", { class: "hed-twin" }, G.host, G.side), migrationBox(), exportBox(v),
       h("p", { class: "muted small" }, "The water follows only the connections drawn here; a crossing never joins pipes. Saving changes the twin, never the real system."));
+    drawSide(v);
+  }
+  function drawSide(v) {
+    const gw = v && v.graph_water;
     if (G.ed && !G.editing && gw) G.ed.setOverlay({ edges: gw.edges, tanks: gw.tanks, notModelled: gw.not_modelled });
+    if (document.activeElement && G.side.contains(document.activeElement)) return;     // the scenario field is in use
     const nm = gw ? Object.entries(gw.not_modelled || {}) : [];
     put(G.side, G.editing ? null : gw ? [
       h("h3", null, "Water now"), h("p", { class: "small" }, `Model ${gw.model}: a bounded water balance over the explicit pipes. Pressure, chemistry and suction are NOT MODELLED.`),
