@@ -163,6 +163,49 @@ class EquipmentStore:
                 made.append(tid)
         return made
 
+    def availability(self) -> list[dict]:
+        """UX-05: every built-in and installed type with where it stands: TEMPLATE (built in, not added), DRAFT
+        (added, awaiting activation), ACTIVE (choosable for new equipment) or RETIRED."""
+        by: dict[str, list] = {}
+        for t in self.types():
+            by.setdefault(t["type_id"], []).append(t)
+        out = []
+        for tid in sorted(set(TEMPLATES) | set(by)):
+            vs = by.get(tid, [])
+            act = [t for t in vs if t["status"] == "ACTIVE"]
+            dr = [t for t in vs if t["status"] == "DRAFT"]
+            state = "ACTIVE" if act else "DRAFT" if dr else "RETIRED" if vs else "TEMPLATE"
+            cur = (act or dr or vs or [None])[-1]
+            tb = (cur or {}).get("body") or TEMPLATES.get(tid, {}).get("body") or {}
+            out.append({"type_id": tid, "name": (cur or TEMPLATES.get(tid, {})).get("name", tid), "state": state,
+                        "version": cur["version"] if cur else None, "built_in": tid in TEMPLATES,
+                        "hydraulic": tb.get("hydraulic"), "roles": len(tb.get("roles") or [])})
+        return out
+
+    def make_available(self, actor: str, type_id: str) -> dict:
+        """UX-05: an administrator makes a built-in type choosable in one step: added from its template if missing,
+        then activated. Never reactivates a retired type, never replaces an edited draft, never touches items."""
+        if type_id not in TEMPLATES:
+            raise EquipmentRefused(f"{type_id} is not a built-in type: activate it on Equipment types")
+        st = next(a for a in self.availability() if a["type_id"] == type_id)
+        name = TEMPLATES[type_id]["name"]
+        if st["state"] == "ACTIVE":
+            return {"type_id": type_id, "state": "ACTIVE", "version": st["version"], "changed": False}
+        if st["state"] == "RETIRED":
+            raise EquipmentRefused(f"{name} was retired on this installation; it is not brought back automatically. "
+                                   "Make a new version deliberately on Equipment types if it is wanted again")
+        if st["state"] == "DRAFT":
+            d = next(t for t in self.types() if t["type_id"] == type_id and t["status"] == "DRAFT")
+            if digest(TypeBody.model_validate(d["body"]).model_dump(mode="json")) != \
+                    digest(TypeBody.model_validate(TEMPLATES[type_id]["body"]).model_dump(mode="json")):
+                raise EquipmentRefused(f"the draft of {name} on this installation differs from the built-in one: "
+                                       "review and activate it on Equipment types")
+            version = d["version"]
+        else:
+            version = self.save_type_draft(actor, type_id, name, TEMPLATES[type_id]["body"])["version"]
+        self.activate_type(actor, type_id, version)
+        return {"type_id": type_id, "state": "ACTIVE", "version": version, "changed": True}
+
     # ------------------------------------------------------------------ items
     def items(self, *, include_retired: bool = True) -> list[dict]:
         rows = self.h.query(

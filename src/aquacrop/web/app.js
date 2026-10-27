@@ -44,7 +44,10 @@
     const seen = {};
     return [...el.querySelectorAll("input,select,textarea")].map(f => {
       const card = f.closest(".card"), row = f.closest("tr"), lab = f.closest("label");
-      const sig = [f.tagName, f.type, f.placeholder, f.getAttribute("aria-label"), f.name,
+      // UX-06: a field inside a record's own scope (data-state-key, e.g. one equipment type's editor) is matched by
+      // that record, never by its position or a caption another card shares
+      const scope = f.closest("[data-state-key]");
+      const sig = [scope ? scope.dataset.stateKey : "", f.tagName, f.type, f.placeholder, f.getAttribute("aria-label"), f.name,
         card && card.querySelector("h2") ? card.querySelector("h2").textContent : "",
         row && row.querySelector("td") ? row.querySelector("td").textContent : "",
         lab ? lab.firstChild && lab.firstChild.textContent : ""].join("|");
@@ -63,14 +66,18 @@
     const keep = el.dataset.view === view ? new Map(fieldKeys(el).filter(([, f]) => f.dataset.dirty && f.type !== "file")
       .map(([k, f]) => [k, f.type === "checkbox" || f.type === "radio" ? f.checked : f.value])) : new Map();
     const same = el.dataset.view === view;
-    const opened = new Map(same ? [...el.querySelectorAll("details > summary")].map(x => [x.textContent, x.parentElement.open]) : []);
+    const opened = new Map(same ? detailKeys(el).map(([k, d]) => [k, d.open]) : []);
+    // the field being used keeps its focus, caret and scroll through a refresh (UX-06)
+    const fk = same ? fieldKeys(el) : [], ae = document.activeElement;
+    const focused = fk.find(([, f]) => f === ae);
+    const caret = focused && typeof ae.selectionStart === "number" ? [ae.selectionStart, ae.selectionEnd, ae.scrollTop] : null;
     // a part scrolled sideways (the diagram on a phone, a wide table) stays where the user scrolled it
     const scrolled = same ? [...el.querySelectorAll(".diagram-wrap, table")].map(x => x.scrollLeft) : [];
     el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
     if (scrolled.some(Boolean)) [...el.querySelectorAll(".diagram-wrap, table")].forEach((x, i) => { if (scrolled[i]) x.scrollLeft = scrolled[i]; });
     el.dataset.view = view;
     el.dataset.drawn = String(++drawn);    // lets a page that redraws only on change tell a skipped draw
-    for (const x of el.querySelectorAll("details > summary")) if (opened.has(x.textContent)) x.parentElement.open = opened.get(x.textContent);
+    for (const [k, d] of detailKeys(el)) if (opened.has(k)) d.open = opened.get(k);
     if (keep.size) for (const [k, f] of fieldKeys(el)) {
       if (!keep.has(k)) continue;
       const v = keep.get(k);
@@ -78,7 +85,25 @@
       else if (f.tagName !== "SELECT" || [...f.options].some(o => o.value === v)) f.value = v;
       f.dataset.dirty = "1";
     }
+    if (focused) {
+      const again = fieldKeys(el).find(([k]) => k === focused[0]);
+      if (again) {
+        again[1].focus({ preventScroll: true });
+        if (caret) try { again[1].setSelectionRange(caret[0], caret[1]); again[1].scrollTop = caret[2]; } catch (e) { /* not a text field */ }
+      }
+    }
     return el;
+  }
+  // an open/closed part keeps its state by its record (data-state-key), else by its caption and how many
+  // identical captions come before it
+  function detailKeys(el) {
+    const seen = {};
+    return [...el.querySelectorAll("details")].map(d => {
+      if (d.dataset.stateKey) return [d.dataset.stateKey, d];
+      const s = d.querySelector(":scope > summary"), t = s ? s.textContent : "";
+      seen[t] = (seen[t] || 0) + 1;
+      return [t + "#" + seen[t], d];
+    });
   }
   function toast(msg, bad, raw) {
     const t = $("toast"); t.textContent = msg; t.title = raw && raw !== msg ? raw : ""; t.classList.remove("hidden");

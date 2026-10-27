@@ -226,19 +226,48 @@
     tsel.addEventListener("change", () => { const t = types.find(x => x.type_id === tsel.value); if (t && !isel.dataset.dirty) { isel.value = t.body.default_icon; showIcon(); } });
     if (types[0]) isel.value = types[0].body.default_icon;
     showIcon();
+    // UX-05: a type with a capacity (a tank) asks for it here and shows the size it gets in the drawing
+    const cap = h("input", { type: "number", min: 1, max: 1000000, step: "any", class: "w-num", "aria-label": "Capacity in litres" });
+    const capBox = h("span", { "data-capacity": "" });
+    const capShow = () => {
+      const t = types.find(x => x.type_id === tsel.value), has = t && (t.body.properties || []).some(q => q.key === "capacity_l");
+      capBox.replaceChildren(...(has ? [h("label", null, "Capacity (L) ", cap), " ", tankPreview({ body: { properties: { capacity_l: Number(cap.value) } } }) || h("span", { class: "muted small" }, "Enter the capacity to see its size in the drawing.")] : []));
+    };
+    cap.addEventListener("input", capShow); tsel.addEventListener("change", capShow); capShow();
     const create = async () => {
       const bad = !name.value.trim() ? "Give it a name." : window.AqIds.problem(id.value.trim());
       if (bad) { say("new", bad, true); U.refresh(); return; }
-      const r = await send("new", "POST", "/api/equipment/items", { item_id: id.value.trim(), name: name.value, type_id: tsel.value, icon: isel.value, body: {} },
-        `${name.value} created as ${id.value.trim()}. It is planned and unassigned until a channel is chosen; place it in the drawing from Digital Twin.`);
-      if (r) [name, id].forEach(f => { f.value = ""; delete f.dataset.dirty; delete f.dataset.owned; });
+      const t = types.find(x => x.type_id === tsel.value);
+      const props = t && (t.body.properties || []).some(q => q.key === "capacity_l") && Number(cap.value) > 0 ? { capacity_l: Number(cap.value) } : null;
+      const passive = t && !(t.body.roles || []).length;
+      const r = await send("new", "POST", "/api/equipment/items", { item_id: id.value.trim(), name: name.value, type_id: tsel.value, icon: isel.value, body: props ? { properties: props } : {} },
+        passive ? `${name.value} created as ${id.value.trim()}. It needs no channel. Next: place and connect it in the Digital Twin, export the drawing and approve it here; then Blocks can use it.`
+          : `${name.value} created as ${id.value.trim()}. It is planned and unassigned until a channel is chosen; place it in the drawing from Digital Twin.`);
+      if (r) [name, id, cap].forEach(f => { f.value = ""; delete f.dataset.dirty; delete f.dataset.owned; });
     };
     return h("div", { class: "card" }, h("h3", null, "New equipment"),
       types.length ? h("div", { class: "row wrap" },
-        h("label", null, "Name ", name), h("label", null, "ID ", id), h("label", null, "Type ", tsel), h("label", null, "Icon ", isel), preview,
+        h("label", null, "Name ", name), h("label", null, "ID ", id), h("label", null, "Type ", tsel), capBox, h("label", null, "Icon ", isel), preview,
         h("button", { disabled: !can("equipment_edit"), onclick: create }, "Create"), note("new"))
         : h("p", { class: "muted" }, can("equipment_activate") ? "No active equipment type yet. Activate one on Equipment types first." : "No active equipment type yet: an administrator activates the types on Equipment types."),
+      missingTypes(E),
       h("p", { class: "muted small" }, "The ID fills in from the name (Valve 1 → Valve_1) until you change it, and can be changed later. Properties, scaling and alarm limits are edited after creation. The icon is only a picture."));
+  }
+  // UX-05: the water-system types an installation needs, when one is not choosable yet: what state it is in and the
+  // permitted next step (an administrator makes a built-in type available; an operator is told who can)
+  const NEEDED = ["water_source", "tank", "pump", "valve", "flow", "sector", "level"];
+  function missingTypes(E) {
+    const av = (E.availability || []).filter(a => NEEDED.includes(a.type_id) && a.state !== "ACTIVE");
+    if (!av.length) return null;
+    const word = { TEMPLATE: "built in, not added yet", DRAFT: "added, awaiting activation", RETIRED: "retired on this installation" };
+    const admin = can("equipment_activate");
+    return h("div", { class: "small", "data-missing-types": "" },
+      h("p", null, "Not in the Type list yet: ", av.map(a => `${a.name} (${word[a.state]})`).join(", "), "."),
+      admin ? h("div", { class: "row wrap" }, av.filter(a => a.state !== "RETIRED").map(a => h("button", { class: "small", "data-make-available": a.type_id,
+        onclick: () => send("types", "POST", "/api/equipment/types/make-available", { type_id: a.type_id }, `${a.name} is now in the Type list.`).then(() => U.refresh()) }, `Make ${a.name} available`)), note("types"))
+        : h("p", { class: "muted" }, "An administrator makes these types available (Equipment types); ask one to activate them."),
+      av.some(a => a.state === "RETIRED") ? h("p", { class: "muted" }, "A retired type is not brought back automatically: an administrator makes a new version on Equipment types if it is wanted again.") : null,
+      h("p", { class: "muted" }, "Making a type available lets you create that kind of equipment. The new item then goes into the drawing in the Digital Twin (placed, connected, exported and approved) before Blocks can choose it."));
   }
 
   VIEWS.equipment = async function () {
@@ -265,9 +294,26 @@
       let body; try { body = JSON.parse(ta.value); } catch (e) { toast("The definition is not valid JSON: " + e.message, true); return; }
       act("POST", "/api/equipment/types/draft", { type_id: id.value, name: name.value, body, version: t && t.status === "DRAFT" ? t.version : null }, "draft saved");
     };
-    return h("div", { class: "row col" }, h("div", { class: "row" }, h("label", null, "Id ", id), h("label", null, "Name ", name)), ta,
+    const startedFrom = t ? (TE[t.type_id] = TE[t.type_id] || { version: t.version }) : null;
+    const moved = t && startedFrom.version !== t.version;
+    return h("div", { class: "row col" },
+      moved ? h("p", { class: "warn small", role: "status" }, `${t.name} changed to v${t.version} while you were editing v${startedFrom.version}. Your text is kept; check it against v${t.version} before saving.`) : null,
+      h("div", { class: "row" }, h("label", null, "Id ", id), h("label", null, "Name ", name)), ta,
       h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit"), onclick: save }, t && t.status === "DRAFT" ? "Save draft" : "Save as new draft version"),
         h("span", { class: "muted small" }, "Roles: direction OUTPUT/INPUT, signal DIGITAL/ANALOG, purpose COMMAND/RUNNING/FAULT/OPEN/CLOSED/STATE/MEASUREMENT. Switchable types need limits.max_runtime_s.")));
+  }
+  const TE = S.typeEdits = S.typeEdits || {};       // type id -> the version its open editor started from (UX-06)
+  // UX-05: every built-in type and where it stands, with the permitted next step
+  function availabilityCard(E) {
+    const av = (E.availability || []).filter(a => a.built_in);
+    const word = { TEMPLATE: "built in, not added", DRAFT: "draft, awaiting activation", ACTIVE: "available for new equipment", RETIRED: "retired" };
+    const cls = { TEMPLATE: "", DRAFT: "warn", ACTIVE: "ok", RETIRED: "" };
+    return h("div", { class: "card", "data-availability": "" }, h("h3", null, "Built-in types"),
+      h("table", { class: "compact small" }, h("tbody", null, av.map(a => h("tr", null, h("td", null, a.name), h("td", null, pill(word[a.state], cls[a.state])),
+        h("td", null, a.roles ? `${a.roles} channel role(s)` : "no channel (passive)"),
+        h("td", null, (a.state === "TEMPLATE" || a.state === "DRAFT") && can("equipment_activate")
+          ? h("button", { class: "small", onclick: () => act("POST", "/api/equipment/types/make-available", { type_id: a.type_id }, `${a.name} is available for new equipment`) }, "Make available") : null))))),
+      h("p", { class: "muted small" }, "Make available adds the built-in definition when it is missing and activates it. A retired type or an edited draft is never changed by it; review those below."));
   }
   function typeCard(E, t) {
     const users = E.items.filter(i => i.type_id === t.type_id && i.status === "ACTIVE");
@@ -285,7 +331,14 @@
         t.status === "ACTIVE" && can("equipment_activate") ? h("button", { class: "ghost small", onclick: () => {
           const why = prompt(`Retire ${t.name}? Reason:`); if (why) act("POST", `/api/equipment/types/${t.type_id}/retire`, { reason: why }, "type retired");
         } }, "Retire") : null),
-      t.status === "ACTIVE" || t.status === "DRAFT" ? h("details", null, h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t)) : null);
+      t.status === "ACTIVE" || t.status === "DRAFT" ? h("details", { "data-state-key": `type:${t.type_id}:${t.status === "DRAFT" ? "draft" : "next"}:edit`,
+        ontoggle: ev => {
+          const d = ev.target;
+          if (d.open) { TE[t.type_id] = TE[t.type_id] || { version: t.version }; return; }   // also when a refresh reopens it
+          if ([...d.querySelectorAll("[data-dirty]")].length && !confirm(`Close the editor of ${t.name}? Your unsaved changes are discarded.`)) { d.open = true; return; }
+          d.querySelectorAll("[data-dirty]").forEach(f => { delete f.dataset.dirty; });
+          delete TE[t.type_id];
+        } }, h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t)) : null);
   }
   VIEWS["equipment-types"] = async function () {
     const E = await api("GET", "/api/equipment");
@@ -304,7 +357,8 @@
         h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/types/seed", undefined, "templates added as drafts") }, "Add built-in templates"),
         h("label", { class: "small" }, "Import ", imp)),
         h("p", { class: "muted" }, "A type defines the channels (roles) an item needs, its properties, limits, permitted operations and how the twin simulates it. Templates arrive as drafts you review and activate; activating a new version never changes existing items until each is upgraded.")),
+      availabilityCard(E),
       shown.map(t => typeCard(E, t)),
-      h("details", { class: "card" }, h("summary", null, "New type"), typeEditor(E, null)));
+      h("details", { class: "card", "data-state-key": "type:new:edit" }, h("summary", null, "New type"), typeEditor(E, null)));
   };
 })();

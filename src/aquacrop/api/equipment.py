@@ -78,6 +78,11 @@ class ImportIn(_B):
     doc: dict
 
 
+class TypeAvailIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type_id: str = Field(pattern=r"^[a-z0-9_]{1,48}$")
+
+
 def register(app, require, store, samples, edges) -> None:
     def refused(e: EquipmentRefused):
         raise HTTPException(409, str(e))
@@ -87,6 +92,7 @@ def register(app, require, store, samples, edges) -> None:
         items = store.items()
         return {"types": store.types(), "items": items, "icons": list(ICONS),
                 "templates": {k: v["name"] for k, v in TEMPLATES.items()},
+                "availability": store.availability(),
                 "bindings": list(store.bindings().values()),
                 "readiness": {i["item_id"]: store.readiness(i["item_id"]) for i in items if i["status"] == "ACTIVE"}}
 
@@ -100,6 +106,14 @@ def register(app, require, store, samples, edges) -> None:
     @app.post("/api/equipment/types/seed")
     def type_seed(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         return {"created": store.seed_templates(p.username)}
+
+    @app.post("/api/equipment/types/make-available")
+    def type_make_available(body: TypeAvailIn, p: Principal = Depends(require(Perm.EQUIPMENT_ACTIVATE))):
+        """UX-05: add a built-in type from its template (when missing) and activate it, in one deliberate step."""
+        try:
+            return store.make_available(p.username, body.type_id)
+        except EquipmentRefused as e:
+            raise HTTPException(409, str(e))
 
     @app.post("/api/equipment/types/activate")
     def type_activate(body: TypeRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_ACTIVATE))):
