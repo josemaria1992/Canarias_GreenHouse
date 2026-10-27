@@ -74,6 +74,8 @@ async function show(p, view) {
   }, view), 10000);
   await p.waitForTimeout(400);
 }
+// an ISO time in microseconds (Date.parse keeps milliseconds: a reading 0.9 ms after the request would compare equal)
+const usOf = s => Date.parse(s) * 1000 + (+((String(s).match(/\.\d{3}(\d{1,3})/) || [])[1] || "0").padEnd(3, "0") || 0);
 const visibleText = p => p.evaluate(() => (document.querySelector("section.view:not(.hidden)") || document.body).innerText);
 const procs = async p => (await get(p, "/api/processes")).processes;
 
@@ -646,7 +648,7 @@ async function o34run(b, ctx0) {
   await until(p, async () => (await panel(p).locator('[data-reading="fresh"]').count()) > 0, 8000);
   const shown = await panel(p).locator("[data-acquired]").getAttribute("data-acquired");
   const sTxt = await panelText(p);
-  check("O-04 a sensor click asks for a new reading and shows its own time", body.fresh && shown === body.sample.acquired_utc && Date.parse(shown) > Date.parse(body.requested_utc) &&
+  check("O-04 a sensor click asks for a new reading and shows its own time", body.fresh && shown === body.sample.acquired_utc && usOf(shown) > usOf(body.requested_utc) &&
     /New reading, taken after you asked/.test(sTxt) && /Measured at/.test(sTxt) && /Validity\s+Reading valid/.test(sTxt) && /pH/.test(sTxt),
     `asked ${body.requested_utc}, acquired ${body.sample.acquired_utc} (shown ${shown}): ${body.sample.value} ${body.sample.unit}, ${body.sample.quality}`);
   await api(p, "/api/twin/control", "POST", { action: "acq_stall" });
