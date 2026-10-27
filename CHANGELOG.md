@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.7 (2026-10-27): owner answers on pump replacement
+
+- Either pump serves either sector (the block's duty pair). When the healthy pump is busy with the other sector, the
+  interrupted cycle stops through its normal stop and its remaining time or litres wait; once the pump is free the
+  rest starts again on it. Sectors are never watered together and never interrupted for one another.
+- The changeover is not watering; litre cycles deliver exactly their litres.
+
 ## 0.7.6 (2026-10-27): review C075-01..07, owner decisions, setup journey UX-01..06
 
 Review fixes: the standby pump is part of every proof context (C075-01); the duty pair can be chosen (C075-02); the
