@@ -1,6 +1,6 @@
 # Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes, UX-07 and R402
 
-Status: **C077-01..08, UX-07 and R402-01..06 are implemented on the branch** (see below); deployment is recorded under Deployment. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
+Status: **C077-01..08, UX-07 and R402-01..06 are implemented on the branch** (see below); **deployed to the bench as 0.7.8** on the owner's request (27 Oct 2026, 23:45 CET). No AUTO, lease or output command was used. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
 
 ## Source identity
@@ -165,6 +165,14 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 - **C077 (author tests, not acceptance):** full suite on `b1db08f`: 824 Python tests passed, 0 failed; all 8 `tests/js/*.test.js` passed. Browser checks on a bench-data copy, 7/7 (`evidence-c077/checks.json`). Independent acceptance: NOT RUN.
 
 ## Deployment and access
+
+- **0.7.8 (owner's request, 27 Oct 2026):**
+  - Release `aquacrop-0.7.8.zip` from `ea9301f`, sha256 `30155215c00b8f4c95205df0be1384ab0facf629a595fe8340d4861b4b7fd14a`, build `0.7.8+ea9301f265.wd95a6186`.
+  - Before the upgrade: full suite on `8cbc344` (844 passed, 8 skipped, 0 failed), every JS test passed, `verify_release.py` 28/28. On the CM4, Python 3.11 compiled the wheel's 118 modules, and `preflight311.sh` passed (imports, refused Preview/Save, programs, block prerequisites, project export).
+  - Upgrade 0.7.7 → 0.7.8 with `deploy/aquacrop-cm4.py upgrade`. The pre-upgrade backup `/var/lib/aquacrop/backups/pre-upgrade/aquacrop-2026-10-27T224456.937879Z.sql.gz` was verified. 0.7.7 stays installed for rollback (`/opt/aquacrop/previous`).
+  - After the upgrade: main, twin and Caddy are active; health through Caddy reports MAIN 0.7.8 with storage and acquisition OK; TWIN reports 0.7.8; no service errors were logged.
+  - Not done: a signed-in walkthrough on the real bench (owner) and any physical test. The owner's recorded import answers were **not** applied.
+  - Earlier deployments are below.
 
 - **Bench:** 0.7.5 → 0.7.6 at 16:25 CET, then 0.7.7 at 17:29 CET. Main and Twin both run `0.7.7+de3088ab7d.w3d2015dd`. Before 0.7.7: full suite passed again, release 28/28, Python 3.11 preflight passed.
 - **Rollback:** pre-upgrade backups verified (`…T152537.684992Z.sql.gz` before 0.7.6, `…T162935.191682Z.sql.gz` before 0.7.7); 0.7.6 stays installed.
