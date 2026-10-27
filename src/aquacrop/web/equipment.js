@@ -227,23 +227,23 @@
     if (types[0]) isel.value = types[0].body.default_icon;
     showIcon();
     // UX-05: a type with a capacity (a tank) asks for it here and shows the size it gets in the drawing
-    const cap = h("input", { type: "number", min: 1, max: 1000000, step: "any", class: "w-num", "aria-label": "Capacity in litres" });
+    const capIn = h("input", { type: "number", min: 1, max: 1000000, step: "any", class: "w-num", "aria-label": "Capacity in litres" });
     const capBox = h("span", { "data-capacity": "" });
     const capShow = () => {
       const t = types.find(x => x.type_id === tsel.value), has = t && (t.body.properties || []).some(q => q.key === "capacity_l");
-      capBox.replaceChildren(...(has ? [h("label", null, "Capacity (L) ", cap), " ", tankPreview({ body: { properties: { capacity_l: Number(cap.value) } } }) || h("span", { class: "muted small" }, "Enter the capacity to see its size in the drawing.")] : []));
+      capBox.replaceChildren(...(has ? [h("label", null, "Capacity (L) ", capIn), " ", tankPreview({ body: { properties: { capacity_l: Number(capIn.value) } } }) || h("span", { class: "muted small" }, "Enter the capacity to see its size in the drawing.")] : []));
     };
-    cap.addEventListener("input", capShow); tsel.addEventListener("change", capShow); capShow();
+    capIn.addEventListener("input", capShow); tsel.addEventListener("change", capShow); capShow();
     const create = async () => {
       const bad = !name.value.trim() ? "Give it a name." : window.AqIds.problem(id.value.trim());
       if (bad) { say("new", bad, true); U.refresh(); return; }
       const t = types.find(x => x.type_id === tsel.value);
-      const props = t && (t.body.properties || []).some(q => q.key === "capacity_l") && Number(cap.value) > 0 ? { capacity_l: Number(cap.value) } : null;
+      const props = t && (t.body.properties || []).some(q => q.key === "capacity_l") && Number(capIn.value) > 0 ? { capacity_l: Number(capIn.value) } : null;
       const passive = t && !(t.body.roles || []).length;
       const r = await send("new", "POST", "/api/equipment/items", { item_id: id.value.trim(), name: name.value, type_id: tsel.value, icon: isel.value, body: props ? { properties: props } : {} },
         passive ? `${name.value} created as ${id.value.trim()}. It needs no channel. Next: place and connect it in the Digital Twin, export the drawing and approve it here; then Blocks can use it.`
           : `${name.value} created as ${id.value.trim()}. It is planned and unassigned until a channel is chosen; place it in the drawing from Digital Twin.`);
-      if (r) [name, id, cap].forEach(f => { f.value = ""; delete f.dataset.dirty; delete f.dataset.owned; });
+      if (r) [name, id, capIn].forEach(f => { f.value = ""; delete f.dataset.dirty; delete f.dataset.owned; });
     };
     return h("div", { class: "card" }, h("h3", null, "New equipment"),
       types.length ? h("div", { class: "row wrap" },

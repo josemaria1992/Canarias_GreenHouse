@@ -695,13 +695,31 @@
       const pick = (ids, flows, other) => { for (const id of ids) { if (id === other) continue; const n = node(id), p = SYM[n.kind].ports.find(q => flows.includes(q.flow) && portFree(n, q.id)); if (p) return { node: id, port: p.id, label: p.label }; } return null; };
       for (const [s0, s1] of [[k.points[0], k.points[k.points.length - 1]], [k.points[k.points.length - 1], k.points[0]]]) {
         const a = pick(near(s0), ["out", "both"]), b = a && pick(near(s1), ["in", "both"], a.node);
-        if (a && b) return { a, b };
+        if (a && b) {
+          // equipment drawn along the line (a pump, a meter on it): never bypassed by one pipe from end to end
+          const through = st.diagram.symbols.filter(x => x.node !== a.node && x.node !== b.node && node(x.node) && node(x.node).kind !== "junction"
+            && node(x.node).kind !== "tank" && node(x.node).kind !== "sector").map(x => [crossesBox(k.points, G.box(node(x.node).kind, x)), x.node])
+            .filter(([t]) => t >= 0).sort((p, q) => p[0] - q[0]).map(([, id]) => id);   // in order along the drawn line
+          return { a, b, through };
+        }
       }
       return null;
+    }
+    /** How far along the drawn line it first meets the box (-1: never). */
+    function crossesBox(pts, b) {
+      const inside = (x, y) => x >= b.x - 2 && x <= b.x + b.w + 2 && y >= b.y - 2 && y <= b.y + b.h + 2;
+      let along = 0;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], l = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.ceil(l / 5));
+        for (let j = 0; j <= n; j++) if (inside(x0 + (x1 - x0) * j / n, y0 + (y1 - y0) * j / n)) return along + l * j / n;
+        along += l;
+      }
+      return -1;
     }
     function confirmSketch(id) {
       const k = (st.diagram.sketches || []).find(x => x.id === id), ends = k && sketchEnds(k);
       if (!ends) return say("Its ends are not at drawn equipment with a free outlet and inlet: use Connect pipe to join what it shows.", true);
+      if (ends.through.length) return say(`${ends.through.map(nameOf).join(", ")} is drawn on this line: connect the parts in order with Connect pipe (one pipe from end to end would bypass it).`, true);
       const n = st.graph.edges.length;
       connect({ node: ends.a.node, port: ends.a.port }, { node: ends.b.node, port: ends.b.port });
       if (st.graph.edges.length > n) {                        // connected: the reference line has done its job
@@ -715,7 +733,8 @@
       const ends = sketchEnds(k);
       return el("div", { "data-sketch-panel": "" }, el("h3", null, "Earlier pipe"),
         el("p", { class: "small" }, "Kept as it was drawn. It is not a water connection yet: ", k.why, "."),
-        ends ? [el("p", { class: "small" }, `Confirm it as a pipe: ${nameOf(ends.a.node)} ${ends.a.label.toLowerCase()} → ${nameOf(ends.b.node)} ${ends.b.label.toLowerCase()}.`),
+        ends && ends.through.length ? el("p", { class: "small warn" }, `Drawn along it, in order along the line from ${nameOf(ends.a.node)} to ${nameOf(ends.b.node)}: ${ends.through.map(nameOf).join(", ")}. Lines of the earlier drawing may share a stretch, so check which of these the water really passes, then connect them with Connect pipe in the order it flows (a flow meter can also be inserted into a pipe afterwards). It is not joined as one pipe, so nothing is bypassed.`)
+        : ends ? [el("p", { class: "small" }, `Confirm it as a pipe: ${nameOf(ends.a.node)} ${ends.a.label.toLowerCase()} → ${nameOf(ends.b.node)} ${ends.b.label.toLowerCase()}.`),
           opt.readOnly ? null : el("button", { class: "small", onclick: () => confirmSketch(id) }, "Connect these ends")]
           : el("p", { class: "muted small" }, "Its ends are not at drawn equipment with a free outlet and inlet (or the equipment is not placed yet). Place the equipment, or use Connect pipe; crossings never join pipes."));
     }

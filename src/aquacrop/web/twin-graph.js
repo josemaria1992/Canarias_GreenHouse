@@ -240,7 +240,10 @@
   }
   async function update(v) {
     if (!G.body) return;
-    if (G.editing) return;                                // never rebuilt under the editor
+    if (G.editing) {                                      // the editor is never rebuilt; the checklist beside it follows its edits
+      if (signature() !== G.sig) draw(v);
+      return;
+    }
     const now = Date.now();
     // loaded again when the snapshot names another graph or drawing revision (an import, a reset, an edit), and
     // every 15 s anyway (the export preview follows the twin's runs)

@@ -34,7 +34,8 @@ def check(items: dict[str, dict], graph_nodes: list[dict], exported_nodes: set[s
                 steps.append(f"{nm(waiting)}: exported from the Digital Twin, waiting for approval on the Digital Twin "
                              "page here")
             if unplaced:
-                steps.append(f"{nm(unplaced)}: on Equipment but not in the approved drawing. Place and connect it in "
+                it_ = "them" if len(unplaced) > 1 else "it"
+                steps.append(f"{nm(unplaced)}: on Equipment but not in the approved drawing. Place and connect {it_} in "
                              "the Digital Twin, export the drawing, then approve it here")
             if unlinked:
                 steps.append(f"The earlier drawing shows {', '.join(s['label'] for s in unlinked)} without an equipment "

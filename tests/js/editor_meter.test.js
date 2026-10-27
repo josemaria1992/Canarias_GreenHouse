@@ -82,3 +82,14 @@ test("UX-03: an earlier pipe is confirmed as a real pipe between the equipment a
   assert.equal(ed.get().graph.edges.length, 0);
   assert.equal(ed.get().diagram.sketches.length, 1);
 });
+
+test("UX-03: an earlier pipe with equipment drawn along it is never joined end to end (no bypass)", () => {
+  const graph = { nodes: [{ id: "p", kind: "pump", item: "p" }, { id: "m", kind: "meter", item: "m" }, { id: "v", kind: "valve", item: "v" }], edges: [], measures: [] };
+  const diagram = { width: 1000, height: 800, grid: 10, routes: [],
+    symbols: [{ node: "p", x: 100, y: 200, rot: 0, ports: {} }, { node: "m", x: 300, y: 200, rot: 0, ports: {} }, { node: "v", x: 500, y: 200, rot: 0, ports: {} }],
+    sketches: [{ id: "old-2", points: [[140, 220], [500, 220]], why: "the old drawing had a meter drawn on this pipe" }] };
+  const ed = E.create(fakeEl("div"), { symbols: SYM, items: ITEMS, graph, diagram, readOnly: false });
+  ed.confirmSketch("old-2");
+  assert.equal(ed.get().graph.edges.length, 0);
+  assert.equal(ed.get().diagram.sketches.length, 1);
+});
