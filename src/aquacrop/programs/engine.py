@@ -447,7 +447,7 @@ class Engine:
     def stop_all(self, actor: str, reason: str) -> None:
         with self._lock:
             self._cancel_resumes(actor, reason)       # C077-01: nothing that was stopped starts again by itself
-            self._turn_wait.clear()
+            self._cancel_turn_waits(actor, reason)    # R402-01: nor does a start that was waiting its turn
             for o in list(self.ops.values()):
                 if o.state == "RUNNING":
                     self._begin_stop(o, reason, result="STOPPED")
@@ -461,6 +461,33 @@ class Engine:
             del self._resume[pid]
             self.event("PROGRAM_RESUME_CANCELLED", {"program": pid, "from_op": r["from_op"], "remaining": r["remaining"],
                                                     "why": why}, actor)
+
+    def _cancel_turn_waits(self, actor: str, why: str) -> None:
+        """R402-01: a scheduled or triggered start that is waiting for its pump group is cancelled by a stop, with an
+        audit record, so it never springs back once the group is free. The occurrence itself is settled: a weekly
+        window's start and a repeat window's next cycle are recorded CANCELLED (the window does not start later); a
+        condition is disarmed until it clears and re-arms as usual; a keep-between program counts as just stopped, so
+        its own minimum off time applies. Future windows and the mode are unchanged."""
+        for key, w in list(self._turn_wait.items()):
+            del self._turn_wait[key]
+            if self.store.occurrence_claim(key, w["pid"], w["ver"], w["start"], "CANCELLED", {"why": why}):
+                self.event("PROGRAM_START_CANCELLED", {"key": key, "program": w["pid"], "why": why}, actor)
+        for k, st in self._rep.items():
+            if not st.get("turn"):
+                continue
+            n, st["turn"], st["waiting"] = st["n"], False, None
+            st["n"] = 10 ** 6                             # this window's repeats end, as for a cycle that did not complete
+            if n == 0:
+                self.store.occurrence_claim(f"{k}#0", st["pid"], st["ver"], st["start"], "CANCELLED", {"why": why})
+            self.event("PROGRAM_START_CANCELLED", {"key": f"{k}#{n}", "program": st["pid"], "why": why}, actor)
+        for pid, st in self._cond.items():
+            if st.get("waiting"):
+                st["waiting"], st["armed"], st["since"] = None, False, None
+                self.event("PROGRAM_START_CANCELLED", {"program": pid, "why": why, "rearm": "after its condition clears"}, actor)
+        for pid, st in self._keep.items():
+            if st.get("turn"):
+                st["turn"], st["since"], st["last_end"] = False, None, self.clock.mono()
+                self.event("PROGRAM_START_CANCELLED", {"program": pid, "why": why, "next": "after its minimum off time"}, actor)
 
     # ------------------------------------------------------------------ conflicts
     def resolve_conflict(self, actor: str, conflict_id: str, choice: str) -> dict:
@@ -528,7 +555,7 @@ class Engine:
             if self._pending_stop is not None:
                 why, self._pending_stop = self._pending_stop, None
                 self._cancel_resumes("system", why)
-                self._turn_wait.clear()
+                self._cancel_turn_waits("system", why)
                 for o in list(self.ops.values()):
                     if o.state == "RUNNING":
                         self._begin_stop(o, why, result="STOPPED")
@@ -610,11 +637,11 @@ class Engine:
                 st["waiting"] = None
                 continue
             if (why := self._turn_refusal(pid, body)) is not None:
-                st["waiting"] = why                  # C077-02: this window's next cycle waits for its pump group
+                st["waiting"], st["turn"] = why, True  # C077-02: this window's next cycle waits for its pump group
                 continue
             key = f"{w.key}#{st['n']}"
             st["n"] += 1
-            st["waiting"] = None
+            st["waiting"], st["turn"] = None, False
             self._request(pid, ver, body, key, w.start_utc, w.end_utc)
             if not any(o.occurrence_key == key for o in self.ops.values()):
                 st["waiting"] = "its first cycle could not start; see the occurrence"
@@ -652,6 +679,8 @@ class Engine:
             elif (w := next((w for w in self._turn_wait.values() if w["pid"] == pid), None)) is not None:
                 doc |= {"state": "WAITING", "why": w["why"],
                         "window_end_utc": w["end"].isoformat() if w["end"] else None}
+            elif (self._cond.get(pid) or {}).get("waiting"):
+                doc |= {"state": "WAITING", "why": self._cond[pid]["waiting"]}
             else:
                 doc["state"] = "IDLE"
                 for k, st in self._rep.items():
@@ -763,7 +792,9 @@ class Engine:
         st["since"] = st["since"] or mono
         if mono - st["since"] >= a.debounce_s:
             if self._turn_refusal(pid, body) is not None:
-                return                               # its pump group waters another sector: asked again later
+                st["turn"] = True                    # its pump group waters another sector: asked again later
+                return
+            st["turn"] = False
             st["n"] += 1
             st["since"] = None
             key = f"{pid}@{ver}:keep:{now_utc.strftime('%Y%m%dT%H%M%S')}"
@@ -1529,6 +1560,17 @@ class Engine:
         failed, other = r["failed"], r["by"]
         if not self._changeover_metering(op):
             return                                   # the meter itself failed: _account already failed the operation
+        if (done := self._changeover_done(op)) is not None:
+            # R402-03: the water counted through the changeover met the target (and nothing after this step needs a
+            # pump) or reached the equipment's volume cap: the partner is not started for a satisfied target. The
+            # established stop path takes over every OFF, the failed pump's included, retried until verified.
+            why, result = done
+            self.event("PROGRAM_PUMP_REPLACEMENT_NOT_NEEDED", {"op_id": op.op_id, "failed": failed, "standby": other,
+                                                               "measured_L": round(op.measured_L, 3), "why": why}, "system")
+            if result == "RUNTIME_GUARD":
+                self.alarm("PROGRAM_RUNTIME_GUARD", op.program_id, True, {"op_id": op.op_id})
+            self._begin_stop(op, why, result=result)
+            return
         if r["phase"] == "STOPPING":
             ok, coil, fb = self._off_state(op, failed)
             if not ok:
@@ -1595,6 +1637,24 @@ class Engine:
         if s is None or s.do != "DELIVER":
             return True
         return self._account(op, s.meter, s.meter_role)[0]
+
+    def _changeover_done(self, op: Op) -> tuple[str, str] | None:
+        """(why, result) when a litre step was satisfied while its pump was being replaced, else None. The volume cap
+        always ends the operation; a met target ends it when the rest of the sequence only switches things off or
+        waits (a later RUN or DELIVER still needs the replacement, and that step counts its own litres)."""
+        a = op.body.action
+        s = a.steps[op.step] if a.type == "SEQUENCE" and op.step < len(a.steps) else None
+        if s is None or s.do != "DELIVER":
+            return None
+        other = op.replace["by"] if op.replace else "the standby pump"
+        cap = self._volume_cap(op.held.values())
+        if cap is not None and op.measured_L >= cap:
+            return (f"equipment maximum volume {cap:g} L reached during the pump changeover; {other} was not started",
+                    "RUNTIME_GUARD")
+        if op.measured_L - op.step_base_L >= s.target_L and not any(x.do in ("RUN", "DELIVER") for x in a.steps[op.step + 1:]):
+            return (f"{s.target_L:g} L target reached during the pump changeover "
+                    f"({op.measured_L:.2f} L measured); {other} was not started", "DONE")
+        return None
 
     def _account(self, op: Op, meter: str, role: str) -> tuple[bool, float | None]:
         """Count the litres between the last reading and this one. (False, None) when the operation was failed for

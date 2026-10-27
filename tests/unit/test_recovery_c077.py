@@ -247,10 +247,13 @@ def test_c077_03_the_failed_pump_reading_on_again_after_the_changeover_fails_the
 
 
 # ------------------------------------------------------------------ C077-04: litres through a changeover
-def _litre_rig(target=50, no_flow=120, delay_s=8, lose_meter=False):
+def _litre_rig(target=50, no_flow=120, delay_s=8, lose_meter=False, cap=None):
     body = _sector("valve-1").model_dump(mode="json")
     body["action"]["steps"][2] = {"do": "DELIVER", "meter": "fm", "target_L": target, "no_flow_timeout_s": no_flow}
     items = _items()
+    if cap is not None:                                          # the pumps' own maximum volume per run
+        for iid, start, fault in (("pump-a", PA, "digital_A.DI1"), ("pump-b", PB, "digital_A.DI4")):
+            items[iid] = view(iid, "pump", {"start": start, "fault": fault}, limits={"max_runtime_s": 3600, "max_volume_L": cap})
     items["fm"] = view("fm", "flow", {"flow": "analog_A.AI1"}, {"scaling": FLOW_SCALING})
     r = Rig(items, {"s1": (1, parse(body))})
     sample = r.e.io.sample
@@ -302,3 +305,122 @@ def test_c077_04_a_meter_genuinely_lost_during_the_changeover_still_fails_with_t
     f = r.e.finished[-1] if r.e.finished else op.public(r.clock.mono())
     assert f["result"] == "FAILED" or op.state != "RUNNING"
     assert "flow reading lost" in (op.reason or "") and op.uncertain_L > 0
+
+
+# ------------------------------------------------------------------ R402-01: a start waiting its turn is cancelled by a stop
+def _steps(valve, run_s=60):
+    return {"type": "SEQUENCE", "max_runtime_s": 600, "steps": [
+        {"do": "ON", "item": valve}, {"do": "ON", "item": "pump-a"}, {"do": "RUN", "seconds": run_s},
+        {"do": "OFF", "item": "pump-a"}, {"do": "OFF", "item": valve}]}
+
+
+def _waiting_rig(second):
+    """Sector 1 waters (weekly); Sector 2, on the same pump group, waits its turn with the given trigger."""
+    from tests.unit.test_program_engine import Rig
+    items = _items() | {"btn": view("btn", "button", {"pressed": "digital_A.DI3"})}
+    r = Rig(items, {"s1": (1, _weekly("valve-1", run_s=60)), "s2": (1, parse({"trigger": second, "duty": ["pump-a", "pump-b"],
+                                                                               "action": _steps("valve-2")}))})
+    for p in ("digital_A.DI1", "digital_A.DI4"):
+        r.twin.set_input(p, False)
+    r.twin.set_input("digital_A.DI3", False)
+    r.run(1)
+    r.e.approve_recovery("t", "MANUAL")
+    r.e.request_mode("t", "AUTO")
+    r.run(65)                                                     # the windows open at 05:01; Sector 1 goes first
+    r.twin.set_input("digital_A.DI3", True)                       # (the condition holds from now on)
+    r.run(5)
+    assert [o.program_id for o in r.e.ops.values()] == ["s1"] and r.twin.s.coils.get(V1)
+    assert r.e.program_states()["s2"]["state"] == "WAITING", r.e.program_states()["s2"]
+    return r
+
+
+SECOND = {"weekly": {"type": "WEEKLY", "entries": [{"days": ["MON"], "start": "05:01", "end": "05:30"}]},
+          "repeat": {"type": "WINDOW_REPEAT", "entries": [{"days": ["MON"], "start": "05:01", "end": "05:30"}],
+                     "rest_s": 30, "max_count": 3},
+          "condition": {"type": "CONDITION", "when": {"item": "btn", "role": "pressed", "op": "IS_ON", "debounce_s": 1},
+                        "rearm_after_s": 5}}
+
+
+@pytest.mark.parametrize("trigger", sorted(SECOND))
+@pytest.mark.parametrize("how", ["stop_all", "lease"])
+def test_r402_01_a_start_waiting_its_turn_does_not_spring_back_after_a_stop(trigger, how):
+    r = _waiting_rig(SECOND[trigger])
+    before = len(r.on_frames())
+    if how == "stop_all":
+        r.e.stop_all("vicente", "explicit stop all")
+    else:
+        r.e.request_stop_all("bench lease ended")
+    r.run(180)                                                    # Sector 1 stops verified; the group is free
+    assert len(r.on_frames()) == before, (trigger, how)            # no new ON: nothing started by itself
+    assert not r.e.ops and not r.e._turn_wait
+    ev = [p for k, p in r.events if k == "PROGRAM_START_CANCELLED"]
+    assert ev and ev[0]["program"] == "s2" and ev[0]["why"] in ("explicit stop all", "bench lease ended")
+    if trigger != "condition":                                    # the window's occurrence is settled, not left open
+        assert any(k.startswith("s2@1") and v["state"] == "CANCELLED" for k, v in r.e.store.occ.items()), r.e.store.occ
+    assert r.e.mode == "AUTO"                                     # the mode policy is unchanged
+
+
+def test_r402_01_a_cancelled_condition_rearms_only_after_its_condition_clears():
+    r = _waiting_rig(SECOND["condition"])
+    r.e.stop_all("vicente", "explicit stop all")
+    r.run(180)
+    before = len(r.on_frames())
+    r.twin.set_input("digital_A.DI3", False)                      # the condition clears, re-arms, then holds again
+    r.run(8)
+    r.twin.set_input("digital_A.DI3", True)
+    r.run(5)
+    assert len(r.on_frames()) > before and any(o.program_id == "s2" for o in r.e.ops.values())
+
+
+# ------------------------------------------------------------------ R402-03: a target met during a changeover starts no partner
+def _drop_off(r, seconds):
+    """The failed pump's OFF commands are lost for a while, so it keeps pumping measured water (residual flow)."""
+    base, t0 = r.e.io.command, r.clock.mono()
+
+    def command(point, desired, **kw):
+        if point == PA and desired is False and r.clock.mono() - t0 < seconds:
+            return type("Dropped", (), {"outcome": None, "detail": "dropped"})()
+        return base(point, desired, **kw)
+    r.e.io.command = command
+
+
+def test_r402_03_a_target_met_during_the_changeover_ends_the_cycle_without_starting_the_partner():
+    r, op = _litre_rig(target=11, delay_s=20)
+    _drop_off(r, 8)
+    r.run(90)
+    assert not any(t == PB and d for t, d in _targets(r))           # the standby pump never got an ON
+    f = r.e.finished[-1]
+    assert f["result"] == "DONE" and f["measured_L"] >= 11 and "target reached during the pump changeover" in f["reason"]
+    ev = next(p for k, p in r.events if k == "PROGRAM_PUMP_REPLACEMENT_NOT_NEEDED")
+    assert ev["failed"] == "pump-a" and ev["standby"] == "pump-b"
+    assert not r.twin.s.coils.get(PA) and not r.twin.s.coils.get(V1)  # every OFF went out through the stop path
+    assert "PROGRAM_PUMP_REPLACED" not in r.kinds()
+
+
+def _with_run_after(r, op, target):
+    body = _sector("valve-1").model_dump(mode="json")
+    steps = body["action"]["steps"]
+    steps[2] = {"do": "DELIVER", "meter": "fm", "target_L": target, "no_flow_timeout_s": 120}
+    steps.insert(3, {"do": "RUN", "seconds": 20})                  # watering continues after the litre step
+    r.programs["s1"] = (1, parse(body))
+    op.body = parse(body)
+
+
+def test_r402_03_the_volume_cap_crossed_by_residual_flow_during_the_changeover_stops_without_the_partner():
+    # the target (11 L) is below the cap (12 L), as the engine requires at the start; the failed pump's lost OFFs let
+    # it keep pumping, so the counted water crosses the cap while the partner would still be needed for the RUN step
+    r, op = _litre_rig(target=11, delay_s=20, cap=12.0)
+    _with_run_after(r, op, 11)
+    _drop_off(r, 12)
+    r.run(90)
+    assert not any(t == PB and d for t, d in _targets(r))
+    f = r.e.finished[-1]
+    assert f["result"] == "RUNTIME_GUARD" and "maximum volume 12 L" in f["reason"], f
+    assert not r.twin.s.coils.get(PA) and not r.twin.s.coils.get(V1)
+
+
+def test_r402_03_a_met_target_with_more_watering_after_it_still_brings_in_the_partner():
+    r, op = _litre_rig(target=11, delay_s=8)
+    _with_run_after(r, op, 11)
+    r.run(60)
+    assert any(t == PB and d for t, d in _targets(r)) and "PROGRAM_PUMP_REPLACED" in r.kinds()
