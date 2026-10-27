@@ -829,11 +829,16 @@ async function board040(b) {
   await login(p, USER, PASS);
   await api(p, "/api/users/" + USER, "POST", { commissioning: true });     // the throwaway admin commissions
   await login(p, USER, PASS);
-  const nav = await p.locator("#nav").innerText();
+  // the menu is built from the session and then the status (the board link needs both): wait for it, report what it showed
+  const navState = () => p.evaluate(() => ({ text: document.querySelector("#nav").innerText,
+    board: !!document.querySelector("#nav-board:not(.hidden)"), group: !!document.querySelector('#nav [data-nav="hardware"]:not(.hidden)') }));
+  await until(p, async () => /I\/O board/.test((await navState()).text), 10000).catch(() => {});
+  const ns = await navState(), nav = ns.text;
   await show(p, "board");
   const n = await p.evaluate(() => ({ mods: document.querySelectorAll("#v-board .card.module").length, ch: document.querySelectorAll("#v-board [data-point]").length }));
   await shot(p, "board-1-simulation");
-  check("BOARD-01 one card per module, every channel", /I\/O board/.test(nav) && n.mods === 6 && n.ch === 80, `menu has I/O board; ${n.mods} module cards, ${n.ch} channels`);
+  check("BOARD-01 one card per module, every channel", /I\/O board/.test(nav) && n.mods === 6 && n.ch === 80,
+    `menu ${/I\/O board/.test(nav) ? "has" : "lacks"} I/O board (hardware group ${ns.group ? "shown" : "hidden"}, board link ${ns.board ? "shown" : "hidden"}; menu: ${nav.replace(/\s+/g, " ").slice(0, 200)}); ${n.mods} module cards, ${n.ch} channels`);
   await p.locator("#v-board").getByRole("button", { name: "Use I/O test mode" }).click();
   await until(p, async () => (await get(p, "/api/board")).source === "IO_TEST", 10000);
   const sw = p.locator('#v-board [data-point="relay_A.DO3"] .switch');
