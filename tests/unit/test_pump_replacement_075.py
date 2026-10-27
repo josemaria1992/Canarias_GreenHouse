@@ -1,7 +1,8 @@
 """Owner decision 27 Oct 2026 (fake services only): a duty pump that fails while Sector 1 waters is switched OFF and
 verified OFF, then its partner finishes the remaining watering time of the same cycle with the sector valve kept
-open; Sector 2 is served afterwards by the healthy pump. Replacement is refused, with a reason and the normal fault
-stop, when the partner is busy elsewhere or the failed pump cannot be verified OFF. Limits are never extended."""
+open; Sector 2 is served afterwards by the healthy pump. When the partner is held elsewhere the sector waits its turn; when
+the failed pump cannot be verified OFF the partner is never started. Limits are never extended. (C077 regressions:
+tests/unit/test_recovery_c077.py.)"""
 from aquacrop.programs.definitions import parse
 from tests.unit.test_program_engine import Rig, view
 
@@ -65,17 +66,15 @@ def test_pump_a_fails_mid_cycle_pump_b_finishes_sector_1_then_sector_2():
     assert not r.twin.s.coils["digital_A.DO1"]
 
 
-def test_when_the_partner_serves_the_other_sector_this_sector_waits_its_turn_then_finishes():
-    """Owner answer 2: the sectors take turns, so one healthy pump serves both. Sector 2 is watering on pump-b when
-    pump-a fails on Sector 1: Sector 1 stops through its normal stop (pump-a OFF, valve 1 closed), Sector 2 is not
-    interrupted, then Sector 1's remaining time runs on pump-b with valve 1 open again."""
-    s2 = parse({"trigger": {"type": "MANUAL"}, "action": {"type": "SEQUENCE", "max_runtime_s": 600, "steps": [
-        {"do": "ON", "item": "valve-2"}, {"do": "ON", "item": "pump-b"}, {"do": "RUN", "seconds": 60},
-        {"do": "OFF", "item": "pump-b"}, {"do": "OFF", "item": "valve-2"}]}})
-    r = _rig(s1=_sector("valve-1", run_s=120), s2=s2)
-    r.e.run_now("t", "s2")
+def test_when_the_partner_is_held_elsewhere_this_sector_waits_its_turn_then_finishes():
+    """Owner answer 2, the defensive path: since C077-02 no other sector program can hold the partner while this sector
+    waters (they share one pump group), so the partner is held here by something outside the sector programs. Sector 1
+    stops through its normal stop (pump-a OFF, valve 1 closed), the holder is not preempted, then Sector 1's remaining
+    time runs on pump-b with valve 1 open again."""
+    r = _rig(s1=_sector("valve-1", run_s=120))
     r.e.run_now("t", "s1")
     r.run(32)
+    assert r.e.arbiter.acquire("bench", ["pump-b"]) is None
     r.twin.set_fault("pump-a", "TRIP")
     r.run(5)
     w = next(p for kk, p in r.events if kk == "PROGRAM_PUMP_WAITING")
@@ -83,29 +82,19 @@ def test_when_the_partner_serves_the_other_sector_this_sector_waits_its_turn_the
     f1 = next(x for x in r.e.finished if x["program_id"] == "s1")
     assert f1["result"] == "PAUSED"
     assert not r.twin.s.coils["digital_A.DO1"] and not r.twin.s.coils["digital_A.DO2"]     # pump-a off, valve 1 closed
-    assert r.twin.s.coils["digital_A.DO3"] and r.twin.s.coils["digital_A.DO5"]             # sector 2 not interrupted
-    r.run(40)                                                                              # sector 2 ends
+    assert r.e.arbiter.owner["pump-b"] == "bench"                                         # the holder is not preempted
+    r.run(40)
+    assert "PROGRAM_RESUMED" not in r.kinds()                                             # it waits, it is not cancelled
+    r.e.arbiter.release("bench")
+    r.run(3)
     res = next(p for kk, p in r.events if kk == "PROGRAM_RESUMED")
-    assert res["program"] == "s1" and res["lead"] == "pump-b"
-    assert r.twin.s.coils["digital_A.DO2"] and r.twin.s.coils["digital_A.DO3"] and not r.twin.s.coils["digital_A.DO5"]
+    assert res["program"] == "s1" and res["lead"] == "pump-b" and res["from_op"] == f1["op_id"]
+    assert r.twin.s.coils["digital_A.DO2"] and r.twin.s.coils["digital_A.DO3"]
     r.run(120)
     f = [x for x in r.e.finished if x["program_id"] == "s1"][-1]
     assert f["result"] == "DONE" and f["origin"] == "RESUME"
     assert w["remaining"] <= f["runtime_s"] <= w["remaining"] + 10                        # the rest, not a full cycle
     assert not r.twin.s.coils["digital_A.DO3"] and not r.twin.s.coils["digital_A.DO2"]
-
-
-def test_a_waiting_rest_is_abandoned_when_its_window_ends_and_says_so():
-    r = _rig(s1=_sector("valve-1"), other=parse({"trigger": {"type": "MANUAL"}, "action": {
-        "type": "SEQUENCE", "max_runtime_s": 600, "steps": [{"do": "ON", "item": "pump-b"}, {"do": "RUN", "seconds": 300}]}}))
-    r.e.run_now("t", "other")
-    r.e.run_now("t", "s1")
-    r.run(10)
-    r.e.RESUME_GIVE_UP_S = 30
-    r.twin.set_fault("pump-a", "TRIP")
-    r.run(40)
-    assert "PROGRAM_PUMP_WAITING" in r.kinds() and "PROGRAM_RESUME_ABANDONED" in r.kinds()
-    assert any(o.program_id == "other" for o in r.e.ops.values())          # the other operation is not preempted
 
 
 def test_no_replacement_when_the_failed_pump_is_not_verified_off():

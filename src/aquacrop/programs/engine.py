@@ -187,6 +187,7 @@ class Engine:
         self._perm_since: dict[tuple, float | None] = {}   # (program, start condition) -> mono since it holds
         self._rep: dict[str, dict] = {}          # repeat window key -> {"n": cycles requested, "last_end": mono}
         self._resume: dict[str, dict] = {}       # program -> the rest of a cycle waiting for its partner pump (owner)
+        self._turn_wait: dict[str, dict] = {}    # occurrence key -> a scheduled start waiting for its pump group (C077-02)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> dict:
@@ -317,6 +318,8 @@ class Engine:
                 self.store.mode_save("STOPPING", "STOPPING_AUTOMATIC", actor, reason or "AUTO to MANUAL", {})
                 for c in list(self.conflicts):
                     self._close_conflict(c, "CANCELLED_BY_MANUAL", actor)
+                self._turn_wait.clear()                # scheduled starts waiting their turn end with AUTO
+                self._cancel_resumes(actor, "mode changed to MANUAL", origin="AUTO")
                 for o in list(self.ops.values()):
                     if o.origin == "AUTO" and o.state == "RUNNING":
                         self._begin_stop(o, "mode changed to MANUAL", result="CANCELLED")
@@ -418,8 +421,13 @@ class Engine:
     def stop_op(self, actor: str, op_id: str, reason: str = "stopped by user") -> dict:
         with self._lock:
             o = self.ops.get(op_id)
-            if o is None:
+            waiting = next((pid for pid, r in self._resume.items() if r["from_op"] == op_id), None)
+            if o is None and waiting is None:
                 raise Refused("no such running operation")
+            # a user stop of an operation also cancels the rest of its cycle waiting for a pump (C077-01)
+            self._cancel_resumes(actor, reason, program=o.program_id if o is not None else waiting)
+            if o is None:
+                return {"op_id": op_id, "program_id": waiting, "state": "CANCELLED", "reason": reason}
             if o.state == "RUNNING":
                 self._begin_stop(o, reason, result="STOPPED_BY_USER")
             return o.public(self.clock.mono())
@@ -437,9 +445,21 @@ class Engine:
 
     def stop_all(self, actor: str, reason: str) -> None:
         with self._lock:
+            self._cancel_resumes(actor, reason)       # C077-01: nothing that was stopped starts again by itself
+            self._turn_wait.clear()
             for o in list(self.ops.values()):
                 if o.state == "RUNNING":
                     self._begin_stop(o, reason, result="STOPPED")
+
+    def _cancel_resumes(self, actor: str, why: str, *, origin: str | None = None, program: str | None = None) -> None:
+        """Cancel the rest of a cycle waiting for its partner pump, with an audit record. A stop (Stop all, a user
+        stop, the end of AUTO, a lost lease, a deactivated program) never leaves a hidden automatic restart behind."""
+        for pid, r in list(self._resume.items()):
+            if (origin is not None and r.get("origin") != origin) or (program is not None and pid != program):
+                continue
+            del self._resume[pid]
+            self.event("PROGRAM_RESUME_CANCELLED", {"program": pid, "from_op": r["from_op"], "remaining": r["remaining"],
+                                                    "why": why}, actor)
 
     # ------------------------------------------------------------------ conflicts
     def resolve_conflict(self, actor: str, conflict_id: str, choice: str) -> dict:
@@ -505,6 +525,8 @@ class Engine:
             self._permissives_tick()
             if self._pending_stop is not None:
                 why, self._pending_stop = self._pending_stop, None
+                self._cancel_resumes("system", why)
+                self._turn_wait.clear()
                 for o in list(self.ops.values()):
                     if o.state == "RUNNING":
                         self._begin_stop(o, why, result="STOPPED")
@@ -515,6 +537,7 @@ class Engine:
                 self._settle_stopping()
             if self.mode == "AUTO":
                 self._triggers(now_utc)
+                self._turn_waits_ended(now_utc)
             for cid, c in list(self.conflicts.items()):
                 if c.get("switch"):
                     holder = self.ops.get(c["running"]["op_id"])
@@ -583,6 +606,9 @@ class Engine:
             if st["n"] and (st["last_end"] is None or self.clock.mono() - st["last_end"] < t.rest_s):
                 st["waiting"] = None
                 continue
+            if (why := self._turn_refusal(pid, body)) is not None:
+                st["waiting"] = why                  # C077-02: this window's next cycle waits for its pump group
+                continue
             key = f"{w.key}#{st['n']}"
             st["n"] += 1
             st["waiting"] = None
@@ -616,6 +642,13 @@ class Engine:
             if op is not None:
                 doc |= {"state": {"RUNNING": "WATERING", "STOPPING": "STOPPING", "STOP_UNVERIFIED": "STOP_UNVERIFIED"}.get(
                     op.state, op.state), "op_id": op.op_id, "reason": op.reason}
+            elif pid in self._resume:
+                r = self._resume[pid]
+                doc |= {"state": "WAITING", "why": f"the rest of this cycle ({r['remaining']}) waits for {r['partner']}",
+                        "from_op": r["from_op"]}
+            elif (w := next((w for w in self._turn_wait.values() if w["pid"] == pid), None)) is not None:
+                doc |= {"state": "WAITING", "why": w["why"],
+                        "window_end_utc": w["end"].isoformat() if w["end"] else None}
             else:
                 doc["state"] = "IDLE"
                 for k, st in self._rep.items():
@@ -634,6 +667,18 @@ class Engine:
             return
         if any(c["waiting"]["key"] == key for c in self.conflicts.values()):
             return
+        # C077-02: a sector whose pump group is watering another sector waits, unclaimed, and is asked again on every
+        # tick of its window; it never preempts the other and never needs a person to choose
+        if (why := self._turn_refusal(pid, body)) is not None:
+            w = self._turn_wait.get(key)
+            if w is None:
+                self._turn_wait[key] = {"pid": pid, "ver": ver, "start": start_utc, "end": end_utc, "why": why}
+                self.event("PROGRAM_WAITING_TURN", {"key": key, "program": pid, "why": why}, "system")
+            else:
+                w["why"] = why
+            return
+        if self._turn_wait.pop(key, None) is not None:
+            self.event("PROGRAM_TURN", {"key": key, "program": pid}, "system")
         need = actuators(body)
         holders = {self.arbiter.owner[i] for i in need if i in self.arbiter.owner}
         if holders:
@@ -668,6 +713,10 @@ class Engine:
         st["cleared_at"] = None
         st["since"] = st["since"] or mono
         if st["armed"] and mono - st["since"] >= t.when.debounce_s:
+            if (why := self._turn_refusal(pid, body)) is not None:
+                st["waiting"] = why                  # still armed: it starts on its turn if the condition still holds
+                return
+            st["waiting"] = None
             st["armed"] = False
             key = f"{pid}@{ver}:cond:{now_utc.strftime('%Y%m%dT%H%M%S')}"
             self._request(pid, ver, body, key, now_utc, None)
@@ -710,6 +759,8 @@ class Engine:
             return                                   # the equipment's own limits hold it off: asked again later
         st["since"] = st["since"] or mono
         if mono - st["since"] >= a.debounce_s:
+            if self._turn_refusal(pid, body) is not None:
+                return                               # its pump group waters another sector: asked again later
             st["n"] += 1
             st["since"] = None
             key = f"{pid}@{ver}:keep:{now_utc.strftime('%Y%m%dT%H%M%S')}"
@@ -755,7 +806,12 @@ class Engine:
             if key:
                 self.store.occurrence_update(key, "FAILED", outcome=why)
             raise Refused(why)
-        busy = self.arbiter.acquire(f"op:{pid}", need)
+        if (why := self._turn_refusal(pid, body, resuming=origin == "RESUME")) is not None:
+            if key:
+                self.store.occurrence_update(key, "FAILED", outcome=why)
+            raise Refused(why)
+        turn = self._turn_tokens(body)
+        busy = self.arbiter.acquire(f"op:{pid}", need + turn)
         if busy:
             if key:
                 self.store.occurrence_update(key, "FAILED", outcome=busy)
@@ -780,7 +836,7 @@ class Engine:
                 step_since=mono, requested_L=asked)
         # the arbiter's owner names the op, so a conflict can point at it
         self.arbiter.release(f"op:{pid}")
-        self.arbiter.acquire(op.op_id, need)
+        self.arbiter.acquire(op.op_id, need + turn)     # the pump group stays held until the verified stop (_end)
         self.ops[op.op_id] = op
         if key:
             self.store.occurrence_update(key, "RUNNING", doc={"op_id": op.op_id, "limit_s": limit})
@@ -791,6 +847,47 @@ class Engine:
             if not self._switch_on(op, a.item):
                 return op
         return op
+
+    # ------------------------------------------------------------------ sectors take turns (owner, 27 Oct 2026; C077-02)
+    def _turn_tokens(self, body: ProgramBody) -> list[str]:
+        """The pump group a program waters with. A duty pair is one group (either pump serves either sector, and the
+        sectors never water at the same time): a program holds a token for each pump of its own pair, and for each
+        pump it switches that belongs to an active program's pair, from its start until its verified stop. Programs
+        that use none of these pumps are not serialized. Configuration decides the group, never equipment names."""
+        pumps = {p for _v, b in self.programs().values() for p in (b.duty or ())}
+        mine = set(body.duty or ()) | {i for i in actuators(body) if i in pumps}
+        return [f"turn:{p}" for p in sorted(mine)]
+
+    def _turn_refusal(self, pid: str, body: ProgramBody, *, resuming: bool = False) -> str | None:
+        """Why this program cannot start now because its pump group serves another operation, or the rest of another
+        sector's interrupted cycle is waiting for that group (it goes first). None when it may start."""
+        mine = self._turn_tokens(body)
+        for t in mine:
+            holder = self.arbiter.owner.get(t)
+            o = self.ops.get(holder) if holder else None
+            if holder is None or holder == f"op:{pid}" or (o is not None and o.program_id == pid):
+                continue
+            who = o.program_id if o is not None else holder
+            return (f"{pid} waits its turn: {who} is using the same pump group ({t[5:]}); sectors water one at a time, "
+                    "and it starts when that operation has stopped and its stop is verified")
+        if not resuming:
+            for rp, r in self._resume.items():
+                if rp != pid and set(mine) & set(r.get("turn", ())):
+                    return f"{pid} waits its turn: the rest of {rp}'s interrupted cycle is waiting for its pump and goes first"
+        return None
+
+    def _turn_waits_ended(self, now_utc: datetime) -> None:
+        """A scheduled start that waited its turn until its window ended is recorded MISSED with the reason."""
+        for key, w in list(self._turn_wait.items()):
+            if any(o.occurrence_key == key for o in self.ops.values()):
+                del self._turn_wait[key]
+                continue
+            if w["end"] is not None and now_utc < w["end"]:
+                continue
+            del self._turn_wait[key]
+            why = f"the window ended while it waited its turn ({w['why']})"
+            if self.store.occurrence_claim(key, w["pid"], w["ver"], w["start"], "MISSED", {"why": why}):
+                self.event("PROGRAM_OCCURRENCE_MISSED", {"key": key, "why": why}, "system")
 
     def _run_context(self, body: ProgramBody) -> dict:
         """What this operation runs with, held at its start (C075-05): every item the program names (both pumps of a
@@ -1051,6 +1148,7 @@ class Engine:
         if op.state != "RUNNING":
             return
         op.state, op.reason, op.result = "STOPPING", why, result
+        op.replace = None                            # a changeover in progress ends: the stop path owns every OFF now
         op.stop_since = op.stop_step_since = self.clock.mono()
         op.stop_plan_name, op.stop_plan = self._choose_plan(op, result)
         op.stop_idx, op.stop_sent, op.stopping_items, op.plan_done = 0, set(), [], False
@@ -1262,6 +1360,10 @@ class Engine:
             return
         if self._guards(op):
             return
+        for iid in list(op.stopped):                 # RR-01: switched OFF by this operation, now ON again (also while
+            if self._off_state(op, iid)[1] is True:  # a pump is being replaced, C077-03)
+                self._fail(op, f"{getattr(self._held(op, iid), 'name', iid)}: verified OFF earlier, output reads ON again")
+                return
         if op.replace is not None:                   # a failed duty pump is being replaced: nothing else advances
             self._replacing(op)
             return
@@ -1270,10 +1372,6 @@ class Engine:
             if iid not in op.off_sent and held is not None and (why := self._fault_refusal(held)) is not None:
                 if not self._try_replace(op, iid, why):
                     self._fail(op, op.reason or why)
-                return
-        for iid in list(op.stopped):                 # RR-01: switched OFF by this operation, now ON again
-            if self._off_state(op, iid)[1] is True:
-                self._fail(op, f"{getattr(self._held(op, iid), 'name', iid)}: verified OFF earlier, output reads ON again")
                 return
         for iid in list(op.on):                      # running equipment must keep reporting ON where it can
             if iid not in op.off_sent and not self._feedback_ok(op, iid):
@@ -1344,7 +1442,7 @@ class Engine:
         step = a.steps[op.step] if op.step < len(a.steps) else None
         elapsed = self.clock.mono() - op.step_since if step is not None and step.do == "RUN" else None
         op.replace = {"failed": iid, "by": other, "why": why, "phase": "STOPPING", "since": self.clock.mono(),
-                      "elapsed": elapsed}
+                      "elapsed": elapsed, "off_at": self.clock.mono(), "off_sent": 1}
         self.alarm("PROGRAM_PUMP_FAILED", op.program_id, True, {"op_id": op.op_id, "item": iid, "why": why,
                                                                 "message": f"{why}: {other} takes over this cycle"})
         self.event("PROGRAM_PUMP_FAILED", {"op_id": op.op_id, "failed": iid, "standby": other, "why": why,
@@ -1354,8 +1452,6 @@ class Engine:
                         priority=Priority.STOP)
         op.off_sent.add(iid)
         return True
-
-    RESUME_GIVE_UP_S = 3600.0
 
     def _pause_for(self, op: Op, failed: str, other: str, why: str, busy: str) -> bool:
         """Owner, 27 Oct 2026: the sectors take turns, so the healthy pump serves them one after the other. When it is
@@ -1377,7 +1473,8 @@ class Engine:
         d["action"] = dict(d["action"], steps=done_before + later)
         self._resume[op.program_id] = {"version": op.version, "body": d, "failed": failed, "partner": other,
                                        "why": why, "from_op": op.op_id, "window_end": op.window_end_utc,
-                                       "since": self.clock.mono(), "remaining": rem, "last": None}
+                                       "since": self.clock.mono(), "remaining": rem, "last": None,
+                                       "origin": op.origin, "turn": self._turn_tokens(op.body)}
         self.alarm("PROGRAM_PUMP_FAILED", op.program_id, True, {"op_id": op.op_id, "item": failed, "why": why,
                                                                 "message": f"{why}: this sector waits for {other}"})
         self.event("PROGRAM_PUMP_WAITING", {"op_id": op.op_id, "failed": failed, "partner": other, "busy": busy,
@@ -1386,15 +1483,20 @@ class Engine:
         return True
 
     def _resumes(self) -> None:
+        """The rest of an interrupted cycle starts when its partner pump is free. It waits as long as it must (owner,
+        27 Oct 2026: no time limit of its own); only its window's end, the program being deactivated or changed, or
+        an explicit stop (_cancel_resumes) ends the wait."""
+        progs = self.programs()
         for pid, r in list(self._resume.items()):
+            if pid not in progs or progs[pid][0] != r["version"]:
+                self._cancel_resumes("system", "the program was deactivated or changed", program=pid)
+                continue
             if any(o.program_id == pid for o in self.ops.values()):
                 continue                              # its paused operation is still stopping
-            if r["window_end"] is not None and self.clock.utc() >= r["window_end"] or \
-                    self.clock.mono() - r["since"] > self.RESUME_GIVE_UP_S:
+            if r["window_end"] is not None and self.clock.utc() >= r["window_end"]:
                 del self._resume[pid]
                 self.event("PROGRAM_RESUME_ABANDONED", {"program": pid, "from_op": r["from_op"], "remaining": r["remaining"],
-                                                        "why": "its window ended" if r["window_end"] is not None and
-                                                        self.clock.utc() >= r["window_end"] else "waited an hour"}, "system")
+                                                        "why": "its window ended"}, "system")
                 continue
             if self.mode not in ("AUTO", "MANUAL"):
                 continue
@@ -1416,12 +1518,23 @@ class Engine:
                                                (x.item for x in op.body.action.steps if x.do == "ON" and x.item in (op.body.duty or ())), None)},
                        "system")
 
+    REPLACE_OFF_RETRY_S = 2.0
+
     def _replacing(self, op: Op) -> None:
         r, mono = op.replace, self.clock.mono()
         failed, other = r["failed"], r["by"]
+        if not self._changeover_metering(op):
+            return                                   # the meter itself failed: _account already failed the operation
         if r["phase"] == "STOPPING":
             ok, coil, fb = self._off_state(op, failed)
             if not ok:
+                # AGENTS invariant 2 (C077-03): the failed pump's held output gets OFF again until it is verified OFF;
+                # the partner is never switched ON before that
+                held = self._held(op, failed)
+                if held is not None and held.command_point and mono - r["off_at"] >= self.REPLACE_OFF_RETRY_S:
+                    r["off_at"], r["off_sent"] = mono, r["off_sent"] + 1
+                    self.io.command(held.command_point, False, actor="program",
+                                    reason=f"pump replacement {op.op_id}: not verified OFF, OFF again", priority=Priority.STOP)
                 if mono - r["since"] > self.REPLACE_OFF_TIMEOUT_S:
                     op.replace = None
                     self.event("PROGRAM_PUMP_REPLACEMENT_BLOCKED", {"op_id": op.op_id, "failed": failed, "standby": other,
@@ -1462,29 +1575,38 @@ class Engine:
             return
         if r["elapsed"] is not None:                 # the watering countdown resumes where it stopped
             op.step_since = mono - r["elapsed"]
+        op.last_flow_ok_mono = max(op.last_flow_ok_mono or 0.0, r["started"])   # no-flow is judged from the restart
         op.replaced.append(failed)
         op.replace = None
         self.event("PROGRAM_PUMP_REPLACED", {"op_id": op.op_id, "failed": failed, "by": other, "step": op.step,
                                              "watered_s": r["elapsed"], "measured_L": op.measured_L,
                                              "changeover_s": round(mono - r["since"], 1)}, "system")
 
-    def _deliver(self, op: Op, meter: str, role: str, target: float, no_flow_s: float, min_flow: float, finish) -> bool:
+    def _changeover_metering(self, op: Op) -> bool:
+        """C077-04: while a pump is replaced during a litre step, the meter's readings keep being counted (zero while
+        both pumps are stopped), so the step neither loses the readings taken meanwhile nor invents water across the
+        stop. A meter that is genuinely lost still fails the operation with the volume it could not measure."""
+        a = op.body.action
+        s = a.steps[op.step] if a.type == "SEQUENCE" and op.step < len(a.steps) else None
+        if s is None or s.do != "DELIVER":
+            return True
+        return self._account(op, s.meter, s.meter_role)[0]
+
+    def _account(self, op: Op, meter: str, role: str) -> tuple[bool, float | None]:
+        """Count the litres between the last reading and this one. (False, None) when the operation was failed for
+        unmeasured volume; (True, None) when no new reading is usable yet; (True, rate) otherwise."""
         it = self._items.get(meter)
         p = it.points.get(role) if it else None
         s = self.io.sample(p) if p else None
         rate = self._analog(it, role) if it else None
-        mono = self.clock.mono()
         if rate is None or s is None:
             if op.last_rate is not None:
                 gap = (self.clock.utc() - op.last_rate[0]).total_seconds()
                 if gap > (it.body.stale_after_s if it else 5.0):
                     op.uncertain_L += max(0.0, op.last_rate[1]) * gap / 60.0
                     self._fail(op, f"{meter}: flow reading lost; {op.uncertain_L:.2f} L not measured")
-                    return False
-            elif mono - op.step_since > no_flow_s:
-                self._fail(op, f"{meter}: no flow reading")
-                return False
-            return True
+                    return False, None
+            return True, None
         t = s.acquired_utc
         if op.last_rate is not None and t > op.last_rate[0]:
             dt = (t - op.last_rate[0]).total_seconds()
@@ -1492,10 +1614,22 @@ class Engine:
             if dt > it.body.stale_after_s:           # readings missed in between: that volume was not measured
                 op.uncertain_L += litres
                 self._fail(op, f"{meter}: {dt:.0f} s between flow readings; {op.uncertain_L:.2f} L not measured")
-                return False
+                return False, None
             op.measured_L += litres
         if op.last_rate is None or t > op.last_rate[0]:
             op.last_rate = (t, rate)
+        return True, rate
+
+    def _deliver(self, op: Op, meter: str, role: str, target: float, no_flow_s: float, min_flow: float, finish) -> bool:
+        mono = self.clock.mono()
+        ok, rate = self._account(op, meter, role)
+        if not ok:
+            return False
+        if rate is None:
+            if op.last_rate is None and mono - op.step_since > no_flow_s:
+                self._fail(op, f"{meter}: no flow reading")
+                return False
+            return True
         if rate >= min_flow:
             op.last_flow_ok_mono = mono
         if mono - (op.last_flow_ok_mono or op.step_since) > no_flow_s:
