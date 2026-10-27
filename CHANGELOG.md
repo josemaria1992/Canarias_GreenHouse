@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.5 (2026-10-27): Python 3.11 controller fix
+
+- 0.7.4's program authoring used a nested f-string that Python 3.11 (the CM4's) cannot parse: program preview and
+  save failed on the bench. Fixed in 2b3b8a8; the whole tree is compiled with the bench's Python 3.11 before release.
+- The owner tour presses Stop all only when it can act; backup state writes retry a Windows file lock.
+
 ## 0.7.4 (2026-10-27): owner corrections to 0.7.3 and the open features
 
 Owner corrections (docs/reviews/2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md):
