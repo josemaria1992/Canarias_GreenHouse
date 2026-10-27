@@ -119,13 +119,19 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
             return []
         out = []
         nm = names()
-        for b in blocks.latest().values():
+        validated: dict[str, dict] = {}              # 0.7.3: the latest VALIDATED version a program can use
+        for x in blocks.blocks():
+            if x["status"] == "VALIDATED":
+                validated[x["block_id"]] = x
+        for latest in blocks.latest().values():
+            b = validated.get(latest["block_id"], latest)
             body = b["body"]
             out.append({"block_id": b["block_id"], "version": b["version"], "status": "STALE" if blocks.stale(b) else b["status"],
                         "name": b["name"], "body": body,
                         "summary": f"from {nm.get(body.get('supply'), body.get('supply'))} to "
                                    f"{nm.get(body.get('destination'), body.get('destination'))}"
-                                   + (", measured" if body.get("meter") else ", timed only")})
+                                   + (", measured" if body.get("meter") else ", timed only"),
+                        "latest_version": latest["version"], "latest_status": latest["status"]})
         return out
 
     def readings() -> list[dict]:
@@ -142,19 +148,25 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
     def compile_request(form: dict):
         """(ProgramBody dict, WateringForm, block row) or a JSONResponse naming the field to correct."""
         from ..blocks.definitions import parse as parse_block
-        from ..programs.authoring import FormRefused, WateringForm, compile_form
+        from ..programs.authoring import FormRefused, WateringForm, compile_form, form_problems, pydantic_problems
+
+        def refuse(problems, code=422):
+            return JSONResponse({"detail": {"message": "; ".join(x["message"] for x in problems),
+                                            "field": problems[0]["field"], "problems": problems}}, status_code=code)
+        problems = form_problems(form)               # 0.7.3: every missing input in words, conditions by row
+        if problems:
+            return refuse(problems)
         try:
             f = WateringForm.model_validate(form)
         except ValidationError as e:
-            err = e.errors()[0]
-            return JSONResponse({"detail": {"message": err.get("msg", "").removeprefix("Value error, "),
-                                            "field": ".".join(str(x) for x in err.get("loc", ()))}}, status_code=422)
+            return refuse(pydantic_problems(e))
         if blocks is None:
             return JSONResponse({"detail": "blocks are not available here"}, status_code=409)
         try:
             b = blocks.get(f.block_id, f.block_version)
-        except Exception as e:
-            return JSONResponse({"detail": {"message": str(e), "field": "block_id"}}, status_code=409)
+        except Exception:
+            return refuse([{"field": "block_id", "message": f"Block {f.block_id} v{f.block_version} does not exist any "
+                                                           "more: choose the block again"}], 409)
         if blocks.stale(b):
             return JSONResponse({"detail": {"message": f"{b['name']}: the installation's connections changed since it was "
                                                        "validated; validate the block again on Blocks", "field": "block_id"}},
@@ -163,7 +175,7 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
             body = compile_form(f, parse_block(b["body"]), b["status"], views() if views else {})
             parse(body)
         except FormRefused as e:
-            return JSONResponse({"detail": {"message": str(e), "field": e.field}}, status_code=409)
+            return refuse([{"field": e.field, "message": str(e)}], 409)
         except ValidationError as e:
             return JSONResponse({"detail": {"message": "; ".join(errors_text(e)), "field": None}}, status_code=409)
         return body, f, b

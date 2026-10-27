@@ -24,9 +24,25 @@
 
   function note(key) { const m = P0.msg[key]; return m ? h("span", { class: "inline-msg " + (m.bad ? "bad" : "ok"), role: "status" }, m.text) : null; }
   function tell(key, text, bad) { P0.msg[key] = { text, bad: !!bad }; }
+  // 0.7.3: every problem the server finds comes back in words with its field; they are listed beside the button,
+  // the fields are marked (a condition's problem beside its row) and the first one gets the focus. Values stay.
   async function call(key, method, path, body, ok) {
+    P0.problems = [];
     try { const r = await api(method, path, body); if (ok) tell(key, ok); return r; }
-    catch (e) { tell(key, String(e.message || e), true); if (e.detail && e.detail.field) P0.badField = e.detail.field; return null; }
+    catch (e) {
+      const d = e.detail && typeof e.detail === "object" ? e.detail : null;
+      P0.problems = d && d.problems ? d.problems : d && d.field ? [{ field: d.field, message: d.message }] : [];
+      P0.badField = P0.problems.length ? P0.problems[0].field : null;
+      tell(key, P0.problems.length > 1 ? `${P0.problems.length} things to complete:` : String(e.message || e), true);
+      setTimeout(() => { const f = document.querySelector("[data-program-form] .bad-field input, [data-program-form] .bad-field select"); if (f) f.focus(); }, 50);
+      return null;
+    }
+  }
+  const bad = key => (P0.problems || []).some(x => x.field === key || (x.field || "").startsWith(key + "."));
+  const problemFor = key => (P0.problems || []).filter(x => x.field === key).map(x => x.message);
+  function problemList() {
+    const ps = P0.problems || [];
+    return ps.length > 1 ? h("ul", { class: "bad small", role: "alert" }, ps.map(x => h("li", null, x.message))) : null;
   }
 
   // ---------------------------------------------------------------- the form
@@ -56,7 +72,7 @@
   }
   function num(v) { return v === "" || v == null ? null : Number(v); }
   function field(label, input, key) {
-    return h("label", { class: P0.badField === key ? "bad-field" : null }, label, " ", input);
+    return h("label", { class: bad(key) ? "bad-field" : null }, label, " ", input);
   }
   function radio(name, value, cur, label, on) {
     return h("label", { class: "radio" }, h("input", { type: "radio", name, value, checked: cur === value ? true : null, onchange: () => { on(value); U.refresh(); } }), label);
@@ -72,9 +88,15 @@
     const usable = P.blocks.filter(b => b.status === "VALIDATED");
     const others = P.blocks.filter(b => b.status !== "VALIDATED" && b.status !== "RETIRED");
     const blk = blockOf(P, F);
-    return h("fieldset", null, h("legend", null, "1. Where?"),
-      usable.length ? usable.map(b => radio("prog-block", b.block_id, f.block_id, `${b.name} — ${b.summary}`, v => { f.block_id = v; f.block_version = b.version; }))
+    const newer = blk && blk.version !== f.block_version ? blk : null;
+    return h("fieldset", { class: bad("block_id") ? "bad-field" : null }, h("legend", null, "1. Where?"),
+      usable.length ? usable.map(b => radio("prog-block", b.block_id, f.block_id, `${b.name} — ${b.summary} (v${b.version})`, v => { f.block_id = v; f.block_version = b.version; }))
         : h("p", { class: "warn small" }, "No validated block yet. Create and validate one on Blocks: a program waters through a block."),
+      blk ? h("p", { class: "small" }, `This program uses ${blk.name} version ${f.block_version}.`,
+        blk.latest_status === "DRAFT" ? ` A newer draft (v${blk.latest_version}) is being edited on Blocks and is not used until it is validated.` : "") : null,
+      newer ? h("p", { class: "warn small", "data-block-newer": "" }, `${newer.name} has a newer validated version (v${newer.version}). Its steps or safety settings may differ. `,
+        h("button", { class: "small", onclick: () => { f.block_version = newer.version; P0.preview = null; tell("pv", `Now using ${newer.name} v${newer.version}: preview again to check it.`); U.refresh(); } }, `Review and use v${newer.version}`)) : null,
+      problemFor("block_id").map(m => h("p", { class: "bad small" }, m)),
       blk ? (safetyText(blk) ? h("p", { class: "muted small" }, safetyText(blk))
         : h("p", { class: "warn small" }, `${blk.name} has no maximum runtime yet. Set it once in its safety settings on Blocks; a program cannot be saved over it until then.`)) : null,
       others.length ? h("p", { class: "muted small" }, "Not available yet: ", others.map(b => `${b.name} (${b.status === "DRAFT" ? "draft: validate it on Blocks" : b.status})`).join("; ")) : null);
@@ -127,7 +149,9 @@
       list.map((r, i) => {
         const opts = sensors.find(x => x.item_id === r.item && x.role === r.role);
         const analog = !opts || opts.signal === "ANALOG";
-        return h("div", { class: "row wrap rule" },
+        const rowKey = `${list === P0.form.form.permissives ? "permissives" : "guards"}.${i}`;
+        return h("div", { class: "row wrap rule" + (bad(rowKey) ? " bad-field" : "") },
+          problemFor(rowKey).map(m => h("span", { class: "bad small", role: "alert" }, m)),
           h("select", { "aria-label": `${title} ${i + 1} reading`, onchange: ev => { const [it, ro] = ev.target.value.split("|"); r.item = it; r.role = ro; const o = sensors.find(x => x.item_id === it && x.role === ro); r.unit = o && o.unit; r.op = o && o.signal === "ANALOG" ? "ABOVE" : "IS_ON"; r.value = o && o.signal === "ANALOG" ? r.value : null; U.refresh(); } },
             h("option", { value: "|" }, "— choose a reading —"), sensors.map(x => h("option", { value: `${x.item_id}|${x.role}`, selected: x.item_id === r.item && x.role === r.role ? true : null }, `${x.name}: ${x.label}${x.unit ? " (" + x.unit + ")" : ""}`))),
           h("select", { "aria-label": `${title} ${i + 1} comparison`, onchange: ev => { r.op = ev.target.value; } },
@@ -201,7 +225,7 @@
       h("div", { class: "row wrap" }, field("Name", nameIn, "name"), field("ID", idIn, "program_id"),
         F.program_id ? [h("button", { class: "small", disabled: !can("equipment_edit"), onclick: rename }, "Change ID"), note("id")] : null),
       blockStep(P, F), endpointStep(P, F), scheduleStep(P, F), conditionsStep(P, F),
-      h("fieldset", null, h("legend", null, "5. Preview"), h("button", { onclick: preview }, "Preview"), note("pv"), previewBox(P, F)),
+      h("fieldset", null, h("legend", null, "5. Preview"), h("button", { onclick: preview }, "Preview"), note("pv"), problemList(), previewBox(P, F)),
       h("fieldset", null, h("legend", null, "6. Save, validate, test"),
         h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit"), onclick: save }, "Save draft"),
           h("button", { disabled: !can("equipment_edit"), onclick: validate }, "Validate"),

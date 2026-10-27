@@ -278,8 +278,8 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
         guard_s = e.max_minutes * 60 if bound is None else min(e.max_minutes * 60, bound)   # the stricter one
     else:
         if bound is None:
-            raise FormRefused("the block has no maximum runtime: set it once in the block's safety settings (Blocks), "
-                              "then save the program", "block_id")
+            raise FormRefused("Set the block's maximum runtime on Blocks (its safety settings), then preview again",
+                              "block_id")
         guard_s = bound
         if e.kind == "TIME" and e.minutes * 60 >= bound:
             raise FormRefused(f"watering {e.minutes:g} min does not fit inside the block's maximum runtime of "
@@ -383,3 +383,61 @@ def summary(f: WateringForm, block_name: str, names: dict[str, str], tz: str, no
     rule = lambda r: f"{names.get(r.item, r.item)} {r.role} {OPS[r.op]}{'' if r.value is None else f' {r.value:g} {r.unit}'} for {r.persist_s:g} s"  # noqa: E731
     return {"text": f"{block_name}: {what}, {when}; {guard}.", "next": nxt,
             "start_conditions": [rule(r) for r in f.permissives], "stop_conditions": [rule(r) for r in f.guards]}
+
+
+FIELD_WORDS = {"block_id": "the block", "endpoint.minutes": "minutes per cycle", "endpoint.litres": "litres per cycle",
+               "schedule.days": "the days", "schedule.windows": "the watering windows",
+               "schedule.rest_minutes": "the wait after each cycle"}
+
+
+def form_problems(form: dict) -> list[dict]:
+    """Everything the operator still has to fill in or correct, as [{field, message}], before the form is parsed
+    (0.7.3, owner correction): no validator text, no regular expressions, every problem at once, conditions by row."""
+    out: list[dict] = []
+    add = lambda field, msg: out.append({"field": field, "message": msg})  # noqa: E731
+    f = form if isinstance(form, dict) else {}
+    if not f.get("block_id"):
+        add("block_id", "Choose a validated block (blocks are made and validated on Blocks)")
+    e = f.get("endpoint") or {}
+    if e.get("kind") == "TIME" and not e.get("minutes"):
+        add("endpoint.minutes", "Enter the minutes per cycle")
+    if e.get("kind") == "VOLUME" and not e.get("litres"):
+        add("endpoint.litres", "Enter the litres per cycle")
+    if e.get("kind") not in ("TIME", "VOLUME", "MANUAL"):
+        add("endpoint.kind", "Choose how much: water for a time, or deliver litres")
+    s_ = f.get("schedule") or {}
+    if s_.get("kind") == "WEEKLY":
+        if not s_.get("days"):
+            add("schedule.days", "Choose at least one day")
+        v1 = f.get("form_version") == 1 or "form_version" not in f and (e.get("max_minutes") is not None
+                                                                         or s_.get("times") or s_.get("repeat"))
+        if not v1:
+            if not s_.get("windows"):
+                add("schedule.windows", "Add a watering window (start and finish)")
+            for i, w in enumerate(s_.get("windows") or []):
+                if not (w or {}).get("start") or not (w or {}).get("finish"):
+                    add(f"schedule.windows.{i}", f"Window {i + 1}: give its start and its finish")
+            if not s_.get("rest_minutes"):
+                add("schedule.rest_minutes", "Enter the wait after each completed cycle (minutes)")
+    for key, word in (("permissives", "Start condition"), ("guards", "Stop condition")):
+        for i, r in enumerate(f.get(key) or []):
+            r = r or {}
+            where = f"{key}.{i}"
+            if not r.get("item") or not r.get("role"):
+                add(where, f"{word} {i + 1}: choose a reading (or remove the row)")
+                continue
+            if r.get("op") in ("ABOVE", "BELOW") and r.get("value") in (None, ""):
+                add(where, f"{word} {i + 1}: enter the value to compare with")
+    return out
+
+
+def pydantic_problems(e) -> list[dict]:
+    """A validation error as [{field, message}] in words: never the validator's internal text."""
+    out = []
+    for err in e.errors():
+        loc = ".".join(str(x) for x in err.get("loc", ()))
+        msg = err.get("msg", "").removeprefix("Value error, ")
+        if err.get("type") in ("string_pattern_mismatch", "string_type", "missing", "int_parsing", "float_parsing"):
+            msg = f"{FIELD_WORDS.get(loc, loc.replace('.', ' ') or 'a value')}: missing or not valid"
+        out.append({"field": loc or None, "message": msg[:1].upper() + msg[1:]})
+    return out
