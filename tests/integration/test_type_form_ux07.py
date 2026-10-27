@@ -28,6 +28,7 @@ def _bodies(templates: dict) -> dict:
       f.name = "UX07 " + k.word;
       for (const p of k.asks) {{ M.addStatus(f, p); f.roles[f.roles.length - 1].pol = "open"; }}
       if (k.id === "custom") {{ M.addReading(f, "Temperature", "temperature", "°C", "CURRENT_4_20"); M.addStatus(f, "STATE", "Door open"); f.roles[1].pol = "closed"; }}
+      for (const r of f.roles) if (r.pol === null) r.pol = "open";        // every polarity is answered (R402-04)
       M.addProperty(f, {{ label: "Installer note", kind: "TEXT" }});
       if (f.roles.some(r => r.purpose === "COMMAND") && !f.limits.max_runtime_s) f.limits.max_runtime_s = 600;
       out[k.id] = {{ problems: M.problems(f), body: M.toBody(f), name: f.name }};
@@ -59,4 +60,34 @@ def test_the_form_gets_definitions_and_symbols_and_its_drafts_are_accepted(tmp_p
             for role in saved["body"]["roles"]:
                 if role["purpose"] in ("RUNNING", "FAULT", "OPEN", "CLOSED"):
                     assert role["inverted"] is True and role["required"] is False, (kind, role)
+                if role["direction"] == "INPUT" and role["signal"] == "DIGITAL" and kind == "button":
+                    assert role["inverted"] is True, role                        # as answered, never assumed
             assert saved["body"]["properties"][-1]["label"] == "Installer note"
+
+
+def test_r402_05_a_changed_measurement_goes_through_the_draft_endpoint_and_reopens_the_same(tmp_path, icfg):
+    app = _app(tmp_path, icfg)
+    with TestClient(app, base_url=ORIGIN) as c:
+        h = login(c, "admin1")
+        T = c.get("/api/equipment", headers=h).json()["template_bodies"]
+        js = f"""
+        const M = require({json.dumps(str(FORM))});
+        const f = M.startFrom("flow", {json.dumps(T)});
+        f.name = "Line pressure"; M.setMeasure(f, f.roles[0], "pressure");
+        console.log(JSON.stringify({{ problems: M.problems(f), body: M.toBody(f) }}));
+        """
+        try:
+            r = json.loads(subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60, check=True).stdout)
+        except FileNotFoundError:
+            pytest.skip("node is not installed")
+        assert r["problems"] == []
+        assert c.post("/api/equipment/types/draft", json={"type_id": "line_pressure", "name": "Line pressure", "body": r["body"]},
+                      headers=h).status_code == 200
+        saved = next(t for t in c.get("/api/equipment", headers=h).json()["types"] if t["type_id"] == "line_pressure")
+        js2 = f"""
+        const M = require({json.dumps(str(FORM))});
+        const f = M.fromBody({json.dumps(saved["body"])}, {{ name: "Line pressure", type_id: "line_pressure", version: {saved["version"]} }});
+        console.log(JSON.stringify(f.roles.map(r => [r.role, r.measure, r.label, r.unit])));
+        """
+        back = json.loads(subprocess.run(["node", "-e", js2], capture_output=True, text=True, timeout=60, check=True).stdout)
+        assert back == [["pressure", "pressure", "Pressure", "bar"]]

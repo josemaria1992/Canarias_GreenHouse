@@ -95,3 +95,53 @@ test("a switchable type without a maximum running time is refused in words", () 
   f.limits.max_runtime_s = null;
   assert.ok(M.problems(f).some(x => /maximum running time/.test(x.text)));
 });
+
+// R402-04: a new or copied type never carries a contact polarity nobody confirmed
+test("a new Button or switch, and a copy of any type, ask every digital input's polarity again", () => {
+  const BUTTON = { category: "Buttons", default_icon: "button", roles: [{ role: "pressed", label: "Pressed", direction: "INPUT", signal: "DIGITAL", purpose: "STATE" }],
+    operations: [], simulation: { behavior: "MANUAL_INPUT" } };
+  const f = M.startFrom("button", { button: { name: "Button", body: BUTTON } });
+  f.name = "Float switch";
+  assert.equal(f.roles[0].pol, null);
+  assert.ok(M.problems(f).some(p => /contact close or open/.test(p.text)));
+  f.roles[0].pol = "open";
+  assert.equal(M.problems(f).length, 0);
+  assert.equal(M.toBody(f).roles[0].inverted, true);
+  const stored = Object.assign({}, PUMP, { roles: PUMP.roles.map(r => r.role === "fault" ? Object.assign({}, r, { inverted: true }) : r) });
+  const c = M.copyOf({ name: "Pump", body: stored });
+  assert.equal(c.name, "Copy of Pump");
+  assert.deepEqual(c.roles.filter(r => r.direction === "INPUT").map(r => r.pol), [null, null]);
+  assert.equal(M.problems(c).filter(p => /contact close or open/.test(p.text)).length, 2);
+  // editing the stored type keeps what was confirmed
+  const e = M.fromBody(stored, { name: "Pump", type_id: "pump", version: 2 });
+  assert.deepEqual(e.roles.filter(r => r.direction === "INPUT").map(r => r.pol), ["closed", "open"]);
+});
+
+// R402-05: what a reading measures survives save and reopen
+test("changing what a new reading measures persists through save and reopen; a saved reading keeps its quantity", () => {
+  const f = M.startFrom("flow", { flow: { name: "Flow", body: { category: "Flow meters", default_icon: "flow", hydraulic: "meter",
+    roles: [{ role: "flow", label: "Flow rate", direction: "INPUT", signal: "ANALOG", purpose: "MEASUREMENT", unit: "L/min" }],
+    operations: ["MEASURE"], simulation: { behavior: "NOT_MODELLED" } } } });
+  f.name = "Line sensor";
+  assert.ok(M.setMeasure(f, f.roles[0], "pressure"));
+  assert.equal(f.roles[0].unit, "bar");
+  const saved = M.toBody(f);
+  assert.deepEqual([saved.roles[0].role, saved.roles[0].label, saved.roles[0].unit], ["pressure", "Pressure", "bar"]);
+  const again = M.fromBody(saved, { name: "Line sensor", type_id: "line_sensor", version: 1 });
+  assert.equal(again.roles[0].measure, "pressure");
+  assert.equal(M.summary(again), M.summary(Object.assign(f, { roles: f.roles })));
+  // a saved reading cannot change quantity (items hold its channel and history)
+  assert.equal(M.setMeasure(again, again.roles[0], "flow"), false);
+  assert.equal(again.roles[0].role, "pressure");
+  // an incompatible unit is named before saving
+  const g = M.startFrom("custom", {});
+  g.name = "Probe";
+  M.addReading(g, "Temperature", "temperature", "bar");
+  assert.ok(M.problems(g).some(p => /unit is one of °C, not bar/.test(p.text)));
+  // a temperature reading added to a Pump stays a temperature reading
+  const pump = M.startFrom("pump", TEMPLATES);
+  M.addReading(pump, "Motor temperature", "temperature", "°C");
+  const back = M.fromBody(M.toBody(pump), { name: "P", type_id: "p", version: 1 });
+  const t = back.roles.find(r => r.purpose === "MEASUREMENT");
+  assert.deepEqual([t.role, t.measure, t.unit], ["temperature", "temperature", "°C"]);
+});

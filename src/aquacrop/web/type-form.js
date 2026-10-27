@@ -89,7 +89,9 @@
       version: meta && meta.version || null, status: meta && meta.status || null,
       description: b.description || "", icon: b.default_icon || "generic", category: b.category || "",
       hydraulic: b.hydraulic || null,
+      // `stored`: the role is in a saved version (items may hold its channel and history); a new or copied type has none
       roles: (b.roles || []).map(r => Object.assign(clone(r), { pol: r.inverted ? "open" : "closed", known: true,
+        stored: !!(meta && meta.version),
         measure: r.purpose === "MEASUREMENT" ? (MEASURES[r.role] ? r.role : "other") : undefined })),
       props: clone(b.properties || []), limits: clone(b.limits || {}), ops: clone(b.operations || []),
       sim: clone(b.simulation || { behavior: "NOT_MODELLED" }), requests: [], adding: null, errors: {} };
@@ -104,10 +106,34 @@
     body.roles = (body.roles || []).filter(r => r.required !== false || !["RUNNING", "FAULT", "OPEN", "CLOSED"].includes(r.purpose));
     if (k.hydraulic && !body.hydraulic) body.hydraulic = k.hydraulic;
     const f = fromBody(body, null);
+    unconfirmed(f);
     f.kind = k.id;
     f.name = "";
     f.template = k.template;
     return f;
+  }
+  /** R402-04: a new type (from a built-in kind or a copy) has no confirmed wiring: every digital input's contact
+   *  polarity is asked again. Editing a stored type keeps the polarity it was saved with. */
+  function unconfirmed(f) {
+    for (const r of f.roles) if (r.direction === "INPUT" && r.signal === "DIGITAL") { r.pol = null; r.known = false; }
+    return f;
+  }
+  function copyOf(t) {
+    const f = unconfirmed(fromBody(t.body, null));
+    f.name = `Copy of ${t.name}`;
+    return f;
+  }
+  /** R402-05: what a reading measures decides its key, so a reopened type means the same. A reading already in a saved
+   *  version keeps its key (items hold its channel and history): it cannot change quantity; add a new reading instead. */
+  function setMeasure(f, r, m) {
+    if (r.stored || !MEASURES[m]) return false;
+    r.measure = m;
+    const mm = MEASURES[m];
+    r.unit = mm.units.length ? mm.units[0] : "";
+    if (m !== "other") r.label = mm.word;
+    const taken = f.roles.filter(x => x !== r).map(x => x.role);
+    r.role = m !== "other" && !taken.includes(m) ? m : slug(r.label || mm.word, taken);
+    return true;
   }
   function addStatus(f, purpose, label) {
     const taken = f.roles.map(r => r.role);
@@ -143,7 +169,7 @@
     if (f.hydraulic) b.hydraulic = f.hydraulic; else delete b.hydraulic;
     b.roles = f.roles.map(r => {
       const o = {};
-      for (const k of Object.keys(r)) if (!["pol", "known", "measure", "_removed"].includes(k) && r[k] !== undefined) o[k] = clone(r[k]);
+      for (const k of Object.keys(r)) if (!["pol", "known", "stored", "measure", "_removed"].includes(k) && r[k] !== undefined) o[k] = clone(r[k]);
       if (r.signal === "DIGITAL" && r.direction === "INPUT") o.inverted = r.pol === "open";
       if (o.unit === "") delete o.unit;
       return o;
@@ -171,6 +197,8 @@
       if (r.direction === "INPUT" && r.signal === "DIGITAL" && !r.pol)
         out.push({ field: "role:" + r.role, text: `Say how “${r.label}” signals: does its contact close or open when it is active? If the wiring is not confirmed yet, leave this signal out for now.` });
       if (r.purpose === "MEASUREMENT" && !String(r.unit || "").trim()) out.push({ field: "role:" + r.role, text: `Choose the unit of “${r.label}”.` });
+      else if (r.purpose === "MEASUREMENT" && !r.stored && MEASURES[r.measure] && MEASURES[r.measure].units.length && !MEASURES[r.measure].units.includes(r.unit))
+        out.push({ field: "role:" + r.role, text: `“${r.label}” measures ${MEASURES[r.measure].word.toLowerCase()}: its unit is one of ${MEASURES[r.measure].units.join(", ")}, not ${r.unit}.` });
     }
     const labels = f.roles.map(r => String(r.label || "").trim().toLowerCase()).filter(Boolean);
     const dupL = labels.filter((x, i) => labels.indexOf(x) !== i);
@@ -210,7 +238,7 @@
     return `${f.name || "(no name yet)"} — ${parts.join("; ")}.`;
   }
   function fmtDur(s) { s = Number(s); return s >= 3600 && s % 3600 === 0 ? `${s / 3600} h` : s >= 60 && s % 60 === 0 ? `${s / 60} min` : `${s} s`; }
-  const Model = { KINDS, MEASURES, SIGNALS, STATUS, OPS, SIM, slug, kindOf, fromBody, startFrom, addStatus, addReading, addOutput,
+  const Model = { KINDS, MEASURES, SIGNALS, STATUS, OPS, SIM, slug, kindOf, fromBody, startFrom, copyOf, setMeasure, addStatus, addReading, addOutput,
     addProperty, toBody, problems, summary, roleWords };
   W.AqTypeModel = Model;
   if (typeof module !== "undefined") module.exports = Model;
@@ -247,7 +275,7 @@
       copies.length ? h("p", { class: "small" }, "Or start from a copy of an existing type: ",
         h("select", { "aria-label": "Copy an existing type", onchange: ev => {
           const t = copies.find(x => `${x.type_id}:${x.version}` === ev.target.value); if (!t) return;
-          const nf = fromBody(t.body, null); nf.name = `Copy of ${t.name}`; nf.dirty = true; TF[key] = nf; redraw();
+          const nf = copyOf(t); nf.dirty = true; TF[key] = nf; redraw();
         } }, h("option", { value: "" }, "choose a type"), copies.map(t => h("option", { value: `${t.type_id}:${t.version}` }, `${t.name} (v${t.version})`)))) : null);
   }
 
@@ -306,8 +334,9 @@
     const sig = SIGNALS.find(s => s[0] === ((r.electrical || [])[0] || "")) || SIGNALS[4];
     return h("div", { class: "tf-row", "data-role": r.role },
       h("div", { class: "row wrap" },
-        h("label", null, "What it measures ", h("select", { "aria-label": `${r.label}: what it measures`, onchange: set(f, ev => {
-          r.measure = ev.target.value; const mm = MEASURES[r.measure]; if (mm.units.length) r.unit = mm.units[0]; if (r.measure !== "other") r.label = mm.word; }) },
+        h("label", null, "What it measures ", h("select", { "aria-label": `${r.label}: what it measures`, disabled: !!r.stored,
+          title: r.stored ? "Fixed for a saved reading: items hold its channel and history. Add a new reading for another quantity." : null,
+          onchange: set(f, ev => { setMeasure(f, r, ev.target.value); }) },
           Object.entries(MEASURES).map(([k, x]) => h("option", { value: k, selected: r.measure === k }, x.word)))),
         h("label", null, "Name ", h("input", { maxlength: 60, value: r.label, "aria-label": `Name of reading ${r.role}`, oninput: val(f, v => { r.label = v; }) })),
         h("label", null, "Unit ", m.units.length ? h("select", { "aria-label": `${r.label} unit`, onchange: set(f, ev => { r.unit = ev.target.value; }) },
@@ -315,7 +344,8 @@
           : h("input", { maxlength: 16, value: r.unit || "", class: "narrow", "aria-label": `${r.label} unit`, oninput: val(f, v => { r.unit = v; }) })),
         h("label", null, "Signal ", h("select", { "aria-label": `${r.label} signal`, onchange: set(f, ev => { r.electrical = ev.target.value ? [ev.target.value] : []; }) },
           SIGNALS.map(s => h("option", { value: s[0], selected: sig[0] === s[0] }, s[1]))))),
-      h("p", { class: "muted small" }, `${sig[1]}: ${sig[2]}. The measuring range (scaling) and calibration are entered on each item, where the transmitter's datasheet is known.`),
+      h("p", { class: "muted small" }, `${sig[1]}: ${sig[2]}. The measuring range (scaling) and calibration are entered on each item, where the transmitter's datasheet is known.`
+        + (r.stored ? " What it measures is fixed for a saved reading (items hold its channel and history); add a new reading for another quantity." : "")),
       err(f, "role:" + r.role));
   }
   function signals(key, f) {
