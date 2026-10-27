@@ -1,0 +1,3 @@
+new_button_without_polarity_answer {"roles":[{"role":"pressed","label":"Pressed","direction":"INPUT","signal":"DIGITAL","purpose":"STATE","pol":"closed","known":true}],"problems":[]}
+measurement_after_round_trip {"role":"flow","label":"Pressure","direction":"INPUT","signal":"ANALOG","purpose":"MEASUREMENT","electrical":["CURRENT_4_20"],"unit":"bar","pol":"closed","known":true,"measure":"flow"}
+saved_empty_design_reconciliation {"showsReady":true,"currentNodes":0}
