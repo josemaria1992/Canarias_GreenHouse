@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.6 (2026-10-27): review C075-01..07, owner decisions, setup journey UX-01..06
+
+Review fixes: the standby pump is part of every proof context (C075-01); the duty pair can be chosen (C075-02); the
+project export carries the Overview drawing faithfully, imported items and drawings have a continuation (C075-03);
+an import applies only what was previewed, against the installation as previewed (C075-04); run history and charts
+use the context held at the run start (C075-05); a refused tank move restores everything (C075-06); malformed
+project records are refused by name (C075-07).
+
+Owner decisions: programs on superseded block safety cannot start until reviewed, validated and twin-tested; a duty
+pump failing mid-cycle is replaced by its partner for the rest of the cycle (OFF verified first, valves kept, limits
+not extended; refused with a reason when the partner is busy or not ready).
+
+Setup journey: Blocks explain empty choices by the missing stage (UX-01); a flow meter is inserted into a pipe
+(UX-02); earlier pipes, links and measurements are explained, confirmable and in a legend (UX-03); a Finish checklist
+in the twin (UX-04); built-in types such as Tank are discoverable and made available in one step (UX-05); type
+editors keep their own open state and unsaved text through refreshes (UX-06).
+
 ## 0.7.5 (2026-10-27): Python 3.11 controller fix
 
 - 0.7.4's program authoring used a nested f-string that Python 3.11 (the CM4's) cannot parse: program preview and
