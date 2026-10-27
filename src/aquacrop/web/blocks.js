@@ -117,8 +117,16 @@
     const F = B.form, body = F.body;
     const nodes = topo.graph.nodes, names = {}, ids = {};
     for (const n of nodes) { const it = topo.items[n.item] || {}; names[n.id] = it.name || n.id; ids[n.id] = it.public_id || n.item || ""; }
-    const pick = (label, field, kinds) => h("label", null, label + " ", h("select", { "aria-label": label, onchange: ev => { body[field] = ev.target.value || null; } },
-      h("option", { value: "" }, "— choose —"), nodes.filter(n => kinds.includes(n.kind)).map(n => h("option", { value: n.id, selected: body[field] === n.id ? true : null }, `${names[n.id]} (${KIND_WORD[n.kind]})`))));
+    // UX-01: an empty choice says which stage is missing, for which named equipment (never an unexplained empty list)
+    const why = role => { const r = B.pre && B.pre.roles[role]; return r && r.next.length ? r.next : null; };
+    const pick = (label, field, kinds, role, help) => {
+      const opts = nodes.filter(n => kinds.includes(n.kind));
+      return h("div", { class: "pick", "data-pick": role },
+        h("label", null, label + " ", h("select", { "aria-label": label, disabled: opts.length ? null : true, onchange: ev => { body[field] = ev.target.value || null; } },
+          h("option", { value: "" }, opts.length ? "— choose —" : "— none available yet —"), opts.map(n => h("option", { value: n.id, selected: body[field] === n.id ? true : null }, `${names[n.id]} (${KIND_WORD[n.kind]})`)))),
+        h("span", { class: "muted small" }, " ", help),
+        !opts.length && why(role) ? h("ul", { class: "warn small", "data-missing": role }, why(role).map(x => h("li", null, x))) : null);
+    };
     const tmpl = h("fieldset", null, h("legend", null, "Purpose"), Object.entries(T.templates).map(([k, t]) =>
       h("label", { class: "radio" }, h("input", { type: "radio", name: "block-template", value: k, checked: body.template === k ? true : null, onchange: () => { body.template = k; } }), t)));
     const findPath = async () => {
@@ -149,14 +157,15 @@
       h("div", { class: "row wrap" }, h("label", null, "Name ", h("input", { maxlength: 80, value: F.name, "aria-label": "Block name", oninput: ev => { F.name = ev.target.value; if (!F.expected_version && !B.idOwned) { F.block_id = window.AqIds.fromName(ev.target.value).toLowerCase(); const x = document.querySelector('[aria-label="Block id"]'); if (x) x.value = F.block_id; } } })),
         h("label", null, "ID ", h("input", { maxlength: 48, value: F.block_id, disabled: F.expected_version ? true : null, class: "mono", "aria-label": "Block id", placeholder: "sector_1", oninput: ev => { F.block_id = ev.target.value; B.idOwned = !!ev.target.value; } }))),
       tmpl,
-      h("div", { class: "row wrap" }, pick("Water comes from", "supply", ["source", "tank"]), pick("Water goes to", "destination", ["sector", "tank"]),
+      B.pre ? h("p", { class: "muted small", "data-setup-order": "" }, "Setup order: ", B.pre.order, ".") : null,
+      h("div", { class: "row wrap" }, pick("Water source", "supply", ["source", "tank"], "source", "e.g. the main tank"),
+        pick("Watering destination", "destination", ["sector", "tank"], "destination", body.template === "TANK_FILLING" ? "the tank being filled" : "e.g. Sector 1 (the sector, not its valve)"),
         h("label", null, "Valve travel to wait (s) ", h("input", { type: "number", min: 0, max: 600, step: 1, class: "w-num", value: B.travel || "", "aria-label": "Valve travel seconds", oninput: ev => { B.travel = Number(ev.target.value) || null; } })),
         h("button", { onclick: findPath }, "Find the path and an example plan"), note("path")),
       F.path ? h("p", { class: "small" }, "Path: ", [body.supply, ...F.path.nodes, body.destination].map(n => names[n] || n).join(" → ")) : null,
       h("h3", null, "Members"), h("p", { class: "muted small" }, "Choose the equipment of this block by type. An item already in another block stays one item: it is shared, never copied."),
       memberGroups(F, nodes, names, ids, usedBy),
-      h("label", null, "Flow meter for measured litres ", h("select", { "aria-label": "Flow meter", onchange: ev => { body.meter = ev.target.value || null; } },
-        h("option", { value: "" }, "— none: timed watering only —"), meters.map(n => h("option", { value: n.id, selected: body.meter === n.id ? true : null }, names[n.id])))),
+      meterPick(F, body, meters, names),
       h("fieldset", { "data-safety-settings": "" }, h("legend", null, "Safety settings"),
         h("label", null, "Maximum runtime of one operation (min) ", h("input", { type: "number", min: 0.1, max: 1440, step: "any", class: "w-num", value: minutes(safety.max_runtime_s) == null ? "" : minutes(safety.max_runtime_s),
           "aria-label": "Maximum runtime in minutes", oninput: ev => { safety.max_runtime_s = ev.target.value === "" ? null : Math.round(Number(ev.target.value) * 60); } })),
@@ -193,7 +202,9 @@
   }
 
   VIEWS.blocks = async function () {
-    const [T, topo, dia] = await Promise.all([api("GET", "/api/blocks"), api("GET", "/api/topology"), api("GET", "/api/diagram/installation")]);
+    const [T, topo, dia, pre] = await Promise.all([api("GET", "/api/blocks"), api("GET", "/api/topology"), api("GET", "/api/diagram/installation"),
+      api("GET", "/api/blocks/prerequisites").catch(() => null)]);
+    B.pre = pre;
     const usedBy = {}, blockNames = {};
     for (const b of T.blocks) if (b.status !== "RETIRED") { blockNames[b.block_id] = b.name; for (const m of b.body.members) (usedBy[m] = usedBy[m] || []).push(b.block_id); }
     mount("v-blocks",
@@ -242,4 +253,18 @@
       h("p", { class: "muted small" }, "The startup starts the first pump; each start the engine leads with the pump that started least recently. A lead that cannot start (a fault input, its limits, no channel) hands that start to the standby, and it is recorded. Leave both empty for one pump."));
   }
   window.AqBlocks = Object.assign(window.AqBlocks || {}, { dutyChoose, dutyProblem });
+  // UX-01: the meter choice says why a meter cannot measure this block's litres: none drawn, not on the chosen path,
+  // or its reading not ready (no channel, not verified, no scaling). A drawn meter stays choosable as planned.
+  function meterPick(F, body, meters, names) {
+    const pre = B.pre && B.pre.roles.meter, m = (pre && pre.measurement) || {};
+    const onPath = id => !F.path || F.path.nodes.includes(id);
+    const label = n => `${names[n.id]}${!onPath(n.id) ? " — not on the chosen path" : m[n.id] && m[n.id] !== "ready" ? " — planned: " + m[n.id] : ""}`;
+    const chosen = meters.find(n => n.id === body.meter);
+    return h("div", { "data-pick": "meter" },
+      h("label", null, "Flow meter for measured litres ", h("select", { "aria-label": "Flow meter", onchange: ev => { body.meter = ev.target.value || null; U.refresh(); } },
+        h("option", { value: "" }, "— none: timed watering only —"),
+        meters.map(n => h("option", { value: n.id, disabled: onPath(n.id) ? null : true, selected: body.meter === n.id ? true : null }, label(n))))),
+      !meters.length && pre && pre.next.length ? h("ul", { class: "muted small", "data-missing": "meter" }, pre.next.map(x => h("li", null, x))) : null,
+      chosen && m[chosen.id] && m[chosen.id] !== "ready" ? h("p", { class: "warn small" }, `${names[chosen.id]} is in the drawing, but measured litres are not available until ${m[chosen.id].replace(/^its /, "its ")} is fixed on Equipment. Timed watering does not use it; litres are never estimated from time or pump rating.`) : null);
+  }
 })();

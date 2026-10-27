@@ -901,6 +901,26 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     block_routes.register(app, require, blocks, dependents=block_dependents,
                           legacy_layout=lambda: (layouts.current()[0], "the real system's drawing"))
+
+    @app.get("/api/blocks/prerequisites")
+    def block_prerequisites(p: Principal = Depends(require(Perm.OPS_READ))):
+        """UX-01: why a block's source, destination or meter choice is empty, and the stage still missing."""
+        from ..blocks.prerequisites import check
+        from ..twin.changes import read_exports
+        its = blocks.items()
+        graph = blocks.topology()["graph"]
+        exported = set()
+        for x in (read_exports(feed_dir) if feed_dir else []):
+            g = (((x.get("hydraulics") or {}).get("topology") or {}).get("graph") or {})
+            exported |= {n.get("item") or n.get("id") for n in g.get("nodes") or []}
+        unlinked = []
+        if not graph.get("nodes"):
+            from ..topology.migrate import propose
+            pr = propose(layouts.current()[0], {k: v.get("kind") for k, v in its.items()},
+                         {k: v.get("name") for k, v in its.items()})
+            unlinked = [{"kind": u["kind"], "label": u["label"]} for u in pr["unresolved"] if u.get("kind")]
+        return check(its, graph.get("nodes") or [], exported, unlinked,
+                     readiness=lambda iid: equipment.readiness(iid) if iid in equipment.keys() else None)
     program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish, blocks=blocks,
                             views=lambda: design_views(equipment), proof_context=proof_context)
     from . import runs as run_routes
