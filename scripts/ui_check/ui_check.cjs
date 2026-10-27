@@ -663,19 +663,23 @@ async function o34run(b, ctx0) {
     `acquisition stalled: "${(oTxt.match(/No new reading[^\n]*/) || [""])[0]}", measured ${body2.sample.acquired_utc}, ${(oTxt.match(/Age\s+[^\n]*/) || [""])[0]}`);
   await p.waitForTimeout(2500);
 
-  // O-05: sector names, readings and their pages and history stay on the Overview
+  // O-05: a sector's readings, its page and its history are reached from the Overview. 0.7.1 (owner decision of
+  // 26 October 2026): the Overview is the drawing and its Sectors card is gone, so they come from the sector's symbol
   await show(p, "overview");
-  const sec = await p.locator("#overview-sectors").innerText();
-  await p.locator("#overview-sectors a", { hasText: "Open Sector 1" }).click();
+  const noCard = (await p.locator("#overview-sectors").count()) === 0;
+  await pick(p, "sector.S1");
+  const sec = await panelText(p);
+  await panel(p).locator("a", { hasText: "Open the Sector 1 page" }).click();
   const toS1 = await until(p, () => p.evaluate(() => location.hash === "#sector-S1"));
   await show(p, "overview");
-  await p.locator('#overview-sectors tr[data-sector="S2"] a', { hasText: "History of these readings" }).click();
+  await pick(p, "sector.S2");
+  await panel(p).locator("a", { hasText: "History of these readings" }).click();
   await show(p, "history");
   const histSel = await p.evaluate(() => window.AqUI.S.trendSel.slice());
   const pv = await get(p, "/api/plant");
-  check("O-05 sector data on the Overview", /Sector 1/.test(sec) && /Sector 2/.test(sec) && /L\/min/.test(sec) && /bar/.test(sec) && toS1 &&
+  check("O-05 sector data from the Overview", noCard && /Sector 1/.test(sec) && /L\/min/.test(sec) && /bar/.test(sec) && toS1 &&
     histSel.includes(pv.signals["flow.S2"].point) && histSel.includes(pv.signals["pressure.S2"].point),
-    `Sectors card with valve, flow and pressure; Open Sector 1 opens #sector-S1; History of Sector 2 chooses ${histSel.join(", ")}`);
+    `Sector 1's symbol shows valve, flow and pressure and opens #sector-S1; Sector 2's history chooses ${histSel.join(", ")}`);
 
   // O-02: a refill shows water entering the main tank and its level rising (opened from the diagram)
   await show(p, "overview");
@@ -961,8 +965,11 @@ async function hardware() {
       `read-only: reason shown, unmapped values "not measured", no control buttons ${JSON.stringify(ctl)}`);
   }
   await show(p, "overview");
-  const drvTxt = await until(p, async () => { const t = await visibleText(p); return /Drive interface/.test(t) && /PROPOSED/.test(t) && /0x[0-9A-F]{4}/.test(t) && t; });
-  check("HW drive interface", !!drvTxt, "the overview lists drive:MAIN over Modbus with its PROPOSED map and the status word it reads");
+  // 0.7.1: the drive card is in the Overview's "Details: system, output modes, modules, drive" (closed by default)
+  const drvTxt = await until(p, async () => {
+    const t = await p.evaluate(() => { const d = [...document.querySelectorAll("#v-overview details")].find(x => /drive/.test(x.querySelector("summary").textContent)); return d ? d.textContent : ""; });
+    return /Drive interface/.test(t) && /PROPOSED/.test(t) && /0x[0-9A-F]{4}/.test(t) && t; });
+  check("HW drive interface", !!drvTxt, "the Overview's Details list drive:MAIN over Modbus with its PROPOSED map and the status word it reads");
   await show(p, "io");
   const ioDrv = await p.locator("#v-io tr", { hasText: "drive:MAIN" }).first();
   const runBtns = await ioDrv.locator("button").count();
