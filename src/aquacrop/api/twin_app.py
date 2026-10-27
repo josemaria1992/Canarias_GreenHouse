@@ -775,7 +775,23 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         live = (svc.snap or {}).get("hydraulics") or {}
         if ((live.get("topology") or {}).get("graph") or {}).get("nodes"):
             return {"drawing": "graph", "questions": [], "blockers": [], "ready": True}
-        return {"drawing": "legacy"} | legacy_view(legacy_proposal())
+        view = legacy_view(legacy_proposal())
+        # R402-06: the import's result describes the twin's design only while that design is exactly what the import
+        # saved. A New design, or any edit saved after it, is checked as it is now; the answers stay for a re-import.
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        rec = answers_doc().get(view["source"]["digest"]) or {}
+        current = rec.get("saved") == [cur_t["rev"], cur_d["rev"]]
+        out = {"drawing": "legacy", "current": current, "design_rev": [cur_t["rev"], cur_d["rev"]]} | view
+        if not current:
+            nodes = (cur_t.get("graph") or {}).get("nodes") or []
+            errors = [i for i in svc.blocks.topology_issues() if i.get("severity") == "ERROR"]
+            changed = ("The twin's design is empty (a New design)" if not nodes else
+                       "The twin's design was changed after the import")
+            out |= {"import_ready": view["ready"], "ready": False, "blockers": [
+                {"id": "design:changed", "text": f"{changed}: the import's result does not describe it",
+                 "fix": "check the current design (Run in the twin), or Import from Overview again to apply these answers"}]
+                + [{"id": f"graph:{i.get('id')}", "text": i.get("message", ""), "fix": i.get("fix", "")} for i in errors]}
+        return out
 
     @app.post("/api/twin/design/reconcile")
     def reconcile(body: ReconcileIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

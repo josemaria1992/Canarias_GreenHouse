@@ -158,7 +158,8 @@
     const undrawn = R && R.unrouted ? R.unrouted : [];
     return h("div", { class: "card", "data-reconcile": "" },
       h("div", { class: "row" }, h("h3", null, "Earlier drawing: complete the connections"),
-        m.ready ? h("span", { class: "pill ok", "data-ready": "yes" }, "Connections complete: ready to simulate")
+        m.current === false ? h("span", { class: "pill warn", "data-ready": "changed" }, "The design changed after the import: its result no longer applies")
+          : m.ready ? h("span", { class: "pill ok", "data-ready": "yes" }, "Connections complete: ready to simulate")
           : h("span", { class: "pill warn", "data-ready": "no" }, `Not ready to simulate: ${(m.blockers || []).length} to resolve`),
         undrawn.length ? h("span", { class: "pill warn", "data-undrawn": String(undrawn.length) }, `${undrawn.length} pipe(s) not drawn yet`) : null),
       undrawn.length ? h("p", { class: "small warn" }, `${undrawn.length} connection(s) exist but have no room to be drawn where the earlier drawing placed the equipment (too close together): `,
@@ -177,7 +178,9 @@
   function migrationBox(v) {
     const r = G.rec && G.rec.drawing === "legacy" ? G.rec : null;
     const d0 = G.loaded && G.loaded.dia.diagram || {};
-    const fromLegacy = (d0.sketches || []).length || (d0.placeholders || []).length || (r && (r.questions || []).some(q => q.answer));
+    // R402-06: the server says whether the saved design is still the import's result; remembered answers alone never
+    // make this panel describe a design that was replaced (New design) or edited since
+    const fromLegacy = (d0.sketches || []).length || (d0.placeholders || []).length || (r && r.current && (r.questions || []).some(q => q.answer));
     const m = G.migration || (r && fromLegacy && !G.editing ? r : null);
     if (!m) return null;
     if (m.questions) return reconcileBox(v, m);

@@ -163,3 +163,45 @@ def test_c077_08_answers_are_kept_per_drawing_and_a_later_import_is_complete_wit
     bad = twin.post("/api/twin/design/reconcile", json={"answers": {"x": "maybe"}}, headers=H)
     assert bad.status_code == 422
     assert len(bus.write_frames()) == frames             # nothing reaches a module
+
+
+def test_r402_06_the_import_result_never_describes_a_design_replaced_or_edited_after_it(live_and_twin):
+    """Codex R402-06: after a reconciled import, a New design saved in the twin, or an edit that removes a
+    connection, is not described by the import's completion; the answers are kept for a deliberate re-import."""
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    _parts(live, hl)
+    H = _twin_h(twin, "bench1")
+    qs = twin.post("/api/twin/design/import", json={}, headers=H).json()["proposal"]["questions"]
+    assert twin.post("/api/twin/design/reconcile", json={"answers": {q["id"]: "yes" for q in qs}}, headers=H).status_code == 200
+    v = twin.get("/api/twin/design/reconcile").json()
+    assert v["current"] is True                                   # the design is the import's result
+    # an edit saved after the import: a connection removed when there is one, else a symbol moved
+    t, d = twin.get("/api/topology").json(), twin.get("/api/diagram/installation").json()
+    g, dia = t["graph"], dict(d["diagram"])
+    if g["edges"]:
+        gone = g["edges"][0]["id"]
+        g = g | {"edges": g["edges"][1:]}
+        dia |= {"routes": [x for x in dia.get("routes", []) if x["edge"] != gone],
+                "sketches": [x for x in dia.get("sketches", []) if x.get("edge") != gone]}
+    else:
+        s0 = dia["symbols"][0]
+        dia["symbols"] = [s0 | {"x": s0["x"] + 20}] + dia["symbols"][1:]
+    r = twin.post("/api/drawing/installation", json={"graph": g, "diagram": dia, "expected_topology_rev": t["rev"],
+                                                     "expected_diagram_rev": d["rev"], "note": "edit"}, headers=H)
+    assert r.status_code == 200, r.text
+    v = twin.get("/api/twin/design/reconcile").json()
+    assert v["current"] is False and v["ready"] is False and v["blockers"][0]["id"] == "design:changed"
+    assert "changed after the import" in v["blockers"][0]["text"]
+    # a New design: empty, never "ready" through the earlier import
+    t, d = twin.get("/api/topology").json(), twin.get("/api/diagram/installation").json()
+    blank = {k: d["diagram"][k] for k in ("kind", "format", "view", "title", "width", "height", "grid") if k in d["diagram"]} | {
+        "symbols": [], "routes": [], "sketches": [], "placeholders": [], "shapes": [], "texts": []}
+    r = twin.post("/api/drawing/installation", json={"graph": {"nodes": [], "edges": [], "measures": []}, "diagram": blank,
+                                                     "expected_topology_rev": t["rev"], "expected_diagram_rev": d["rev"],
+                                                     "note": "new design"}, headers=H)
+    assert r.status_code == 200, r.text
+    v = twin.get("/api/twin/design/reconcile").json()
+    assert v["current"] is False and v["ready"] is False and "empty" in v["blockers"][0]["text"]
+    assert all(q["answer"] == "yes" for q in v["questions"])      # the answers are kept for a deliberate re-import
+    again = twin.post("/api/twin/design/import", json={}, headers=H)
+    assert again.status_code in (200, 409)                        # a re-import is still possible (with its guard)

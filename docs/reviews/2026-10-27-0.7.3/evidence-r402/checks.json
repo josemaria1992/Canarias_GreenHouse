@@ -1,0 +1,42 @@
+[
+ {
+  "id": "R402-06 the reconciled import says ready",
+  "ok": true,
+  "detail": "yes"
+ },
+ {
+  "id": "R402-06 after removing a connection and saving, the panel no longer says ready",
+  "ok": true,
+  "detail": "removed dose-a-1; panel: changed"
+ },
+ {
+  "id": "R402-06 a re-import applies the kept answers (ready again, nothing asked)",
+  "ok": true,
+  "detail": "yes"
+ },
+ {
+  "id": "R402-06 a saved New design is never described as the ready import",
+  "ok": true,
+  "detail": "nodes 0; panel: no panel"
+ },
+ {
+  "id": "R402-04 a new Button or switch has no polarity chosen and cannot be saved until it is",
+  "ok": true,
+  "detail": "Say how “Pressed” signals: does its contact close or open when it is active? If the wiring is not confirmed yet, leave this signal out for now."
+ },
+ {
+  "id": "R402-04 the answered polarity is saved",
+  "ok": true,
+  "detail": "{\"direction\":\"INPUT\",\"electrical\":[],\"feedback_timeout_s\":null,\"inverted\":true,\"label\":\"Pressed\",\"purpose\":\"STATE\",\"required\":true,\"role\":\"pressed\",\"signal\":\"DIGITAL\",\"unit\":null}"
+ },
+ {
+  "id": "R402-05 a reading changed to Pressure is saved as pressure and reopens as Pressure in bar (fixed once saved)",
+  "ok": true,
+  "detail": "unit after the change: bar; {\"direction\":\"INPUT\",\"electrical\":[\"CURRENT_4_20\"],\"feedback_timeout_s\":null,\"inverted\":false,\"label\":\"Pressure\",\"purpose\":\"MEASUREMENT\",\"required\":true,\"role\":\"pressure\",\"signal\":\"ANALOG\",\"unit\":\"bar\"}; reopened {\"measure\":\"pressure\",\"disabled\":true,\"unit\":\"bar\"}"
+ },
+ {
+  "id": "no page errors",
+  "ok": true,
+  "detail": ""
+ }
+]

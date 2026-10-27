@@ -254,7 +254,8 @@
     try { SYMBOLS = (await api("GET", "/api/overview/diagram")).symbols || null; } catch (e) { SYMBOLS = null; }
     return SYMBOLS;
   }
-  const redraw = () => U.refresh();
+  // after the event has been seen by the page, whose own edit counter would otherwise discard this redraw
+  const redraw = () => setTimeout(() => U.refresh(), 0);
   // a change re-checks what was reported missing, so a fixed problem stops being shown
   const set = (f, fn) => ev => { fn(ev); f.dirty = true; if (f.shown) f.shown = problems(f); redraw(); };
   const val = (f, fn) => ev => { fn(ev.target.value); f.dirty = true; ev.target.dataset.dirty = "1"; };
