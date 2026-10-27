@@ -486,3 +486,21 @@ TEMPLATES: dict[str, dict] = {
                         "choices": ["MEASURED", "DATASHEET", "OWNER_CONFIGURED", "DEMO", "UNKNOWN"],
                         "default": "UNKNOWN"}]}},
 }
+
+
+# 0.7.1: types activated before 0.7.0 have no `hydraulic` field, so their items could not be placed in the graph and
+# the earlier drawing could not be converted. Such a type takes the water kind of the built-in template it was made
+# from: by its type id, else by its category when that names exactly one kind. A type that states a kind keeps it.
+TEMPLATE_KINDS = {tid: t["body"].get("hydraulic") for tid, t in TEMPLATES.items()}
+_by_category: dict[str, set] = {}
+for _t in TEMPLATES.values():
+    _by_category.setdefault(_t["body"].get("category"), set()).add(_t["body"].get("hydraulic"))
+CATEGORY_KINDS = {c: next(iter(k)) for c, k in _by_category.items() if len(k) == 1 and None not in k}
+
+
+def water_kind(tb: "TypeBody", type_id: str | None = None) -> tuple[str | None, str | None]:
+    """(kind, where it comes from: "type" or "built-in template"), or (None, None)."""
+    if tb.hydraulic:
+        return tb.hydraulic, "type"
+    k = TEMPLATE_KINDS.get(type_id or "") or CATEGORY_KINDS.get(tb.category or "")
+    return (k, "built-in template") if k else (None, None)

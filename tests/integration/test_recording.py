@@ -498,7 +498,7 @@ def test_config_loaded_and_changed_events(tmp_path, cfg24):
 
 def test_this_update_adds_no_schema_migration(tmp_path, cfg24):
     from tests.helpers import with_sim_time_recording
-    assert CURRENT_VERSION == 6                  # v3 recipes/readiness, v4 I/O assignments, v5 equipment/programs, v6 blocks/topology/usage; 60 s/365 d needs none
+    assert CURRENT_VERSION == 7                  # v3 recipes/readiness, v4 I/O assignments, v5 equipment/programs, v6 blocks/topology/usage, v7 public ids/module requests; 60 s/365 d needs none
     db = tmp_path / "keep.sqlite3"
     cfg24 = with_sim_time_recording(cfg24)
     h = Historian(db, cfg24, "s1")

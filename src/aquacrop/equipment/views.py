@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..programs.engine import ItemView
-from .definitions import ItemBody, TypeBody
+from .definitions import ItemBody, TypeBody, water_kind
 
 
 def design_views(equipment, *, verified_only: bool = False) -> dict[str, ItemView]:
@@ -31,7 +31,8 @@ def hydraulic_items(equipment) -> dict[str, dict]:
     out = {}
     for it in equipment.items(include_retired=False):
         tb = types.get((it["type_id"], it["type_version"]))
-        out[it["item_id"]] = {"kind": tb.hydraulic if tb else None, "name": it["name"],
+        kind, src = water_kind(tb, it["type_id"]) if tb else (None, None)
+        out[it["item_id"]] = {"kind": kind, "kind_from": src, "name": it["name"],
                               "public_id": it.get("public_id", it["item_id"])}
     return out
 
@@ -64,4 +65,8 @@ def limit_inputs(views: dict[str, ItemView], samples: dict, now_utc) -> list[dic
 
 def views_hydraulic(views: dict[str, ItemView]) -> dict[str, dict]:
     """The same list from item views (the twin's items)."""
-    return {iid: {"kind": v.type.hydraulic, "name": v.name} for iid, v in views.items()}
+    out = {}
+    for iid, v in views.items():
+        kind, src = water_kind(v.type)
+        out[iid] = {"kind": kind, "kind_from": src, "name": v.name}
+    return out

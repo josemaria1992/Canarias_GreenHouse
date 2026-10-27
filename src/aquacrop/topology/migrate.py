@@ -8,6 +8,11 @@ Everything the old model inferred from geometry (equipment lying on a pipe, a pi
 listed as ambiguous with what the drawing suggests: a person decides whether it was a connection. Nothing
 ambiguous becomes an edge, and the draft cannot be validated while an ambiguity is open. Old pipe points are not
 reused: every route of the new drawing is made by the orthogonal router when the editor opens it.
+
+0.7.1: drawings made before tank, sector and water source items existed show a tank by its level sensor and a sector
+by its valve (or by nothing). Such a symbol becomes the tank, sector or source item **with the same name**, listed as
+matched for review; its level sensor is proposed as measuring that tank (an association, never a pipe). When no item
+of that kind has the name, the proposal lists it under `to_create` (create it on Equipment, then import again).
 """
 from __future__ import annotations
 
@@ -42,11 +47,33 @@ def _kind_for(item_kinds: dict, node) -> str | None:
 def propose(lay: legacy.Layout, item_kinds: dict[str, str | None], names: dict[str, str] | None = None) -> dict:
     names = names or {}
     nodes, symbols, unresolved, ambiguous = {}, [], [], []
+    matched, to_create, measures = [], [], []
     by_legacy: dict[str, str] = {}
+    by_name: dict[tuple, str | None] = {}            # (name, kind) -> the one item with that name and kind
+    for iid, k in item_kinds.items():
+        key = ((names.get(iid) or "").strip().casefold(), k)
+        by_name[key] = None if key in by_name else iid
     for n in lay.nodes:
         if n.kind in ("label", "box"):
             continue
         k = _kind_for(item_kinds, n)
+        want = n.kind if n.kind in ("tank", "sector", "source") else None
+        if want and k != want:                       # drawn as a tank/sector/source, linked to its sensor, valve or nothing
+            cand = by_name.get(((n.label or "").strip().casefold(), want))
+            if cand is None:
+                to_create.append({"kind": want, "name": n.label or n.id, "legacy": n.id, "shown_by": n.item})
+                unresolved.append({"legacy": n.id, "label": n.label or n.id, "kind": n.kind,
+                                   "why": f"there is no {want} item called {n.label or n.id}"
+                                          + (f" (the drawing showed it with {names.get(n.item, n.item)})" if n.item else ""),
+                                   "fix": f"create a {want} named {n.label or n.id} on Equipment, then Import from Overview again"})
+                continue
+            matched.append({"legacy": n.id, "label": n.label, "item": cand, "kind": want,
+                            "why": f"the {want} item with the same name" + (f"; the drawing showed it with {names.get(n.item, n.item)}"
+                                                                            if n.item else "")})
+            if n.item and k == "sensor":
+                measures.append({"sensor": n.item, "node": cand, "mode": "TAP"})
+            n = n.model_copy(update={"item": cand})
+            k = want
         if not n.item:
             unresolved.append({"legacy": n.id, "label": n.label or n.id, "kind": n.kind,
                                "why": "not linked to an equipment item",
@@ -100,11 +127,12 @@ def propose(lay: legacy.Layout, item_kinds: dict[str, str | None], names: dict[s
             continue
         edges.append({"id": _edge_id(p.id, {e["id"] for e in edges}), "src": {"node": a, "port": DEFAULT_OUT[ka]},
                       "dst": {"node": b, "port": DEFAULT_IN[kb]}, "provenance": "UNKNOWN"})
-    graph = {"nodes": sorted(nodes.values(), key=lambda n: n["id"]), "edges": edges}
+    measures = [m for m in measures if m["sensor"] in nodes and m["node"] in nodes]
+    graph = {"nodes": sorted(nodes.values(), key=lambda n: n["id"]), "edges": edges, "measures": measures}
     topo = parse(graph)                              # raises if the proposal is malformed: a bug, never silent
     view = dg.Diagram(view="installation", title=lay.title, width=max(lay.width, 400), height=max(lay.height, 300),
                       symbols=symbols, routes=[dg.Route(edge=e["id"]) for e in edges])
     return {"kind": "AQUACROP_MIGRATION_PROPOSAL", "source": {"kind": "AQUACROP_LAYOUT", "digest": legacy.digest(lay)},
             "topology": topo.model_dump(mode="json"), "diagram": view.model_dump(mode="json"),
-            "ambiguous": ambiguous, "unresolved": unresolved,
+            "ambiguous": ambiguous, "unresolved": unresolved, "matched": matched, "to_create": to_create,
             "meaning": "a draft for review: explicit links only; nothing ambiguous was connected"}

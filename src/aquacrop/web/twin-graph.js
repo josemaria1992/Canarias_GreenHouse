@@ -123,7 +123,12 @@
     return h("div", { class: "card", "data-migration": "" }, h("h3", null, "From the earlier Overview drawing: decide these"),
       h("p", { class: "muted small" }, `Source: ${m.source && m.source.digest ? "digest " + m.source.digest.slice(0, 12) : "the earlier drawing"}. It stays unchanged on the Overview as a reference. ${m.meaning || ""}`),
       m.ambiguous.length ? h("ul", { class: "small" }, m.ambiguous.map(a => h("li", null, `${a.legacy}: ${a.why}. ${a.fix}.`))) : h("p", { class: "small" }, "Nothing ambiguous."),
-      m.unresolved.length ? h("ul", { class: "small" }, m.unresolved.map(a => h("li", null, `${a.label}: ${a.why}. ${a.fix}.`))) : null);
+      (m.to_create || []).length ? h("div", { "data-to-create": "" }, h("strong", { class: "small" }, "Create these on the Equipment page (main dashboard), with these names, then press Import from Overview again:"),
+        h("ul", { class: "small" }, m.to_create.map(c => h("li", null, `${c.name} — a ${c.kind}${c.shown_by ? " (the drawing showed it with " + c.shown_by + ")" : ""}`)))) : null,
+      (m.matched || []).length ? h("details", { class: "small" }, h("summary", null, `${m.matched.length} symbol(s) matched by name: check them`),
+        h("ul", null, m.matched.map(x => h("li", null, `${x.label}: ${x.why}`)))) : null,
+      m.unresolved.filter(a => !(m.to_create || []).some(c => c.legacy === a.legacy)).length
+        ? h("ul", { class: "small" }, m.unresolved.filter(a => !(m.to_create || []).some(c => c.legacy === a.legacy)).map(a => h("li", null, `${a.label}: ${a.why}. ${a.fix}.`))) : null);
   }
 
   /** What the card's buttons and texts depend on: they are rebuilt only when it changes, so a click or a note being
