@@ -1,14 +1,14 @@
-# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06)
+# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06) and C077 fixes
 
-Status: **implemented and deployed to the bench as 0.7.7** (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
+Status: **C077-01..08 are implemented on the branch and NOT deployed** (see C077 below). UX-07 is in progress. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
 
 ## Source identity
 
 - Branch: `feat/operator-upgrade-0.7`. Implementation base: `75b63d7` (the review documents).
 - Final implementation commit (before this summary-only commit): `de3088a` (0.7.7). 0.7.6 was `7075853`.
-- Release: `aquacrop-0.7.6.zip`.
-  - sha256 `3553ac782ece331d3c5ad42a9b1532666df23c8585f420a066c32dbd4da676a3` (`aquacrop-0.7.7.zip`).
+- Release: `aquacrop-0.7.7.zip`.
+  - sha256 `3553ac782ece331d3c5ad42a9b1532666df23c8585f420a066c32dbd4da676a3`.
   - Build `0.7.7+de3088ab7d.w3d2015dd`.
   - `verify_release.py` 28/28 PASS.
 
@@ -56,6 +56,36 @@ written. Independent review pending. The previous update (0.7.5) is in this file
     `test_a_waiting_rest_is_abandoned_when_its_window_ends_and_says_so`. The litre-cycle resume follows the same
     path but has no dedicated fake-meter test.
 
+## C077 findings (Codex review 0.7.7)
+
+Author tests and Claude's browser checks only. Independent acceptance and the owner's real-bench check are **NOT RUN**.
+
+| ID | Implementation | Author evidence | Remaining |
+|---|---|---|---|
+| C077-01 Stop all restarts a queued cycle | `ee0f263`. Stop all, a user stop (also of a paused operation's id), leaving AUTO (automatic remainders), a lost lease, and a deactivated or changed program now cancel a waiting remainder. Each cancellation is audited as `PROGRAM_RESUME_CANCELLED`. A genuine wait for the partner pump continues until it is free. | `tests/unit/test_recovery_c077.py`: 3 tests assert that no ON follows a cancellation for 60–120 s after the pump is free. Codex's `observe_stop_all` setup is now refused at its first step: C077-02 makes the busy-partner state it builds unreachable. | — |
+| C077-02 sectors water simultaneously | `ee0f263`. A duty pair is one pump group. A program holds a token for each pump of its pair, and for each pair pump it switches, from its start until its verified stop. The group comes from configuration (duty pairs), never from equipment names. By hand, the second sector is refused with the reason. A scheduled start (weekly, repeat, condition, keep-between) waits its turn unclaimed (`PROGRAM_WAITING_TURN`): it never preempts and never opens a conflict choice, and it is MISSED with the reason if its window ends. A waiting remainder goes before other sectors. Programs outside the group are not serialized. | Tests: refused by hand; a named single pump counts as the group; two scheduled sectors in one window run one after the other, never both valves open at any 0.5 s step, the second starting after the first's verified stop; failure progression (healthy pump finishes, then the next sector on it); an unrelated valve program runs alongside. Codex's `observe_parallel` now gets `Refused: s2 waits its turn …`. | Owner check on the bench. The pause/resume path is now defensive only: no sector program can hold the partner. |
+| C077-03 one OFF, then waiting | `ee0f263`. While the failed pump is not verified OFF, its held output gets OFF every 2 s (`REPLACE_OFF_RETRY_S`); the partner stays OFF until then. The RR-01 check (an output verified OFF earlier reads ON again) now also runs during the changeover. | Tests: ≥3 OFFs in 7.5 s with no ON; a dropped first OFF is sent again; the failed pump reading ON after the changeover fails the operation. Codex's probe: 4 OFF attempts in 8 s (was 1). Established stop regressions pass. | — |
+| C077-04 litres skipped during changeover | `ee0f263`. During a changeover in a DELIVER step, the meter's readings keep being counted (`_account`), at 0 L while both pumps are stopped. The no-flow timer restarts when the partner runs. A genuinely lost meter still fails the operation with the volume it could not measure. | Changeovers of 0, 8 and 20 s: the same 50 L target finishes DONE with uncertain 0 L, and the replacement event links to the same operation. The volume at the changeover is the same whatever the delay, so nothing is counted for the stopped time. A lost meter fails with "flow reading lost". | Physical flow behaviour: NOT RUN. |
+| C077-05 one-hour abandonment | `ee0f263`. `RESUME_GIVE_UP_S` is removed. Only the window's end, a stop, or a program change ends the wait. | Tests: waits more than an hour (no window), then finishes the remainder; a real weekly window ends it with "its window ended". The old 30 s-timeout test is replaced. | — |
+| C077-06 empty design keeps old content | `967af7c`. New design builds a clean diagram: only view, title, size and grid stay. It asks first even over a drawing with only earlier-drawing content. A saved empty design shows as "empty design", never the Overview reference again. Equipment stays listed to place. | `tests/js/twin_empty_design.test.js` (3); API: an empty design saved after a legacy import is empty on reload, items are still offered, and the Overview and Equipment are unchanged. Browser on the bench copy: 0 symbols, 0 sketches, 0 placeholders, 41 Place buttons (`evidence-c077/06-empty-design.png`). | — |
+| C077-07 meter off-grid; glyph not turned | `967af7c`. The meter snaps to the grid along its pipe, clear of the run's ends. Its inlet and outlet stay on the pipe's centre line: an off-grid imported pipe keeps its line, with no jog and no disconnect. The flow glyph rotates with the meter. | `tests/js/editor_meter.test.js` (+3): horizontal, reverse, vertical up and down; an off-grid pipe; the rendered glyph transform. Codex's probe now gives x=310 (on grid). Browser: the vertical fill meter's glyph is `rotate(90 12 12)` (`evidence-c077/07-vertical-meter.png`). | Capacity-sized tanks and moved ports are covered by the existing editor tests only. |
+| C077-08 legacy import not simulation-ready | `b1db08f`. Kept without asking: named ends, each pipe's gate item and flow meter in series in drawn order, and the junctions shared single ports need. In-series equipment is turned and centred on its pipe. Asked once, as factual yes/no with the drawing's suggestion: equipment drawn on a pipe, an end touching a symbol or pipe, a sensor drawn by a pipe or tank. Only a yes connects. Open questions, dangling ends, missing equipment and graph errors are named blockers; the design is never "ready" while one is left. Answers are kept per earlier drawing, so a later Import from Overview applies them without asking. Connections with no room to be drawn are named; the router never draws them through equipment. | `tests/unit/test_reconcile_c077.py` (6) on the bench drawing fixture: missing tanks block by name; all 13 questions answered → 19/19 pipes, 45 edges, every flow meter in series, sensors associated, no graph error; a "no" is respected; an open question stays a blocker; deterministic. API: answers are kept, and a second import is complete with nothing asked again. Browser on a copy of the bench drawing, after creating the tanks, sectors and mains: 13 questions → Apply → "Connections complete: ready to simulate"; re-import asks nothing; 37 of 45 connections drawn, 8 named as not drawn yet (`evidence-c077/08b…`, `08c…`). | **Owner decisions:** the 13 answers for the real bench (the suggestions were accepted on the copy only; e.g. whether Return pump 2 is really in series). **Drawing:** 8 connections in the sector corner and the shared pump header need equipment moved apart before they can be drawn. **Real bench:** tank, sector and mains items must exist there. |
+
+**Source and deployment:** `ee0f263`, `967af7c`, `b1db08f`. These are **not deployed**: the bench still runs `0.7.7+de3088ab7d.w3d2015dd` (main and Twin, as last verified by Codex). No hardware command, lease, AUTO activation or physical test was performed.
+
+### Owner answers for the bench drawing import (27 Oct 2026, in chat)
+
+These are the owner's facts about the physical bench. They are recorded here and **not applied**: the import needs the C077 code deployed first.
+
+| Question | Owner's answer |
+|---|---|
+| `start:fill-main`, `fill-a`, `fill-b`, `fill-acid`: does each fill pipe join the mains pipe? | **Yes.** A pipe runs from mains to each tank with a valve in between. These are the explicit `v-fill-*` valves. |
+| `inline:dose-a/b/acid:v-out-*`: is the outlet valve in series on the dosing pipe? | **Clarification asked.** The owner answered "flow meters in series". The `flow-tp-*` meters are already explicit and in series, but `v-out-*` are valve items. It is still open whether each dosing line has an outlet valve. |
+| `inline:return:rp2`: is Return pump 2 in series with Return pump 1? | **No.** They are parallel pumps inside the drainage tank, and the second one is there in case one fails. This needs a "parallel spare" answer in the import, like Main pumps 1 and 2. Being added. |
+| `tap:ec`, `tap:ph`: do they measure Main tank? | **Yes.** |
+| `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no temperature sensor in any tank. Where the configured "Main tank temperature" sensor is, or whether it should be removed, is still open. |
+| `tap:pres-s1`, `tap:pres-s2`: do they measure the sector pipes? | **Yes.** |
+
 ## UX-01..UX-06
 
 | Item | Result | Evidence |
@@ -86,6 +116,8 @@ written. Independent review pending. The previous update (0.7.5) is in this file
   - UAT-12 tour fix: `eafeb85`.
   - On `7075853` at the time of writing: 12 checks passing, 24 pending, 0 failing. **Not reported green.**
 
+- **C077 (author tests, not acceptance):** full suite on `b1db08f`: 824 Python tests passed, 0 failed; all 8 `tests/js/*.test.js` passed. Browser checks on a bench-data copy, 7/7 (`evidence-c077/checks.json`). Independent acceptance: NOT RUN.
+
 ## Deployment and access
 
 - **Bench:** 0.7.5 → 0.7.6 at 16:25 CET, then 0.7.7 at 17:29 CET. Main and Twin both run `0.7.7+de3088ab7d.w3d2015dd`. Before 0.7.7: full suite passed again, release 28/28, Python 3.11 preflight passed.
@@ -99,8 +131,11 @@ written. Independent review pending. The previous update (0.7.5) is in this file
 
 ## Remaining
 
+- **C077:** not deployed. Owner clarifications: the dosing outlet valves and where the temperature sensor is. A parallel-spare answer for Return pump 2 is being added. Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
+- **UX-07:** in progress, not yet in this branch.
+
 - CI result on `7075853`.
 - The signed-in real-bench walkthrough by the owner.
 - VPN DNS or hosts entries for other clients, and the DHCP reservation.
 
-Ready for independent Codex re-review: **YES** (with CI pending as stated).
+Ready for independent Codex re-review of C077-01..08: **YES**, apart from the open items above. UX-07: **not yet**.
