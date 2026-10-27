@@ -429,3 +429,12 @@ label.check.member { gap: 8px; }
 .bad-field input:not([type=checkbox]):not([type=radio]), .bad-field select { outline: 2px solid var(--bad); outline-offset: -2px; }
 fieldset.bad-field, .rule.bad-field { border-color: var(--bad); }
 .rule.bad-field { outline: 2px solid var(--bad); outline-offset: 2px; }
+/* 0.7.3 the earlier drawing kept as drawn: boxes, placeholders (not mapped yet), pipe sketches (never connections) */
+.hed-shape rect { fill: none; stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.hed-sketch { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 2 5; stroke-linecap: round; }
+.hed-sketch.corrected { stroke: var(--warn); opacity: .6; }
+.hed-ph rect { fill: none; stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 3; }
+.hed-ph.sel rect { stroke: var(--accent); stroke-width: 3; }
+.hed-ph { cursor: pointer; }
+.hed-text { font-size: 12px; fill: var(--ink); }
+.hed-cap { font-size: 10px; fill: var(--muted); }

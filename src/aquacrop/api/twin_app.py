@@ -25,6 +25,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from fastapi.exceptions import RequestValidationError
 
+from ..twin.nutrient_sim import Preparation, simulate as simulate_preparation
 from .. import __version__, layout
 from ..domain.model import new_id
 from ..historian.writer import Historian
@@ -415,8 +416,6 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                     raise HTTPException(422, "start time: YYYY-MM-DDTHH:MM")
             svc.reset(p.username, start)
         return {"ok": True}
-
-    from ..twin.nutrient_sim import Preparation, simulate as simulate_preparation
 
     @app.post("/api/twin/nutrient/simulate")
     def nutrient_simulate(body: Preparation, p: Principal = Depends(require(Perm.OPS_READ))):

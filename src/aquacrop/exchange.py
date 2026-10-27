@@ -130,7 +130,13 @@ def preview(doc: dict, equipment, blocks, programs) -> dict:
             row("type", tid, "CONFLICT", f"not a valid type: {str(e)[:200]}")
             continue
         mine = have_t.get(tid, [])
-        if any(_d(m["body"]) == _d(body) for m in mine):
+
+        def norm(b):                                  # stored bodies from earlier versions, read as today's
+            try:
+                return _d(TypeBody.model_validate(b).model_dump(mode="json"))
+            except Exception:
+                return _d(b)
+        if any(norm(m["body"]) == _d(body) for m in mine):
             row("type", tid, "SAME")
         elif any(m["status"] == "DRAFT" for m in mine):
             row("type", tid, "CONFLICT", "this installation has an unsaved draft of this type: it is never replaced")

@@ -93,3 +93,12 @@ def test_dt07_import_from_overview_never_silently_replaces_a_design_not_exported
     r = twin.post("/api/twin/design/import", json={"replace": True}, headers=H)
     assert r.status_code == 200 and r.json()["replaced"] is True
     assert twin.get("/api/twin/changes").json()["preview"]["hydraulics"] is None
+
+
+def test_prog10_the_twin_simulates_a_nutrient_preparation_labelled(live_and_twin):
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    H = _twin_h(twin, "bench1")
+    r = twin.post("/api/twin/nutrient/simulate", json={"volume_L": 1000, "additions": [{"what": "A", "litres": 5, "at_s": 0}]},
+                  headers=H)
+    assert r.status_code == 200, r.text
+    assert "SIMULATED" in r.json()["label"] and r.json()["final"]["ec_bulk"] > 0.35
