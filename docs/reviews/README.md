@@ -4,7 +4,9 @@ This is the shared repository location for Codex feedback and Claude's implement
 
 ## Current cycle
 
-**Latest owner feedback: [empty Blocks selectors, inline flow meters and dashed imported drawings](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_BLOCKS_AND_PIPES_20261027.md)**. Start here for UX-01..UX-04: verified prerequisite explanations, a deliberate meter-in-pipe workflow and a guided completion of imported drawings. The owner does not find the current setup intuitive. This is an implementation delta, not permission to infer plumbing or restore the removed Blocks shortcuts.
+**Latest owner feedback: [missing Tank type and Edit closing by itself](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_EQUIPMENT_TYPES_20261027.md)**. Start here for UX-05/UX-06: built-in type availability/activation guidance and a reproduced refresh-state collision that closes the editor. Fix the product flow and demonstrate it in a browser; the owner's live type status has not been assumed.
+
+**Related owner feedback: [empty Blocks selectors, inline flow meters and dashed imported drawings](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_BLOCKS_AND_PIPES_20261027.md)**. UX-01..UX-04 cover verified prerequisites, a deliberate meter-in-pipe workflow and guided completion of imported drawings. The owner does not find the current setup intuitive. Do not infer plumbing or restore the removed Blocks shortcuts.
 
 **Current overall status: [acceptance matrix, verified Raspberry deployment and VPN access](2026-10-27-0.7.3/CURRENT_ACCEPTANCE_AND_ACCESS_20261027.md)**. Both services were independently verified as healthy 0.7.5 over the VPN, and the owner-approved hostname mapping now works on this PC. No new application fixes have been pushed; seven reproduced defects and the newer owner decisions remain outstanding. This status note includes the known CI failure and concise next instructions for Claude.
 
