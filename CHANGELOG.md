@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.4 (2026-10-27): owner corrections to 0.7.3 and the open features
+
+Owner corrections (docs/reviews/2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md):
+- Program Preview/Save name the field and say how to fix it; the block step says when a newer block version exists.
+- The earlier Overview drawing is converted faithfully (sizes, labels, boxes, routes kept; unmapped symbols as
+  marked placeholders; unconnected pipes as sketches) and drawn by one renderer on Overview, Twin and Blocks. Import
+  from Overview saves it in the twin; with no twin design the Overview's drawing is shown as the reference.
+- Tanks get a schematic size from their capacity (same rule in server and browser; shown on Equipment). A level
+  sensor dropped on a tank is associated with it (no pipe), moves with it and can be undone.
+- Equipment types sits beside Equipment; the Blocks shortcuts are gone; blocks have their own start and stop
+  conditions, applied to every program over them (an unknown reading never permits a start).
+
+Open features:
+- IMPORT-01 project exchange (JSON/YAML) with a record-by-record preview; DRAFTs only, proposals for items and the
+  drawing; secrets, leases, sessions, bindings excluded; malformed, oversized and path-escaping documents refused.
+- PROG-09 drainage lead alternation with standby response; PROG-10 labelled simulated nutrient preparation (real
+  dosing stays blocked on the real system).
+- HIST-03 a run's configuration as executed (block, item and binding versions, what changed since); DATA-01 a run
+  chart of its channels with gaps, digital lanes and the timeline as annotations, and a chart link per item.
+
 ## 0.7.3 (2026-10-27): the twin can read the main dashboard's build
 
 - The main dashboard's identity file in the feed folder was written readable by its own account only (the service's

@@ -82,7 +82,74 @@ def run_detail(hist, op_id: str, programs=None) -> dict | None:
             body = programs.get(run["program_id"], run["version"])["body"]
         except Exception:
             body = None
-    return run | {"timeline": timeline, "program_body": body}
+    conf = configuration(hist, run["started_utc"], body) if body else None
+    return run | {"timeline": timeline, "program_body": body, "configuration": conf,
+                  "chart": {"points": [b | {"label": f"{b['name']} {b['role']}"} for b in (conf or {}).get("bindings", [])
+                                       if b["point"]],
+                            "start": run["started_utc"], "end": run["ended_utc"],
+                            "meaning": "the channels bound to this run's equipment when it started; gaps and bad "
+                                       "quality are shown as recorded, never filled"}}
+
+
+def _refs(x, out: set) -> set:
+    """Every equipment item a program body names (actions, steps, meters, sensors, conditions)."""
+    if isinstance(x, dict):
+        for k, v in x.items():
+            if k in ("item", "meter", "sensor") and isinstance(v, str):
+                out.add(v)
+            else:
+                _refs(v, out)
+    elif isinstance(x, list):
+        for v in x:
+            _refs(v, out)
+    return out
+
+
+def configuration(hist, at_utc: str, body: dict) -> dict:
+    """HIST-03 (0.7.3): the configuration the run executed with, rebuilt from the versioned records as they were
+    when it started: the block version the program was compiled over, each item's version and type version, and
+    each channel binding in force. Later edits do not change it; what changed since is listed beside it."""
+    items, bindings, changed = [], [], []
+    for iid in sorted(_refs(body, set()) | set((body.get("duty") or []))):
+        then = hist.query("SELECT item_id, version, status, type_id, type_version, name, digest, json FROM equipment_items "
+                          "WHERE item_id=? AND created_utc<=? ORDER BY version DESC LIMIT 1", (iid, at_utc))
+        now = hist.query("SELECT version, name, digest FROM equipment_items WHERE item_id=? ORDER BY version DESC LIMIT 1",
+                         (iid,))
+        if not then:
+            items.append({"item_id": iid, "version": None, "why": "no record of this item before the run"})
+            continue
+        t = dict(then[0])
+        ib = json.loads(t.pop("json"))
+        items.append(t | {"scaling": ib.get("scaling") or {}, "properties": ib.get("properties") or {}})
+        if now and now[0]["digest"] != t["digest"]:
+            changed.append(f"{t['name']}: edited after this run (v{t['version']} then, v{now[0]['version']} now)")
+        for (role,) in hist.query("SELECT DISTINCT role FROM channel_bindings WHERE item_id=?", (iid,)):
+            b = hist.query("SELECT point, status, utc FROM channel_bindings WHERE item_id=? AND role=? AND utc<=? "
+                           "ORDER BY seq DESC LIMIT 1", (iid, role, at_utc))
+            cur = hist.query("SELECT point, status FROM channel_bindings WHERE item_id=? AND role=? ORDER BY seq DESC LIMIT 1",
+                             (iid, role))
+            then_b = dict(b[0]) if b else {"point": None, "status": "NOT BOUND", "utc": None}
+            bindings.append({"item_id": iid, "name": t["name"], "role": role} | then_b)
+            if cur and (cur[0]["point"], cur[0]["status"]) != (then_b["point"], then_b["status"]):
+                changed.append(f"{t['name']} {role}: {then_b['point'] or 'no channel'} ({then_b['status']}) then, "
+                               f"{cur[0]['point'] or 'no channel'} ({cur[0]['status']}) now")
+    block = None
+    a = body.get("authoring") or {}
+    if a.get("block_id") and a.get("block_version"):
+        r = hist.query("SELECT block_id, version, status, name, digest, topology_rev, json FROM blocks WHERE block_id=? "
+                       "AND version=?", (a["block_id"], a["block_version"]))
+        if r:
+            block = dict(r[0])
+            bb = json.loads(block.pop("json"))
+            block |= {"members": bb.get("members", []), "safety": bb.get("safety"), "duty": bb.get("duty")}
+            latest = hist.query("SELECT max(version) AS v FROM blocks WHERE block_id=? AND status='VALIDATED'", (a["block_id"],))
+            if latest and latest[0]["v"] and latest[0]["v"] != block["version"]:
+                changed.append(f"block {block['name']}: v{block['version']} then, v{latest[0]['v']} validated now")
+    topo = hist.query("SELECT rev, digest FROM topology_revisions WHERE utc<=? ORDER BY utc DESC, rev DESC LIMIT 1", (at_utc,))
+    return {"at_utc": at_utc, "block": block, "items": items, "bindings": bindings,
+            "topology": dict(topo[0]) if topo else None, "changed_since": changed,
+            "meaning": "rebuilt from the versioned records in force when the run started; later edits are listed, "
+                       "never applied to this view"}
 
 
 def _words(kind: str, p: dict) -> str:

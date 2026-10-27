@@ -718,6 +718,15 @@ class Engine:
             if key:
                 self.store.occurrence_update(key, "FAILED", outcome=why)
             raise Refused(why)
+        if body.simulation_only and self.physical:      # PROG-10: real dosing is not engineered
+            why = ("nutrient preparation is simulated only (Digital Twin): real dosing stays blocked until its "
+                   "chemistry and equipment are engineered and approved")
+            if key:
+                self.store.occurrence_update(key, "FAILED", outcome=why)
+            raise Refused(why)
+        lead = None
+        if body.duty:                                   # PROG-09: lead alternation and standby response
+            body, lead = self._duty(pid, body)
         # the real system: a program whose twin proof no longer matches its equipment, channels or network never
         # starts again until it is tested in the new context (R07-01); running operations keep their channels
         if (why := getattr(self.io, "program_refusal", lambda p, v: None)(pid, ver)) is not None:
@@ -770,11 +779,45 @@ class Engine:
         if key:
             self.store.occurrence_update(key, "RUNNING", doc={"op_id": op.op_id, "limit_s": limit})
         self.event("PROGRAM_OP_STARTED", {"op_id": op.op_id, "program": pid, "version": ver, "origin": origin,
-                                          "key": key, "limit_s": round(limit, 1)}, actor)
+                                          "key": key, "limit_s": round(limit, 1)} | ({"lead": lead} if lead else {}),
+                   actor)
         if a.type in ("RUN_FOR", "DELIVER_VOLUME", "KEEP_BETWEEN"):
             if not self._switch_on(op, a.item):
                 return op
         return op
+
+    def _duty(self, pid: str, body: ProgramBody) -> tuple[ProgramBody, str]:
+        """The lead for this start: the pump of the pair that started least recently (the first on a tie). A lead
+        that cannot start now (no command channel, its limits, a fault or unknown fault input) hands the start to
+        the standby, which is recorded; if neither can start, the plan's first pump stays and the start is refused
+        with that pump's reason as usual."""
+        first, second = body.duty
+        last = lambda i: max(self._usage.get(i, {}).get("starts") or [float("-inf")])   # noqa: E731
+        lead, standby = (second, first) if last(second) < last(first) else (first, second)
+
+        def cannot(i):
+            it = self._items.get(i)
+            if it is None or it.command_point is None:
+                return f"{i} has no command channel"
+            return self._item_refusal(i)
+        why = cannot(lead)
+        if why is not None and cannot(standby) is None:
+            self.event("PROGRAM_STANDBY_LEADS", {"program": pid, "lead": standby, "instead_of": lead, "why": why},
+                       "system")
+            lead, standby = standby, lead
+        if lead == first:
+            return body, lead
+        swap = {first: second, second: first}
+
+        def walk(x):
+            if isinstance(x, dict):
+                return {k: (swap.get(v, v) if k == "item" and isinstance(v, str) else walk(v)) for k, v in x.items()}
+            if isinstance(x, list):
+                return [walk(v) for v in x]
+            return x
+        d = body.model_dump(mode="json")
+        d["action"] = walk(d["action"])
+        return ProgramBody.model_validate(d), lead
 
     @staticmethod
     def _volume_cap(views) -> float | None:

@@ -1472,7 +1472,41 @@
       RD ? h("div", { class: "card" }, h("h3", null, `${RD.program_id} v${RD.version}: ${RD.result}`),
         RD.reason ? h("p", null, RD.reason) : null,
         h("table", { class: "compact small" }, h("tbody", null, RD.timeline.map(e => h("tr", null, h("td", null, fmtTime(e.utc)), h("td", null, e.kind.toLowerCase().replace(/_/g, " ")), h("td", null, e.what))))),
+        runChart(RD), runConfig(RD.configuration),
         RD.program_body ? h("details", null, h("summary", { class: "small" }, "The program version this run used"), h("pre", { class: "small mono" }, JSON.stringify(RD.program_body, null, 2))) : null) : null);
+  }
+  // 0.7.3 HIST-03: the configuration the run executed with, as recorded when it started
+  function runConfig(C) {
+    if (!C) return null;
+    return h("div", { "data-run-config": "" }, h("h4", null, "Configuration when this run started"),
+      C.changed_since.length ? h("ul", { class: "warn small" }, C.changed_since.map(x => h("li", null, x))) : h("p", { class: "small" }, "Nothing used by this run has changed since."),
+      C.block ? h("p", { class: "small" }, `Block ${C.block.name} v${C.block.version} (${C.block.status.toLowerCase()})${C.block.duty ? ", lead alternation " + C.block.duty.pumps.join(" / ") : ""}.`) : null,
+      h("table", { class: "compact small" }, h("thead", null, h("tr", null, ["Equipment", "Version", "Type", "Reading/output", "Channel then"].map(x => h("th", null, x)))),
+        h("tbody", null, C.bindings.map(b => { const it = C.items.find(i => i.item_id === b.item_id) || {};
+          return h("tr", null, h("td", null, b.name), h("td", null, it.version == null ? "—" : "v" + it.version), h("td", null, it.type_id ? `${it.type_id} v${it.type_version}` : "—"),
+            h("td", null, b.role), h("td", { class: "mono" }, b.point ? `${b.point} (${b.status.toLowerCase()})` : "no channel")); }))),
+      h("p", { class: "muted small" }, C.meaning));
+  }
+  // 0.7.3 DATA-01: the run's channels over its time, gaps and bad quality as recorded, the timeline as annotations
+  function runChart(RD) {
+    const ch = RD.chart;
+    if (!ch || !ch.points.length) return null;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("class", "chart");
+    svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Chart of this run's channels: " + ch.points.map(p => p.label).join(", "));
+    const legend = h("div", { class: "legend small" });
+    const t0 = new Date(Date.parse(RD.started_utc) - 60000), t1 = new Date(Date.parse(RD.ended_utc || new Date().toISOString()) + 60000);
+    const pids = ch.points.map(p => p.point).slice(0, 16);
+    const c = S.runChart, q = `/api/trends?points=${encodeURIComponent(pids.join(","))}&start=${encodeURIComponent(t0.toISOString())}&end=${encodeURIComponent(t1.toISOString())}`;
+    // an ended run's samples do not change: fetched once; a running one at most every 10 s
+    const get = c && c.op === RD.op_id && (RD.ended_utc || Date.now() - c.at < 10000) ? Promise.resolve(c.tr)
+      : api("GET", q).then(tr => { S.runChart = { op: RD.op_id, tr, at: Date.now() }; return tr; });
+    get.then(tr => {
+      const series = trendSeries(tr, pids, pid => { const p = ch.points.find(x => x.point === pid); return { kind: pid.split(".").pop().replace(/[0-9]+$/, ""), label: p ? p.label : pid }; });
+      const events = RD.timeline.map(e => [Date.parse(e.utc), `${e.kind.toLowerCase().replace(/_/g, " ")}: ${e.what}`]);
+      const leg = AqChart.render(svg, { series, events, tStart: t0.getTime(), tEnd: t1.getTime(), timezone: S.tz, note: "" });
+      legend.replaceChildren(...leg.map(l => h("span", null, h("span", { style: "color:" + l.color, "aria-hidden": "true" }, l.suspect ? "◌ " : "■ "), l.name)));
+    }).catch(e => legend.replaceChildren(h("span", { class: "bad" }, String(e.message || e))));
+    return h("div", { "data-run-chart": "" }, h("h4", null, "This run's channels"), svg, legend, h("p", { class: "muted small" }, ch.meaning + ". Digital channels are lanes below the curves; markers are the run's steps, commands and alarms."));
   }
 
   VIEWS.history = async function () {
@@ -1676,6 +1710,25 @@
   }
 
   // ------------------------------------------------ settings
+  // 0.7.3 IMPORT-01: the design as one JSON/YAML document; an import is previewed record by record and writes DRAFTs only
+  function projectCard() {
+    const P = S.project = S.project || {};
+    const text = h("textarea", { rows: 4, class: "mono small", "aria-label": "Project document (JSON or YAML)", placeholder: "Paste an AquaCrop project document, or choose a file" });
+    if (P.text) text.value = P.text;
+    const file = h("input", { type: "file", accept: ".json,.yaml,.yml", "aria-label": "Project file", onchange: async ev => { const f = ev.target.files[0]; if (!f) return; if (f.size > 2097152) { P.msg = { bad: true, text: "The file is larger than 2 MiB." }; VIEWS.settings(); return; } P.text = await f.text(); P.pv = null; VIEWS.settings(); } });
+    const preview = async () => { P.text = text.value; try { P.pv = await api("POST", "/api/project/import/preview", { text: P.text }); P.msg = null; } catch (e) { P.pv = null; P.msg = { bad: true, text: String(e.message || e) }; } S.settingsLoaded = false; VIEWS.settings(); };
+    const apply = async () => { try { const r = await api("POST", "/api/project/import/apply", { text: P.text, expected_digest: P.pv.digest }); P.msg = { text: `Written as drafts: ${r.written.map(w => w.kind + " " + w.id).join(", ") || "nothing"}. Proposals: ${r.proposals.length}. Not written: ${r.not_written.length}.` }; P.pv = null; } catch (e) { P.msg = { bad: true, text: String(e.message || e) }; } S.settingsLoaded = false; VIEWS.settings(); };
+    const pv = P.pv, CLS = { NEW: "ok", "NEW VERSION": "ok", SAME: "", PROPOSAL: "warn", CONFLICT: "bad" };
+    return h("div", { class: "card", "data-project": "" }, h("h2", null, "Project exchange"),
+      h("p", { class: "muted small" }, "The design (equipment types and items, blocks, programs, the drawing) as one document. Never included: users, passwords, sessions, bench leases, secrets, channel bindings, history."),
+      h("div", { class: "row wrap" }, h("a", { class: "button small", href: "/api/project/export?fmt=json", download: "aquacrop-project.json" }, "Export JSON"), h("a", { class: "button small ghost", href: "/api/project/export?fmt=yaml", download: "aquacrop-project.yaml" }, "Export YAML")),
+      h("h3", null, "Import"), file, text, h("div", { class: "row" }, h("button", { onclick: preview }, "Preview the import")),
+      P.msg ? h("p", { class: (P.msg.bad ? "bad" : "ok") + " small", role: "status" }, P.msg.text) : null,
+      pv ? [h("table", { class: "compact small" }, h("thead", null, h("tr", null, ["Record", "What happens", "Why"].map(x => h("th", null, x)))),
+          h("tbody", null, pv.rows.map(r => h("tr", null, h("td", null, `${r.kind} ${r.id}`), h("td", null, pill(r.action, CLS[r.action] || "")), h("td", null, r.why))))),
+        h("p", { class: "muted small" }, pv.meaning),
+        h("button", { disabled: !pv.rows.some(r => r.action === "NEW" || r.action === "NEW VERSION") && !pv.rows.some(r => r.kind === "drawing" && r.action === "PROPOSAL"), onclick: apply }, "Apply: write the drafts")] : null);
+  }
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
     const [s, ret, bk, qu, off] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
@@ -1687,6 +1740,7 @@
     const userForm = can("user_admin") ? usersCard(s, ROLES) : h("p", { class: "muted" }, "Only an administrator manages users.");
     mount("v-settings",
       h("div", { class: "grid" },
+        can("config_admin") ? projectCard() : null,
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
           h("dt", null, "Software"), h("dd", null, s.software_version),
           h("dt", null, "Release"), h("dd", null, releaseLine(s.release)),

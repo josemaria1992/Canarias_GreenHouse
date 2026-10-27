@@ -275,6 +275,13 @@ def _check_namespace(hist: Historian, cfg: InstallationConfig, session_id: str) 
                          f"use a separate state directory or db_path for {cfg.profile.value}")
 
 
+class ProjectIn(BaseModel):
+    """A project document to preview or apply (IMPORT-01, 0.7.3); its size is limited again when it is read."""
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=2 * 1024 * 1024 + 1)
+    expected_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_host: str = "127.0.0.1",
                session_id: str | None = None) -> FastAPI:
     state_dir = Path(state_dir)
@@ -892,6 +899,46 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                             views=lambda: design_views(equipment), proof_context=proof_context)
     from . import runs as run_routes
     run_routes.register(app, require, hist, programs)
+
+    # ------------------------------------------------------------------ project exchange (0.7.3, IMPORT-01)
+    from .. import exchange as xch
+    from ..blocks.store import BlockRefused
+    from ..equipment.store import EquipmentRefused
+    from ..programs.store import ProgramRefused
+
+    def _project(text: str) -> dict:
+        try:
+            return xch.loads(text)
+        except xch.ExchangeRefused as e:
+            raise HTTPException(422, str(e))
+
+    @app.get("/api/project/export")
+    def project_export(fmt: str = Query("json", pattern="^(json|yaml)$"),
+                       p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        doc = xch.export(equipment, blocks, programs, __version__)
+        hist.event("PROJECT_EXPORTED", {"format": fmt}, actor=p.username)
+        return Response(xch.dumps(doc, fmt), media_type="application/json" if fmt == "json" else "application/yaml",
+                        headers={"Content-Disposition": f'attachment; filename="aquacrop-project.{fmt}"'})
+
+    @app.post("/api/project/import/preview")
+    def project_preview(body: ProjectIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        return xch.preview(_project(body.text), equipment, blocks, programs)
+
+    @app.post("/api/project/import/apply")
+    def project_apply(body: ProjectIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        doc = _project(body.text)
+        pv = xch.preview(doc, equipment, blocks, programs)
+        if body.expected_digest != pv["digest"]:
+            raise HTTPException(409, "preview the document first: apply only what the preview showed")
+        try:
+            out = xch.apply(doc, p.username, equipment, blocks, programs, state_dir / "imports")
+        except (EquipmentRefused, BlockRefused, ProgramRefused) as e:
+            raise HTTPException(409, f"stopped at a record that could not be written: {e}")
+        hist.event("PROJECT_IMPORTED", {"digest": pv["digest"], "written": len(out["written"]),
+                                        "proposals": len(out["proposals"]), "conflicts": len(out["not_written"])},
+                   actor=p.username)
+        publish()
+        return out
 
     # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
     from . import operation as operation_routes

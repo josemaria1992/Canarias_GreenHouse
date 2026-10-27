@@ -217,10 +217,14 @@ class ProgramBody(_M):
     guards: tuple[Condition, ...] = Field(default=(), max_length=16)         # 0.7.0
     authoring: dict | None = None           # 0.7.0: the form this body was compiled from (programs/authoring.py)
     basis: Literal["WATERING_AFTER_STARTUP"] | None = None   # what a timed run's duration counts
+    duty: tuple[str, str] | None = None     # 0.7.3 PROG-09: (first, second) pump; each start leads with the one
+    #                                         started least recently, the standby takes a start the lead cannot
+    simulation_only: Literal["NUTRIENT_PREPARATION"] | None = None   # 0.7.3 PROG-10: never starts on real equipment
 
     @model_serializer(mode="wrap")
     def _ser(self, handler):
-        return _drop_defaults(handler(self), {"permissives": [], "guards": [], "authoring": None, "basis": None})
+        return _drop_defaults(handler(self), {"permissives": [], "guards": [], "authoring": None, "basis": None,
+                                              "duty": None, "simulation_only": None})
 
     @model_validator(mode="after")
     def _v(self):

@@ -82,6 +82,7 @@
       upgradeBox(it),
       props.length ? h("p", { class: "small" }, props.map(p => `${p.label}: ${it.body.properties[p.key] ?? p.default ?? "—"}${p.unit ? " " + p.unit : ""}`).join(" · ")) : null,
       tankPreview(it),
+      chartLink(E, it),
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Role", "Signal", "Channel", "State", "Check"].map(x => h("th", null, x)))),
         h("tbody", null, roles.map(role => roleRow(E, it, role, board)))),
       h("p", { class: "muted small" }, "Commanded state, coil readback and independent feedback are shown separately on the twin and bench pages; a missing feedback is UNKNOWN, never OFF."),
@@ -97,6 +98,12 @@
       } }, `Retire ${it.name}`)), h("p", { class: "muted small" }, "Retiring keeps the item's history and records; programs that use it must be changed first."));
   }
 
+  // 0.7.3 DATA-01: the item's bound channels charted in Operation History (gaps, quality and digital lanes there)
+  function chartLink(E, it) {
+    const pts = (E.bindings || []).filter(b => b.item_id === it.item_id && b.point).map(b => b.point);
+    if (!pts.length) return null;
+    return h("button", { class: "small ghost", "data-chart-item": it.item_id, onclick: () => { S.trendSel = pts.slice(0, 8); location.hash = "#history"; } }, "Chart its channels");
+  }
   // 0.7.3: a tank with a capacity shows the size it gets in the drawing (the editor's rule, schematic only)
   function tankPreview(it) {
     const cap = Number(((it.body || {}).properties || {}).capacity_l);

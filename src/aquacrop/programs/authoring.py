@@ -318,6 +318,10 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
             | ({"normal_stop": normal_stop} if normal_stop else {}) | ({"fault_stop": fault_stop} if fault_stop else {}),
             "permissives": [_cond(r) for r in bp + f.permissives], "guards": [_cond(r) for r in bg + f.guards],
             "authoring": f.model_dump(mode="json"), "basis": "WATERING_AFTER_STARTUP" if e.kind == "TIME" else None}
+    if block.duty is not None:                          # PROG-09: the engine chooses the lead per start
+        body["duty"] = list(block.duty.pumps)
+    if block.template == "NUTRIENT_PREPARATION":        # PROG-10: simulated in the twin; real dosing stays blocked
+        body["simulation_only"] = "NUTRIENT_PREPARATION"
     if len(steps) > 32:
         raise FormRefused("the block's plan and the watering make more than 32 steps", "block_id")
     return body

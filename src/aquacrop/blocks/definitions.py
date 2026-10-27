@@ -90,6 +90,19 @@ class Safety(_B):
     guards: tuple[BlockCondition, ...] = Field(default=(), max_length=8)         # 0.7.3: any one stops it
 
 
+class Duty(_B):
+    """0.7.3 (PROG-09): two pumps that share one duty (drainage return): each start leads with the one that started
+    least recently, and the other is the standby; a lead that cannot start (a fault input, its limits, no channel)
+    hands the start to the standby. The plan names the first pump; the engine swaps them per start."""
+    pumps: tuple[str, str]
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.pumps[0] == self.pumps[1]:
+            raise ValueError("lead alternation needs two different pumps")
+        return self
+
+
 class BlockBody(_B):
     template: Template = "GENERIC"
     description: str = Field(default="", max_length=500)
@@ -99,6 +112,7 @@ class BlockBody(_B):
     meter: str | None = Field(default=None, pattern=ID)
     plan: Plan = Plan()
     safety: Safety = Safety()
+    duty: Duty | None = None                 # 0.7.3: lead/standby alternation of two pumps
 
     @model_validator(mode="after")
     def _check(self):
@@ -110,6 +124,8 @@ class BlockBody(_B):
 
 def digest(body: BlockBody) -> str:
     d = body.model_dump(mode="json")
+    if d.get("duty") is None:
+        d.pop("duty", None)                   # blocks written before 0.7.3 keep their digest
     if body.safety == Safety():
         d.pop("safety")                       # blocks written before 0.7.1 keep their digest
     else:
@@ -167,6 +183,15 @@ def check(b: BlockBody, t: Topology, names: dict[str, str] | None = None) -> lis
         elif path is not None and b.meter not in path["nodes"]:
             _issue(out, "METER_OFF_PATH", b.meter, f"{nm(b.meter)} is not on the path from {nm(b.supply)} to "
                    f"{nm(b.destination)}: it cannot measure this block's water", "choose the meter on that path", field="meter")
+    if b.duty is not None:
+        for p in b.duty.pumps:
+            if p not in b.members or p in nodes and nodes[p].kind != "pump":
+                _issue(out, "DUTY_PUMP", p, f"lead alternation: {nm(p)} is not a pump of this block",
+                       "choose two pumps that are members", field="duty")
+        if not any(s.node == b.duty.pumps[0] for s in b.plan.startup):
+            _issue(out, "DUTY_PLAN", "duty", f"lead alternation: the startup does not start {nm(b.duty.pumps[0])}, "
+                   "the first pump of the pair", "start the first pump in the plan; the engine swaps it per start",
+                   field="duty")
     for phase in ("startup", "normal_stop", "fault_stop"):
         for i, s in enumerate(getattr(b.plan, phase)):
             if s.node is not None and s.node not in b.members:

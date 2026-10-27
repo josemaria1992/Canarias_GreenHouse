@@ -111,8 +111,10 @@ def test_twin_mode_and_faults_never_change_the_live_side(live_and_twin):
     twin.post("/api/twin/fault", json={"target": "relay_A", "fault": "MODULE_OFFLINE"}, headers=H)
     assert twin.get("/api/twin").json()["engine"]["mode"] == "AUTO"
     assert app.state.svc.workers["rs485_a"].health()["state"] == "RUNNING"   # the live poller is untouched
-    assert not [r for r in app.state.hist.query("SELECT kind FROM events WHERE kind LIKE 'TWIN_%'")
-                if r["kind"] != "TWIN_SNAPSHOT_PUBLISHED"]
+    # the live side's own snapshot publishing (published, or a transient Windows file lock on the feed) is not a twin
+    # effect; anything else named TWIN_ in the live history would be (fdf40b8 CI: listed by kind when it fails)
+    kinds = [r["kind"] for r in app.state.hist.query("SELECT kind FROM events WHERE kind LIKE 'TWIN_%'")]
+    assert not [k for k in kinds if k not in ("TWIN_SNAPSHOT_PUBLISHED", "TWIN_SNAPSHOT_FAILED")], kinds
 
 
 def test_the_real_dashboard_hands_its_login_to_the_twin_once(live_and_twin):

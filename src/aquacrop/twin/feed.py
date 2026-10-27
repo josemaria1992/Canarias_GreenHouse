@@ -37,8 +37,8 @@ TICKET_S = 60
 WINDOWS = os.name == "nt"                  # where a refused replace is worth retrying
 
 
-def replace(tmp: Path, path: Path, attempts: int = 20) -> None:
-    """os.replace, retried for about a second when Windows refuses it because a reader (a sync client, an antivirus
+def replace(tmp: Path, path: Path, attempts: int = 60) -> None:
+    """os.replace, retried for about three seconds when Windows refuses it because a reader (a sync client, an antivirus
     or another thread listing the directory) has the target open; any other error, or the last refusal, is raised."""
     for i in range(attempts):
         try:

@@ -230,7 +230,7 @@
       const Gr = window.AqTwinGraph;                   // 0.7.0: water over the explicit graph
       const Mo = window.AqTwinModules;                 // 0.7.0: simulated modules
       if (!$("t-top")) $("main").replaceChildren(...[h("div", { id: "t-top" }), Gr ? Gr.card() : null, D.card(), h("div", { id: "t-rest" }),
-        Mo ? Mo.card() : null, X.card()].filter(Boolean));
+        Mo ? Mo.card() : null, window.AqTwinNutrient ? window.AqTwinNutrient.card() : null, X.card()].filter(Boolean));
       const ae = document.activeElement;
       const using = id => ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest("#" + id);
       if (!using("t-top")) $("t-top").replaceChildren(controls(v));

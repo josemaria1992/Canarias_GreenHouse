@@ -416,6 +416,13 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             svc.reset(p.username, start)
         return {"ok": True}
 
+    from ..twin.nutrient_sim import Preparation, simulate as simulate_preparation
+
+    @app.post("/api/twin/nutrient/simulate")
+    def nutrient_simulate(body: Preparation, p: Principal = Depends(require(Perm.OPS_READ))):
+        """PROG-10: a labelled simulation of a nutrient preparation (synthetic fixture). Nothing is dosed or stored."""
+        return simulate_preparation(body)
+
     @app.post("/api/twin/fault")
     def fault(body: FaultIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
         refused(svc.twin.set_fault, body.target, body.fault)
