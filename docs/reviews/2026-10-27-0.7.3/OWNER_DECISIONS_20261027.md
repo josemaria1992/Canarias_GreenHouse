@@ -16,26 +16,30 @@ Implementation instructions:
 
 Acceptance: an older program cannot start after changed block safety is validated; editing a block draft alone does not apply its settings; updating the program without validation/current Twin evidence does not unblock it; the complete review/validate/retest journey does. Confirm the same behavior after restart. Use virtual/fake services.
 
-## Approved goal: one failed pump must not strand either sector
+## Approved: finish the interrupted Sector 1 cycle using Pump 2
 
-The owner requested:
+The owner has now clarified the earlier example. This **supersedes Sector 2-first / return to Sector 1 next turn**:
 
-> If one pump fails it should notify immediately and raise an alarm. Both sectors need always to be watered. It can then jump to the working pump watering sector 2, and when it is time to water sector 1 again, it should stop pump 2, close valve 2, open valve 1 and turn on pump 2 to water sector 1.
+1. Sector 1 is being watered by Pump 1 when Pump 1 fails.
+2. Promptly notify the operator and raise the pump-failure alarm through the dashboard's alarm workflow.
+3. Stop Pump 1. Retain the existing requirement to verify its OFF state before starting its replacement; a fault report or OFF command alone is not proof that it stopped.
+4. **Keep Valve 1 open.** Do not close/reopen it as though switching sectors, and do not open Valve 2 merely because the pump changed.
+5. Start the healthy Pump 2 for **Sector 1**, subject to the existing readiness, safety, resource and current Twin-proof checks.
+6. Pump 2 completes **the remaining watering time of Sector 1's interrupted cycle**, rather than restarting a full cycle or moving to Sector 2 first.
+7. Then continue to Sector 2 through its configured normal sector-changeover procedure and watering cycle.
 
-Record the requested behavior accurately:
+The owner wants both sectors served using the healthy pump rather than abandoning one because its usual pump failed. This is coordinated **mid-cycle replacement**, not merely choosing a different lead on the next independent program start. The previous recommendation to restrict all fallback to a later start was not accepted.
 
-- On detection of a pump failure, promptly notify the operator and raise an alarm through the dashboard's alarm workflow.
-- Use the healthy pump to serve both sectors rather than abandoning one sector because its usual pump failed.
-- The owner's example changes from Pump 2 watering Sector 2 to Pump 2 watering Sector 1 in this order: **stop Pump 2 → close Valve 2 → open Valve 1 → start Pump 2**.
-- The earlier recommendation to restrict all fallback to a later independent program start has **not** been accepted as the final product behavior. The owner has instead requested coordinated service of both sectors using the working pump.
-- This is a software requirement, not permission to operate physical outputs or commission an unconfirmed installation. Existing stop verification, alarms, interlocks and the approved hard window finish remain requirements. Record a blocked changeover honestly if its prerequisites cannot be established; do not infer successful stop/valve motion from a drawing or elapsed time alone.
+Implementation instructions: preserve the interrupted operation's sector, remaining target, window and identity; record the failure, replacement pump and changeover in its audit/history. Do not mark an interrupted cycle complete before its remaining target is actually satisfied. Retain existing fault-stop behavior when a prerequisite for replacement cannot be verified, and report why takeover was blocked. Add fake-service tests proving OFF verification precedes the replacement ON, Valve 1 stays open, the remaining timed target is retained, and Sector 2 is served afterwards. Test replacement refusal and resource conflicts without assuming that another operation may be preempted.
+
+This is a software requirement, not permission to operate physical outputs or commission an unconfirmed installation. Existing stop verification, alarms, interlocks and the approved hard window finish remain requirements. Do not extend a window or exceed block runtime limits implicitly to make up an interrupted cycle. Do not infer successful stop/valve motion from a drawing or elapsed time alone. Fix C075-01's missing standby proof dependency before relying on replacement-pump evidence.
 
 ## Details still awaiting the owner's answer
 
-Questions were sent to the owner; no answer is recorded yet:
+Priority and timed-cycle remainder are now answered: **finish Sector 1 first, with its remaining time, then Sector 2**. These details remain unanswered:
 
-1. If Pump 1 fails while watering Sector 1, does Pump 2 serve Sector 2 first and return to Sector 1 at its next scheduled turn, or finish the interrupted Sector 1 watering first?
-2. When Sector 1 is served again, is the target only its remaining time/litres or a full new cycle? How unmeasurable delivery is treated must remain explicit; never guess delivered litres.
-3. Can either pump hydraulically supply either sector through the selected sector valve, or is that arrangement not confirmed?
+1. Physical routing: can either pump supply either sector through its sector valve? Do not infer a confirmed installation topology from this software request.
+2. Replacement already busy: if Pump 2 is already watering Sector 2, may that operation be interrupted to finish Sector 1, or must Sector 1 wait? Normal parallel/sequential operation has not been confirmed here.
+3. Timing/volume accounting: the owner specified the remaining **time**. Explicitly confirm whether downtime pauses that watering countdown and what target to preserve for litre-based cycles. Never guess delivered litres when measurement is unavailable.
 
-Do not invent answers, fixed pump/valve IDs, simultaneous watering, early schedule starts or a physical changeover procedure. The owner's named pumps/sectors describe the example; implementation must use the installation's explicit equipment/block relationships. Implement the approved block-safety decision and review fixes independently while the failover details are clarified. Update this section with the owner's actual answers before completing the coordinated failover instructions.
+Do not invent answers, fixed pump/valve IDs, simultaneous watering, early schedule starts, or a physical changeover procedure. The owner's named pumps/sectors describe the example; implementation must use the installation's explicit equipment/block relationships. Implement the approved block-safety decision, review fixes and the confirmed portions independently while these details are clarified. Update this section with actual owner answers before completing the coordinated failover instructions.
