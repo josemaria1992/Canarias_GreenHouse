@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 RUN_KINDS = ("PROGRAM_OP_STARTED", "PROGRAM_STEP", "PROGRAM_OP_STOPPING", "PROGRAM_GUARD_STOP", "PROGRAM_STOP_UNVERIFIED",
-             "PROGRAM_OP_ENDED")
+             "PROGRAM_OP_ENDED", "PROGRAM_PUMP_FAILED", "PROGRAM_PUMP_REPLACED", "PROGRAM_PUMP_REPLACEMENT_BLOCKED")
 ALARM_KINDS = ("ALARM_RAISED", "ALARM_CLEARED", "ALARM_ACKNOWLEDGED", "PROGRAM_ALARM_RAISED", "PROGRAM_ALARM_CLEARED",
                "TWIN_ALARM_RAISED", "TWIN_ALARM_CLEARED", "EQUIPMENT_FAULT", "EQUIPMENT_FAULT_CLEARED")
 
@@ -164,6 +164,14 @@ def _words(kind: str, p: dict) -> str:
         return f"stopping: {p.get('why')} ({p.get('result')})"
     if kind == "PROGRAM_OP_ENDED":
         return f"ended {p.get('result')}: {p.get('reason') or ''}".rstrip(": ")
+    if kind == "PROGRAM_PUMP_FAILED":
+        return f"{p.get('failed')} failed ({p.get('why')}); {p.get('standby')} takes over this cycle"
+    if kind == "PROGRAM_PUMP_REPLACED":
+        w = p.get("watered_s")
+        return (f"{p.get('by')} replaced {p.get('failed')} after {p.get('changeover_s')} s"
+                + (f"; {w:.0f} s had been watered, the rest continues" if w is not None else ""))
+    if kind == "PROGRAM_PUMP_REPLACEMENT_BLOCKED":
+        return f"{p.get('standby')} could not replace {p.get('failed')}: {p.get('blocked')}"
     if kind in ("PROGRAM_GUARD_STOP", "PROGRAM_STOP_UNVERIFIED"):
         return str(p.get("why") or p.get("items"))
     return str(p.get("message") or p.get("rule") or p.get("rule_id") or p)[:200]

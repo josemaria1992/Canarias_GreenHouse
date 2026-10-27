@@ -137,6 +137,10 @@ class Op:
     # operation's duty until it ends: re-checked before every later stop step and before the operation is finished.
     stopped: dict[str, ItemView] = field(default_factory=dict)
     stop_hold: bool = False                          # the plan holds because an earlier OFF is no longer proven
+    on_since: dict = field(default_factory=dict)     # item -> mono it was switched ON (its own feedback grace)
+    # owner decision 27 Oct 2026: a duty pump failing mid-cycle is replaced by its partner for the rest of the cycle
+    replace: dict | None = None                      # {failed, by, why, phase, since, elapsed}
+    replaced: list = field(default_factory=list)     # pumps already replaced in this operation (never twice)
 
     def public(self, now: float) -> dict:
         return {"op_id": self.op_id, "program_id": self.program_id, "version": self.version, "origin": self.origin,
@@ -1009,6 +1013,7 @@ class Engine:
             self._fail(op, why)
             return False
         op.held[iid] = it
+        op.on_since[iid] = self.clock.mono()
         op.stopped.pop(iid, None)
         use = self._usage.setdefault(iid, {"off": None, "starts": []})
         use["starts"] = [t for t in use["starts"] if self.clock.mono() - t < 3600] + [self.clock.mono()]
@@ -1255,10 +1260,14 @@ class Engine:
             return
         if self._guards(op):
             return
+        if op.replace is not None:                   # a failed duty pump is being replaced: nothing else advances
+            self._replacing(op)
+            return
         for iid in list(op.on):                      # a fault input on running equipment stops the operation
             held = self._held(op, iid)
             if iid not in op.off_sent and held is not None and (why := self._fault_refusal(held)) is not None:
-                self._fail(op, why)
+                if not self._try_replace(op, iid, why):
+                    self._fail(op, op.reason or why)
                 return
         for iid in list(op.stopped):                 # RR-01: switched OFF by this operation, now ON again
             if self._off_state(op, iid)[1] is True:
@@ -1290,10 +1299,111 @@ class Engine:
             return True
         grace = fb.feedback_timeout_s or 5.0
         since = op.step_since if op.body.action.type == "SEQUENCE" else op.started_mono
+        since = max(since, op.on_since.get(iid, since))
         if self.clock.mono() - since <= grace:
             return True
-        self._fail(op, f"{it.name}: {fb.label} is {'UNKNOWN' if v is None else 'OFF'} while it should be ON")
+        why = f"{it.name}: {fb.label} is {'UNKNOWN' if v is None else 'OFF'} while it should be ON"
+        if not self._try_replace(op, iid, why):
+            self._fail(op, op.reason or why)
         return False
+
+    # ------------------------------------------------------------------ duty pump replacement (owner, 27 Oct 2026)
+    REPLACE_OFF_TIMEOUT_S = 30.0
+
+    def _try_replace(self, op: Op, iid: str, why: str) -> bool:
+        """A running duty pump failed (a fault input, or its running feedback lost). Its partner finishes the rest of
+        this cycle: the failed pump is switched OFF and verified OFF first, valves stay as they are, the remaining
+        watering time or litres are kept, and the operation's limits and window are not extended. Returns False
+        (and records why) when replacement is not possible, so the normal fault stop runs."""
+        duty = op.body.duty
+        if not duty or iid not in duty or op.body.action.type != "SEQUENCE" or op.state != "RUNNING":
+            return False
+        other = duty[1] if iid == duty[0] else duty[0]
+
+        def blocked(reason):
+            self.event("PROGRAM_PUMP_REPLACEMENT_BLOCKED", {"op_id": op.op_id, "failed": iid, "standby": other,
+                                                           "why": why, "blocked": reason}, "system")
+            op.reason = f"{why}; replacement by {other} not possible: {reason}"
+            return False
+        if iid in op.replaced or other in op.replaced:
+            return blocked("a pump of this pair was already replaced in this operation")
+        it = self._items.get(other)
+        if it is None or it.command_point is None:
+            return blocked(f"{other} has no command channel")
+        if other in op.on:
+            return blocked(f"{other} is already running in this operation")
+        if (r := self._item_refusal(other)) is not None:
+            return blocked(r)
+        if (r := getattr(self.io, "program_refusal", lambda p, v: None)(op.program_id, op.version)) is not None:
+            return blocked(r)
+        if (busy := self.arbiter.acquire(op.op_id, [other])) is not None:
+            return blocked(busy)                     # another operation holds it: never preempted
+        a = op.body.action
+        step = a.steps[op.step] if op.step < len(a.steps) else None
+        elapsed = self.clock.mono() - op.step_since if step is not None and step.do == "RUN" else None
+        op.replace = {"failed": iid, "by": other, "why": why, "phase": "STOPPING", "since": self.clock.mono(),
+                      "elapsed": elapsed}
+        self.alarm("PROGRAM_PUMP_FAILED", op.program_id, True, {"op_id": op.op_id, "item": iid, "why": why,
+                                                                "message": f"{why}: {other} takes over this cycle"})
+        self.event("PROGRAM_PUMP_FAILED", {"op_id": op.op_id, "failed": iid, "standby": other, "why": why,
+                                           "step": op.step, "measured_L": op.measured_L}, "system")
+        held = self._held(op, iid)
+        self.io.command(held.command_point, False, actor="program", reason=f"pump replacement {op.op_id}",
+                        priority=Priority.STOP)
+        op.off_sent.add(iid)
+        return True
+
+    def _replacing(self, op: Op) -> None:
+        r, mono = op.replace, self.clock.mono()
+        failed, other = r["failed"], r["by"]
+        if r["phase"] == "STOPPING":
+            ok, coil, fb = self._off_state(op, failed)
+            if not ok:
+                if mono - r["since"] > self.REPLACE_OFF_TIMEOUT_S:
+                    op.replace = None
+                    self.event("PROGRAM_PUMP_REPLACEMENT_BLOCKED", {"op_id": op.op_id, "failed": failed, "standby": other,
+                                                                   "blocked": "not verified OFF"}, "system")
+                    self._fail(op, f"{r['why']}; {failed} not verified OFF within {self.REPLACE_OFF_TIMEOUT_S:g} s "
+                                   f"(output {coil}, feedback {fb}): {other} was not started")
+                return
+            op.on.remove(failed)
+            op.off_sent.discard(failed)
+            self._verified_off(op, failed)
+            # the rest of this operation runs with the partner: every later step and its stop plans name it
+            swap = {failed: other, other: failed}
+
+            def walk(x):
+                if isinstance(x, dict):
+                    return {k: (swap.get(v, v) if k == "item" and isinstance(v, str) else walk(v)) for k, v in x.items()}
+                if isinstance(x, list):
+                    return [walk(v) for v in x]
+                return x
+            d = op.body.model_dump(mode="json")
+            d["action"] = walk(d["action"])
+            op.body = ProgramBody.model_validate(d)
+            r["phase"] = "STARTING"
+            if not self._switch_on(op, other):
+                op.replace = None                    # _switch_on already failed the operation with its reason
+                return
+            r["started"] = mono
+            return
+        # STARTING: the partner reports running (or has no running feedback), then the cycle continues
+        it = self._items.get(other)
+        fb = it.feedback_role if it else None
+        v = self._role_value(it, fb.role) if fb else True
+        if v is not True:
+            if mono - r["started"] > (fb.feedback_timeout_s or 5.0):
+                op.replace = None
+                self._fail(op, f"{r['why']}; {other} started as its replacement but "
+                               f"{fb.label} is {'UNKNOWN' if v is None else 'OFF'}")
+            return
+        if r["elapsed"] is not None:                 # the watering countdown resumes where it stopped
+            op.step_since = mono - r["elapsed"]
+        op.replaced.append(failed)
+        op.replace = None
+        self.event("PROGRAM_PUMP_REPLACED", {"op_id": op.op_id, "failed": failed, "by": other, "step": op.step,
+                                             "watered_s": r["elapsed"], "measured_L": op.measured_L,
+                                             "changeover_s": round(mono - r["since"], 1)}, "system")
 
     def _deliver(self, op: Op, meter: str, role: str, target: float, no_flow_s: float, min_flow: float, finish) -> bool:
         it = self._items.get(meter)
