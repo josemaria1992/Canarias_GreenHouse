@@ -313,6 +313,13 @@
       st.diagram.symbols = st.diagram.symbols.filter(x => x.node !== meterId);
       const sm = { node: meterId, x: mid[0] - SYM.meter.w / 2, y: mid[1] - SYM.meter.h / 2, rot, label: "", ports: {} };
       st.diagram.symbols.push(sm);
+      // C077-07: along the pipe the meter snaps to the grid like any placed symbol, kept clear of the run's ends; across
+      // it, the inlet and outlet sit exactly on the pipe's centre line (an off-grid imported pipe keeps its line, so
+      // nothing disconnects or jogs)
+      const bx = G.box("meter", sm), lo = Math.min(horiz ? a[0] : a[1], horiz ? b[0] : b[1]) + 20,
+        hi = Math.max(horiz ? a[0] : a[1], horiz ? b[0] : b[1]) - 20 - (horiz ? bx.w : bx.h);
+      if (horiz) sm.x += Math.min(Math.max(snapG(bx.x), lo), Math.max(lo, hi)) - bx.x;
+      else sm.y += Math.min(Math.max(snapG(bx.y), lo), Math.max(lo, hi)) - bx.y;
       const pin = G.anchor("meter", sm, "in");                        // the inlet sits exactly on the pipe's line
       if (pin) { if (horiz) sm.y += a[1] - pin.y; else sm.x += a[0] - pin.x; }
       st.graph.edges = st.graph.edges.filter(x => x.id !== edgeId);
@@ -551,7 +558,7 @@
           const g = svg("g", { class: "hed-sym" + (selected ? " sel" : "") + (lit ? " lit" : ""), "data-node": s.node, tabindex: "0", role: "button",
             "aria-label": `${KIND_WORD[n.kind]} ${label}`, onpointerdown: ev => symDown(ev, s.node) },
             svg("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: n.kind === "tank" ? 4 : 8, class: "hed-box k-" + n.kind }),
-            iconAt(KIND_ICON[n.kind], b), svg("text", { x: b.x + b.w / 2, y: b.y + b.h + 14, class: "hed-label", "text-anchor": "middle" }, label),
+            iconAt(KIND_ICON[n.kind], b, n.kind === "meter" ? s.rot : 0), svg("text", { x: b.x + b.w / 2, y: b.y + b.h + 14, class: "hed-label", "text-anchor": "middle" }, label),
             n.kind === "tank" && (opt.items[n.item] || {}).capacity_L ? svg("text", { x: b.x + b.w / 2, y: b.y + b.h - 6, class: "hed-cap", "text-anchor": "middle" },
               `${Number(opt.items[n.item].capacity_L).toLocaleString()} L`) : null);
           if (st.overlay && st.overlay.tanks && st.overlay.tanks[n.id]) {
@@ -600,10 +607,11 @@
       put(canvas, ...kids);
       drawSide();
     }
-    function iconAt(name, b) {
+    function iconAt(name, b, rot = 0) {
       if (!name || !window.AqIcons) return null;
       const i = window.AqIcons.icon(name, 24);
-      const g = svg("g", { transform: `translate(${b.x + b.w / 2 - 12} ${b.y + b.h / 2 - 12})`, class: "hed-icon" });
+      // a directional glyph (the flow meter's arrow) turns with its symbol, so a vertical meter points along its pipe
+      const g = svg("g", { transform: `translate(${b.x + b.w / 2 - 12} ${b.y + b.h / 2 - 12})${rot ? ` rotate(${rot} 12 12)` : ""}`, class: "hed-icon" });
       for (const c of [...i.childNodes]) g.appendChild(c);
       return g;
     }

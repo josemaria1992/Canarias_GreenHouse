@@ -93,3 +93,44 @@ test("UX-03: an earlier pipe with equipment drawn along it is never joined end t
   assert.equal(ed.get().graph.edges.length, 0);
   assert.equal(ed.get().diagram.sketches.length, 1);
 });
+
+// C077-07 (Codex 0.7.7): the meter snaps to the grid along its pipe, its inlet and outlet stay on the pipe's centre line,
+// and its flow glyph turns with it
+const meterOf = ed => ed.get().diagram.symbols.find(s => s.node === "m");
+const routeOf = (ed, id) => ed.get().diagram.routes.find(r => r.edge === id).points;
+test("C077-07: along a pipe the meter lands on the grid, inlet and outlet exactly on the pipe line", () => {
+  for (const [p, v, rot] of [[[100, 200], [510, 200], 0], [[510, 200], [100, 200], 180], [[300, 100], [300, 610], 90], [[300, 610], [300, 100], 270]]) {
+    const ed = editor({ p, v }, rot);
+    assert.equal(ed.insertMeter("e1", "m"), true);
+    const m = meterOf(ed), horiz = rot === 0 || rot === 180;
+    assert.equal(m.rot, rot);
+    assert.equal((horiz ? m.x : m.y) % 10, 0, `on the grid along the pipe (${JSON.stringify(m)})`);
+    const a = routeOf(ed, "e1-in"), b = routeOf(ed, "e1-out");
+    assert.ok(ortho(a) && ortho(b));
+    const end = a[a.length - 1], start = b[0];
+    assert.equal(horiz ? end[1] : end[0], horiz ? start[1] : start[0], "inlet and outlet on one line: no jog");
+  }
+});
+
+test("C077-07: on an off-grid imported pipe the meter keeps the pipe's line (no disconnect, no jog)", () => {
+  const ed = editor({ p: [103, 207], v: [513, 207] });
+  assert.equal(ed.insertMeter("e1", "m"), true);
+  const a = routeOf(ed, "e1-in"), b = routeOf(ed, "e1-out");
+  assert.ok(ortho(a) && ortho(b) && a.length >= 2 && b.length >= 2);
+  assert.equal(a[a.length - 1][1], b[0][1]);
+  assert.equal(new Set([...a, ...b].map(q => q[1])).size, 1, "a straight run stays straight");
+  assert.equal(meterOf(ed).x % 10, 0);
+});
+
+test("C077-07: a vertical meter's flow glyph is turned with it", () => {
+  window.AqIcons = { icon: () => fakeEl("svg") };
+  const root = fakeEl("div");
+  const graph = { nodes: [{ id: "m", kind: "meter", item: "m" }], edges: [], measures: [] };
+  const diagram = { width: 600, height: 600, grid: 10, routes: [], symbols: [{ node: "m", x: 200, y: 200, rot: 90, ports: {} }] };
+  E.create(root, { symbols: SYM, items: ITEMS, graph, diagram, readOnly: true });
+  const found = [];
+  const walk = n => { if (!n || typeof n !== "object") return; if (n.attrs && n.attrs.class === "hed-icon") found.push(n.attrs.transform); (n.children || []).forEach(walk); };
+  walk(root);
+  delete window.AqIcons;
+  assert.ok(found.length === 1 && /rotate\(90 12 12\)/.test(found[0]), JSON.stringify(found));
+});

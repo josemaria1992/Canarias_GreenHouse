@@ -56,7 +56,8 @@
   function status() {
     const pv = G.ch && G.ch.preview, hyd = pv && pv.hydraulics;
     if (G.editing) return h("span", { class: "pill warn" }, G.draft ? `${G.draft} — not saved` : "editing — not saved");
-    if (!G.loaded || !G.loaded.topo.graph.nodes.length) return h("span", { class: "pill" }, "no design yet");
+    if (!G.loaded || !G.loaded.topo.graph.nodes.length)
+      return h("span", { class: "pill" }, G.loaded && (G.loaded.topo.rev || G.loaded.dia.rev) ? "empty design" : "no design yet");
     if (!hyd) return h("span", { class: "pill ok" }, "same as the Overview");
     return h("span", { class: "pill warn" }, hyd.graph_changed ? "connections differ from the Overview" : "drawing differs from the Overview");
   }
@@ -85,12 +86,21 @@
     }
     draw(v);
   }
+  /** C077-06 (owner, 27 Oct 2026): a new design clears the twin's drawing, pipes and connections only: no symbol,
+   *  route, sketch, placeholder, box or label survives. The workspace settings (view, title, size, grid) stay, and so
+   *  does everything else (equipment library, the real Overview, programs, history): the equipment is still listed
+   *  beside the drawing to place. */
+  function emptyDiagram(old) {
+    const d = {};
+    for (const k of ["kind", "format", "view", "title", "width", "height", "grid"]) if (old && old[k] !== undefined) d[k] = old[k];
+    return Object.assign(d, { symbols: [], routes: [], sketches: [], placeholders: [], shapes: [], texts: [] });
+  }
   function newDesign(v) {
-    const has = G.loaded && G.loaded.topo.graph.nodes.length;
+    const d0 = G.loaded && G.loaded.dia.diagram || {};
+    const has = G.loaded && (G.loaded.topo.graph.nodes.length || ["symbols", "sketches", "placeholders", "shapes", "texts"].some(k => (d0[k] || []).length));
     if (has && G.arm !== "new") { G.arm = "new"; G.msg.flow = { text: "Press New design again to start an empty design. The twin's saved design stays until you save the new one; the Overview is not touched.", bad: true }; return draw(v); }
     G.arm = null; G.migration = null; G.editing = true; G.draft = "new design";
-    const d = Object.assign({}, G.loaded.dia.diagram, { symbols: [], routes: [] });
-    build(v, { nodes: [], edges: [], measures: [] }, d);
+    build(v, { nodes: [], edges: [], measures: [] }, emptyDiagram(d0));
     G.msg.flow = { text: "An empty design: place the equipment from the list beside the drawing, then connect it." };
     draw(v);
   }
@@ -211,7 +221,8 @@
   function build(v, graph, diagram) {
     if (!G.loaded) return;
     const { topo, dia } = G.loaded;
-    const none = !graph && !topo.graph.nodes.length && !((dia.diagram || {}).placeholders || []).length;
+    // "no design yet" is a twin that never saved one; a saved empty design stays empty (no reference shown over it)
+    const none = !graph && !topo.rev && !dia.rev && !topo.graph.nodes.length && !((dia.diagram || {}).placeholders || []).length;
     if (none && !G.editing) {                             // no design yet: the Overview's drawing as the reference, read-only
       G.ed = null; G.rev = { t: topo.rev, d: dia.rev };
       if (G.refFor === revs(G.loaded) && G.host.childNodes.length) return;   // already shown for these revisions

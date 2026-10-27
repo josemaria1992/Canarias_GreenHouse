@@ -102,3 +102,31 @@ def test_prog10_the_twin_simulates_a_nutrient_preparation_labelled(live_and_twin
                   headers=H)
     assert r.status_code == 200, r.text
     assert "SIMULATED" in r.json()["label"] and r.json()["final"]["ec_bulk"] > 0.35
+
+
+def test_c077_06_an_empty_design_clears_only_the_twins_drawing_and_keeps_equipment_to_place(live_and_twin):
+    """Codex 0.7.7 C077-06 (owner 27 Oct 2026): after the earlier drawing was imported (sketches, placeholders, labels),
+    a new empty design saved in the twin is really empty on reload; the equipment is still offered to place; the
+    Overview and the equipment on the main dashboard are untouched."""
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    _parts(live, hl)
+    H = _twin_h(twin, "bench1")
+    assert twin.post("/api/twin/design/import", json={}, headers=H).status_code == 200
+    t, d = twin.get("/api/topology").json(), twin.get("/api/diagram/installation").json()
+    old = d["diagram"]
+    assert old["sketches"] or old["placeholders"]                         # the earlier drawing's content is there
+    blank = {k: old[k] for k in ("kind", "format", "view", "title", "width", "height", "grid")} | {
+        "symbols": [], "routes": [], "sketches": [], "placeholders": [], "shapes": [], "texts": []}
+    ov_before = live.get("/api/overview/diagram", headers=hl).json()
+    items_before = live.get("/api/equipment/items", headers=hl).json()
+    r = twin.post("/api/drawing/installation", json={"graph": {"nodes": [], "edges": [], "measures": []}, "diagram": blank,
+                                                     "expected_topology_rev": t["rev"], "expected_diagram_rev": d["rev"],
+                                                     "note": "new design"}, headers=H)
+    assert r.status_code == 200, r.text
+    t2, d2 = twin.get("/api/topology").json(), twin.get("/api/diagram/installation").json()
+    assert t2["graph"]["nodes"] == [] and t2["graph"]["edges"] == [] and t2["rev"] > 0 and d2["rev"] > 0
+    for k in ("symbols", "routes", "sketches", "placeholders", "shapes", "texts"):
+        assert d2["diagram"].get(k, []) == [], k                         # empty lists are left out when stored
+    assert {i for i in t2["items"]} >= {p[0] for p in PARTS}              # still listed beside the drawing to place
+    assert live.get("/api/overview/diagram", headers=hl).json() == ov_before
+    assert live.get("/api/equipment/items", headers=hl).json() == items_before
