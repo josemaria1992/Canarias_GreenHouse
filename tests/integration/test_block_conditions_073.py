@@ -13,6 +13,7 @@ def test_block_conditions_join_every_program_and_old_digests_stay():
     import hashlib, json  # noqa: E401
     d = BlockBody(safety=Safety(max_runtime_s=600)).model_dump(mode="json")
     d["safety"] = {"max_runtime_s": 600.0}                         # how 0.7.1/0.7.2 wrote it
+    d.pop("duty", None)
     assert digest(BlockBody(safety=Safety(max_runtime_s=600))) == hashlib.sha256(
         json.dumps(d, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
