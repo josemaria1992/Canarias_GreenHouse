@@ -10,7 +10,7 @@ Reviewed implementation `de3088ab7d`, summary `c32121f`, and subsequent CI-only 
 - The owner **did not approve and now explicitly rejects the one-hour abandonment limit**. Do not substitute another invented timeout. The approved hard window finish and existing safety limits remain.
 - Keep the approved mid-cycle sequence: immediate alarm/notification, failed pump OFF and verified, same sector valve stays open, healthy pump finishes the remainder, then the next sector follows its configured sequence. No physical operation is authorized by this review.
 - Latest Twin request: import Overview's complete diagram, pipes and connections so it is ready for simulation; an empty design must actually look empty; flowmeters must sit in series, aligned with the pipe and grid like valves.
-- A scope question is pending: does “empty design” clear the Twin diagram only or also the Twin equipment library? Do not delete Equipment, the real Overview, programs or history based on an assumption. The drawing-reset defect below can be fixed independently.
+- **Empty-design scope confirmed by the owner after this review:** clear the Twin diagram, pipes and connections only. Keep everything else, including the Equipment library, real Overview, programs and history. Equipment must remain available in the side palette to start the new diagram; no equipment needs to be recreated.
 
 ## Findings and minimum corrections
 
@@ -54,7 +54,7 @@ Continue valid acquisition/accounting through takeover or consume the actual int
 
 `web/twin-graph.js:88–94` copies the old diagram and clears only `symbols` and `routes`. `sketches`, `placeholders`, `texts` and `shapes` survive, and `hydraulic-editor.js:495–518` still renders them.
 
-Independent execution of the actual function shows an empty graph retaining the old pipe sketch, tank placeholder, box and label. Reset **all drawing content**, plus graph nodes/edges/measurement associations, using a clean diagram model. Retain only intentional workspace settings. Verify immediate blank appearance, save/reload and no reference-overlay resurrection; preserve real Overview and unrelated data. Resolve the pending library scope separately before any wider deletion.
+Independent execution of the actual function shows an empty graph retaining the old pipe sketch, tank placeholder, box and label. Reset **all drawing content**, plus graph nodes/edges/measurement associations, using a clean diagram model. Retain intentional workspace settings and all underlying equipment/configuration. The owner has confirmed that everything else remains, and equipment must be available at the side for placing into the new diagram. Verify immediate blank appearance, a populated equipment palette, save/reload and no reference-overlay resurrection; preserve Equipment, real Overview, programs and history. Removing a symbol must never delete its equipment record.
 
 ### C077-07 — P2: inline meter insertion ignores grid snapping
 
