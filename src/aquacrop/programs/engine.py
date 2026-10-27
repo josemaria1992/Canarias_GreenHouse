@@ -186,6 +186,7 @@ class Engine:
         self._faults: dict[str, str] = {}        # item -> fault inputs while its EQUIPMENT_FAULT alarm is raised
         self._perm_since: dict[tuple, float | None] = {}   # (program, start condition) -> mono since it holds
         self._rep: dict[str, dict] = {}          # repeat window key -> {"n": cycles requested, "last_end": mono}
+        self._resume: dict[str, dict] = {}       # program -> the rest of a cycle waiting for its partner pump (owner)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> dict:
@@ -509,6 +510,7 @@ class Engine:
                         self._begin_stop(o, why, result="STOPPED")
             for o in list(self.ops.values()):
                 self._advance(o)
+            self._resumes()
             if self.mode == "STOPPING":
                 self._settle_stopping()
             if self.mode == "AUTO":
@@ -1033,7 +1035,7 @@ class Engine:
 
     # Which plan a stop follows (review R07-02). A completed sequence has already run its normal stop as steps.
     FAULT_RESULTS = ("FAILED", "GUARD_STOPPED", "STOPPED")      # a failure, a stop condition, a stop of everything
-    NORMAL_RESULTS = ("STOPPED_BY_USER", "RUNTIME_GUARD", "WINDOW_ENDED", "CANCELLED", "DONE")
+    NORMAL_RESULTS = ("STOPPED_BY_USER", "RUNTIME_GUARD", "WINDOW_ENDED", "CANCELLED", "DONE", "PAUSED")
 
     def _choose_plan(self, op: Op, result: str) -> tuple[str, list]:
         a = op.body.action
@@ -1337,7 +1339,7 @@ class Engine:
         if (r := getattr(self.io, "program_refusal", lambda p, v: None)(op.program_id, op.version)) is not None:
             return blocked(r)
         if (busy := self.arbiter.acquire(op.op_id, [other])) is not None:
-            return blocked(busy)                     # another operation holds it: never preempted
+            return self._pause_for(op, iid, other, why, busy)   # never preempted: this sector waits its turn
         a = op.body.action
         step = a.steps[op.step] if op.step < len(a.steps) else None
         elapsed = self.clock.mono() - op.step_since if step is not None and step.do == "RUN" else None
@@ -1352,6 +1354,67 @@ class Engine:
                         priority=Priority.STOP)
         op.off_sent.add(iid)
         return True
+
+    RESUME_GIVE_UP_S = 3600.0
+
+    def _pause_for(self, op: Op, failed: str, other: str, why: str, busy: str) -> bool:
+        """Owner, 27 Oct 2026: the sectors take turns, so the healthy pump serves them one after the other. When it is
+        busy with the other sector, this cycle stops through its normal stop (the failed pump OFF, this sector's valve
+        closed, each verified) and its remaining time or litres wait; when the pump is free the rest of the cycle
+        starts again (_resumes) with its own startup, limits and window. The pause never counts as watering."""
+        a = op.body.action
+        steps = [x.model_dump(mode="json") for x in a.steps]
+        rem = None
+        if op.step < len(steps):
+            st_ = steps[op.step]
+            if st_["do"] == "RUN":
+                st_["seconds"] = rem = max(1.0, round(st_["seconds"] - (self.clock.mono() - op.step_since), 1))
+            elif st_["do"] == "DELIVER":
+                st_["target_L"] = rem = max(0.01, round(st_["target_L"] - (op.measured_L - op.step_base_L), 3))
+        later = [x for x in steps[op.step:]]
+        done_before = [x for x in steps[:op.step] if x["do"] in ("ON", "WAIT")]   # the startup runs again
+        d = op.body.model_dump(mode="json")
+        d["action"] = dict(d["action"], steps=done_before + later)
+        self._resume[op.program_id] = {"version": op.version, "body": d, "failed": failed, "partner": other,
+                                       "why": why, "from_op": op.op_id, "window_end": op.window_end_utc,
+                                       "since": self.clock.mono(), "remaining": rem, "last": None}
+        self.alarm("PROGRAM_PUMP_FAILED", op.program_id, True, {"op_id": op.op_id, "item": failed, "why": why,
+                                                                "message": f"{why}: this sector waits for {other}"})
+        self.event("PROGRAM_PUMP_WAITING", {"op_id": op.op_id, "failed": failed, "partner": other, "busy": busy,
+                                            "remaining": rem, "step": op.step}, "system")
+        self._begin_stop(op, f"{why}; {other} is busy ({busy}): the rest of this cycle waits for it", result="PAUSED")
+        return True
+
+    def _resumes(self) -> None:
+        for pid, r in list(self._resume.items()):
+            if any(o.program_id == pid for o in self.ops.values()):
+                continue                              # its paused operation is still stopping
+            if r["window_end"] is not None and self.clock.utc() >= r["window_end"] or \
+                    self.clock.mono() - r["since"] > self.RESUME_GIVE_UP_S:
+                del self._resume[pid]
+                self.event("PROGRAM_RESUME_ABANDONED", {"program": pid, "from_op": r["from_op"], "remaining": r["remaining"],
+                                                        "why": "its window ended" if r["window_end"] is not None and
+                                                        self.clock.utc() >= r["window_end"] else "waited an hour"}, "system")
+                continue
+            if self.mode not in ("AUTO", "MANUAL"):
+                continue
+            probe = f"resume-probe:{pid}"
+            if self.arbiter.acquire(probe, [r["partner"]]) is not None:
+                continue                              # the partner still serves the other sector
+            self.arbiter.release(probe)
+            try:
+                op = self._start(pid, r["version"], ProgramBody.model_validate(r["body"]), origin="RESUME", actor="system",
+                                 key=None, window_end=r["window_end"])
+            except Refused as e:
+                if r["last"] != str(e):
+                    r["last"] = str(e)
+                    self.event("PROGRAM_RESUME_WAITING", {"program": pid, "why": str(e)}, "system")
+                continue
+            del self._resume[pid]
+            self.event("PROGRAM_RESUMED", {"program": pid, "op_id": op.op_id, "from_op": r["from_op"],
+                                           "remaining": r["remaining"], "lead": next(
+                                               (x.item for x in op.body.action.steps if x.do == "ON" and x.item in (op.body.duty or ())), None)},
+                       "system")
 
     def _replacing(self, op: Op) -> None:
         r, mono = op.replace, self.clock.mono()

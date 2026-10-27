@@ -43,3 +43,19 @@ Priority and timed-cycle remainder are now answered: **finish Sector 1 first, wi
 3. Timing/volume accounting: the owner specified the remaining **time**. Explicitly confirm whether downtime pauses that watering countdown and what target to preserve for litre-based cycles. Never guess delivered litres when measurement is unavailable.
 
 Do not invent answers, fixed pump/valve IDs, simultaneous watering, early schedule starts, or a physical changeover procedure. The owner's named pumps/sectors describe the example; implementation must use the installation's explicit equipment/block relationships. Implement the approved block-safety decision, review fixes and the confirmed portions independently while these details are clarified. Update this section with actual owner answers before completing the coordinated failover instructions.
+
+## Owner answers (27 October 2026, given in the Claude session, implemented in 0.7.7)
+
+1. **Routing:** either pump can supply either sector through the sector valve. Each sector block names both pumps as
+   its duty pair; whichever is healthy serves it.
+2. **Sectors take turns; one healthy pump waters both:** normally Valve 1 opens and Pump 1 waters Sector 1 for its
+   time, then stops and Valve 1 closes; Valve 2 opens and Pump 2 waters Sector 2 while Sector 1 waits. If Pump 1
+   breaks, Pump 2 waters both sectors and only the valves change: Pump 2 off, Valve 2 closed, Valve 1 open, Pump 2 on.
+   No sector is interrupted for another and sectors are never watered at the same time.
+   Implemented: the partner idle → it takes over the running cycle at once (0.7.6). The partner busy with the other
+   sector → this cycle stops through its normal stop (failed pump OFF, its valve closed, each verified), its remaining
+   time or litres wait, and when the partner is free the rest of the cycle starts again (its own startup, valve
+   opening, runtime limit and window). Abandoned, and recorded, if its window ends or it has waited an hour.
+3. **Changeover and litres:** the remaining watering time counts from when the replacement pump starts (the
+   changeover is not watering); a litre cycle delivers exactly the chosen litres in total, then the next cycle
+   follows.

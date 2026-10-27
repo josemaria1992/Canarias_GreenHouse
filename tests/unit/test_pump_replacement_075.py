@@ -65,18 +65,46 @@ def test_pump_a_fails_mid_cycle_pump_b_finishes_sector_1_then_sector_2():
     assert not r.twin.s.coils["digital_A.DO1"]
 
 
-def test_replacement_is_refused_when_the_partner_is_busy_and_the_cycle_fault_stops():
+def test_when_the_partner_serves_the_other_sector_this_sector_waits_its_turn_then_finishes():
+    """Owner answer 2: the sectors take turns, so one healthy pump serves both. Sector 2 is watering on pump-b when
+    pump-a fails on Sector 1: Sector 1 stops through its normal stop (pump-a OFF, valve 1 closed), Sector 2 is not
+    interrupted, then Sector 1's remaining time runs on pump-b with valve 1 open again."""
+    s2 = parse({"trigger": {"type": "MANUAL"}, "action": {"type": "SEQUENCE", "max_runtime_s": 600, "steps": [
+        {"do": "ON", "item": "valve-2"}, {"do": "ON", "item": "pump-b"}, {"do": "RUN", "seconds": 60},
+        {"do": "OFF", "item": "pump-b"}, {"do": "OFF", "item": "valve-2"}]}})
+    r = _rig(s1=_sector("valve-1", run_s=120), s2=s2)
+    r.e.run_now("t", "s2")
+    r.e.run_now("t", "s1")
+    r.run(32)
+    r.twin.set_fault("pump-a", "TRIP")
+    r.run(5)
+    w = next(p for kk, p in r.events if kk == "PROGRAM_PUMP_WAITING")
+    assert w["partner"] == "pump-b" and 85 <= w["remaining"] <= 92
+    f1 = next(x for x in r.e.finished if x["program_id"] == "s1")
+    assert f1["result"] == "PAUSED"
+    assert not r.twin.s.coils["digital_A.DO1"] and not r.twin.s.coils["digital_A.DO2"]     # pump-a off, valve 1 closed
+    assert r.twin.s.coils["digital_A.DO3"] and r.twin.s.coils["digital_A.DO5"]             # sector 2 not interrupted
+    r.run(40)                                                                              # sector 2 ends
+    res = next(p for kk, p in r.events if kk == "PROGRAM_RESUMED")
+    assert res["program"] == "s1" and res["lead"] == "pump-b"
+    assert r.twin.s.coils["digital_A.DO2"] and r.twin.s.coils["digital_A.DO3"] and not r.twin.s.coils["digital_A.DO5"]
+    r.run(120)
+    f = [x for x in r.e.finished if x["program_id"] == "s1"][-1]
+    assert f["result"] == "DONE" and f["origin"] == "RESUME"
+    assert w["remaining"] <= f["runtime_s"] <= w["remaining"] + 10                        # the rest, not a full cycle
+    assert not r.twin.s.coils["digital_A.DO3"] and not r.twin.s.coils["digital_A.DO2"]
+
+
+def test_a_waiting_rest_is_abandoned_when_its_window_ends_and_says_so():
     r = _rig(s1=_sector("valve-1"), other=parse({"trigger": {"type": "MANUAL"}, "action": {
         "type": "SEQUENCE", "max_runtime_s": 600, "steps": [{"do": "ON", "item": "pump-b"}, {"do": "RUN", "seconds": 300}]}}))
     r.e.run_now("t", "other")
     r.e.run_now("t", "s1")
     r.run(10)
+    r.e.RESUME_GIVE_UP_S = 30
     r.twin.set_fault("pump-a", "TRIP")
-    r.run(5)
-    b = next(p for kk, p in r.events if kk == "PROGRAM_PUMP_REPLACEMENT_BLOCKED")
-    assert b["standby"] == "pump-b"
-    f = next(x for x in r.e.finished if x["program_id"] == "s1")
-    assert f["result"] == "FAILED" and "not possible" in f["reason"]
+    r.run(40)
+    assert "PROGRAM_PUMP_WAITING" in r.kinds() and "PROGRAM_RESUME_ABANDONED" in r.kinds()
     assert any(o.program_id == "other" for o in r.e.ops.values())          # the other operation is not preempted
 
 

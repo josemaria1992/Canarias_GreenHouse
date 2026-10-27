@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 
 RUN_KINDS = ("PROGRAM_OP_STARTED", "PROGRAM_STEP", "PROGRAM_OP_STOPPING", "PROGRAM_GUARD_STOP", "PROGRAM_STOP_UNVERIFIED",
-             "PROGRAM_OP_ENDED", "PROGRAM_PUMP_FAILED", "PROGRAM_PUMP_REPLACED", "PROGRAM_PUMP_REPLACEMENT_BLOCKED")
+             "PROGRAM_OP_ENDED", "PROGRAM_PUMP_FAILED", "PROGRAM_PUMP_REPLACED", "PROGRAM_PUMP_REPLACEMENT_BLOCKED",
+             "PROGRAM_PUMP_WAITING", "PROGRAM_RESUMED")
 ALARM_KINDS = ("ALARM_RAISED", "ALARM_CLEARED", "ALARM_ACKNOWLEDGED", "PROGRAM_ALARM_RAISED", "PROGRAM_ALARM_CLEARED",
                "TWIN_ALARM_RAISED", "TWIN_ALARM_CLEARED", "EQUIPMENT_FAULT", "EQUIPMENT_FAULT_CLEARED")
 
@@ -170,6 +171,12 @@ def _words(kind: str, p: dict) -> str:
         w = p.get("watered_s")
         return (f"{p.get('by')} replaced {p.get('failed')} after {p.get('changeover_s')} s"
                 + (f"; {w:.0f} s had been watered, the rest continues" if w is not None else ""))
+    if kind == "PROGRAM_PUMP_WAITING":
+        rem = p.get("remaining")
+        return (f"{p.get('failed')} failed; {p.get('partner')} is serving the other sector: this sector waits for it"
+                + (f" ({rem:g} left)" if rem is not None else ""))
+    if kind == "PROGRAM_RESUMED":
+        return f"the rest of the cycle from {p.get('from_op')} runs now on {p.get('lead') or 'the healthy pump'}"
     if kind == "PROGRAM_PUMP_REPLACEMENT_BLOCKED":
         return f"{p.get('standby')} could not replace {p.get('failed')}: {p.get('blocked')}"
     if kind in ("PROGRAM_GUARD_STOP", "PROGRAM_STOP_UNVERIFIED"):
