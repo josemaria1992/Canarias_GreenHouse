@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.3 (2026-10-27): the twin can read the main dashboard's build
+
+- The main dashboard's identity file in the feed folder was written readable by its own account only (the service's
+  umask), so the twin could not compare builds. It is now written like the feed's other files (owner and the twin's
+  group may read it), and the twin also reads the build named in the main dashboard's snapshot. Found when 0.7.2 was
+  installed on the bench.
+
 ## 0.7.2 (2026-10-27): the twin reports its build where it may write
 
 - On the controller the twin's account may write only in the feed's `evidence` folder, so its build identity was not

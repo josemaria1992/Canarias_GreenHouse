@@ -98,6 +98,7 @@ def publish(feed_dir: Path | None, runtime: str, extra: dict | None = None) -> N
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(identity() | {"runtime": runtime} | (extra or {}), indent=1), encoding="utf-8")
+        os.chmod(tmp, 0o640)                  # readable by the partner's group, as the feed's other files (0.7.3)
         os.replace(tmp, p)
     except OSError:
         pass
@@ -111,6 +112,14 @@ def partner(feed_dir: Path | None, runtime: str) -> dict:
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        d = None
+    if d is None and runtime.upper() == "MAIN":       # the main's build is also in the snapshot it publishes
+        try:
+            snap = json.loads((Path(feed_dir) / "live-snapshot.json").read_text(encoding="utf-8"))
+            d = {"build": snap.get("build"), "version": snap.get("software_version"), "started_utc": None} if snap.get("build") else None
+        except (OSError, ValueError):
+            d = None
+    if d is None:
         return {"runtime": runtime, "known": False, "match": None, "detail": f"the {runtime.lower()} has not reported yet"}
     me = identity()["build"]
     ok = d.get("build") == me

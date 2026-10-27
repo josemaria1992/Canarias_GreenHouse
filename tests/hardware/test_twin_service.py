@@ -485,6 +485,11 @@ def test_pages_name_their_scripts_by_build_and_say_which_build_answers(live_and_
     f.write_text(json.dumps(json.loads(f.read_text()) | {"build": "0.7.0+old"}), encoding="utf-8")
     v = live.get("/api/version", headers=hl).json()
     assert v["partner"]["match"] is False and "0.7.0+old" in v["partner"]["detail"]
+    # 0.7.3: without the main's identity file the twin falls back to the build named in the main's snapshot
+    from aquacrop.build import partner
+    (Path(os.environ["AQUACROP_FEED_DIR"]) / "identity-main.json").unlink()
+    assert live.post("/api/twin-link/publish", headers=hl).status_code == 200
+    assert partner(Path(os.environ["AQUACROP_FEED_DIR"]), "MAIN")["match"] is True
 
 
 def test_after_approval_the_twin_no_longer_lists_what_the_real_system_has(live_and_twin):
