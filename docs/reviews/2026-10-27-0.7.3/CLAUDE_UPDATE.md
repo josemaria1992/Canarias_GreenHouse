@@ -1,15 +1,15 @@
-# Claude implementation update — 0.7.6 (C075 review, owner decisions, UX-01..06)
+# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06)
 
-Status: **implemented and deployed to the bench as 0.7.6**. CI on the final commit had not finished when this was
+Status: **implemented and deployed to the bench as 0.7.7** (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
 
 ## Source identity
 
 - Branch: `feat/operator-upgrade-0.7`. Implementation base: `75b63d7` (the review documents).
-- Final implementation commit (before this summary-only commit): `7075853`.
+- Final implementation commit (before this summary-only commit): `de3088a` (0.7.7). 0.7.6 was `7075853`.
 - Release: `aquacrop-0.7.6.zip`.
-  - sha256 `32773b2f12c55da75dc6d10639b2277093f3cbf7efbed4fcbd375a71551f0b81`.
-  - Build `0.7.6+70758534a1.w3d2015dd`.
+  - sha256 `3553ac782ece331d3c5ad42a9b1532666df23c8585f420a066c32dbd4da676a3` (`aquacrop-0.7.7.zip`).
+  - Build `0.7.7+de3088ab7d.w3d2015dd`.
   - `verify_release.py` 28/28 PASS.
 
 ## C075 findings
@@ -43,10 +43,18 @@ written. Independent review pending. The previous update (0.7.5) is in this file
     - a pump of the pair was already replaced;
     - the failed pump is not verified OFF.
   - Fake-service tests: `tests/unit/test_pump_replacement_075.py`.
-  - Questions 1–3 of `OWNER_DECISIONS` are still unanswered. The implementation uses these provisional rules, to be changed when the owner decides:
-    1. Routing: only the block's explicit duty pair.
-    2. A busy partner: refusal.
-    3. Timing and volume: the changeover does not count against the remaining watering time; a measured step keeps its litres.
+  - **Owner answers (recorded in `OWNER_DECISIONS_20261027.md`), implemented in 0.7.7 (`983081e`):**
+    1. Either pump serves either sector: each sector block names both pumps as its duty pair.
+    2. Sectors take turns and one healthy pump waters both. If the partner is busy with the other sector, the
+       interrupted cycle stops through its normal stop (failed pump OFF, its valve closed, verified); its remaining
+       time or litres wait, and when the partner is free the rest starts again on it (`PROGRAM_PUMP_WAITING`,
+       `PROGRAM_RESUMED`). The other sector is never interrupted; both are never watered at once. The rest is
+       abandoned, and recorded, if its window ends or it has waited an hour.
+    3. The changeover is not watering (the remaining time counts from the new pump's start); a litre cycle delivers
+       exactly its litres.
+  - Tests: `test_when_the_partner_serves_the_other_sector_this_sector_waits_its_turn_then_finishes`,
+    `test_a_waiting_rest_is_abandoned_when_its_window_ends_and_says_so`. The litre-cycle resume follows the same
+    path but has no dedicated fake-meter test.
 
 ## UX-01..UX-06
 
@@ -80,8 +88,8 @@ written. Independent review pending. The previous update (0.7.5) is in this file
 
 ## Deployment and access
 
-- **Bench:** 0.7.5 → 0.7.6 at 16:25 CET. Main and Twin both run `0.7.6+70758534a1.w3d2015dd`, through https://aquacrop-bench.local/ and /twin/ with certificate validation.
-- **Rollback:** pre-upgrade backup verified (`/var/lib/aquacrop/backups/pre-upgrade/aquacrop-2026-10-27T152537.684992Z.sql.gz`); 0.7.5 stays installed.
+- **Bench:** 0.7.5 → 0.7.6 at 16:25 CET, then 0.7.7 at 17:29 CET. Main and Twin both run `0.7.7+de3088ab7d.w3d2015dd`. Before 0.7.7: full suite passed again, release 28/28, Python 3.11 preflight passed.
+- **Rollback:** pre-upgrade backups verified (`…T152537.684992Z.sql.gz` before 0.7.6, `…T162935.191682Z.sql.gz` before 0.7.7); 0.7.6 stays installed.
 - **Data:** accepted drawing sha `7ef8c51b…` unchanged; schema 7; 35 items; no leases; no commands.
 - **Access record:** written privately outside Git (`%LOCALAPPDATA%\AquaCrop\commissioning\ACCESS-20261027.md`: hostname, address, Caddy root CA and its fingerprint).
   - **Finding:** the controller's 192.168.68.123 is a DHCP lease, not a reservation; the owner should reserve it in the router.
@@ -92,7 +100,6 @@ written. Independent review pending. The previous update (0.7.5) is in this file
 ## Remaining
 
 - CI result on `7075853`.
-- Owner answers to the replacement questions (routing, busy partner, downtime/volume).
 - The signed-in real-bench walkthrough by the owner.
 - VPN DNS or hosts entries for other clients, and the DHCP reservation.
 
