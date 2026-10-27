@@ -42,10 +42,10 @@ owner's real values first), **commissioned** (proven on the real installation), 
 | Item alarm limits (delay, deadband, quality) | implemented | Real readings of VERIFIED channels, and in the twin |
 | Operation History: runs, timeline, CSV | implemented | Recorded events and commands only |
 | Physical program runs on IO 8CH test loads | bench only | Unchanged 0.5 path: lease, allowlist, accepted twin evidence |
-| Project import/export (JSON/YAML project exchange with preview, IMPORT-01) | **open** | Only equipment type import exists; whole-project exchange is not built |
-| Drainage lead alternation and standby response (PROG-09) | **open** | Not built in the block/program model |
-| Simulated nutrient preparation with labelled chemistry (PROG-10) | **open** (template only) | The NUTRIENT_PREPARATION block template exists; no labelled mixing model; real dosing stays blocked |
-| Historical context reconstruction of a run (HIST-03) | **open** | Bindings and versions are kept; a run view of the executed configuration is not built |
-| Equipment/run charts with quality gaps and digital lanes (DATA-01) | partly | Trends exist; run-annotated equipment charts are not built |
+| Project import/export (JSON/YAML project exchange with preview, IMPORT-01) | implemented (0.7.4) | Settings → Project exchange; DRAFTs and proposals only; secrets, leases, bindings excluded |
+| Drainage lead alternation and standby response (PROG-09) | implemented (0.7.4), simulation only | Block duty pair; least-recently-started pump leads; standby takes a start the lead cannot (fault, limits, no channel). Mid-run takeover not built |
+| Simulated nutrient preparation with labelled chemistry (PROG-10) | implemented (0.7.4), twin only | Synthetic fixture, labelled SIMULATED; programs over NUTRIENT_PREPARATION blocks never start on the real system |
+| Historical context reconstruction of a run (HIST-03) | implemented (0.7.4) | Run view: block, item and binding versions in force at start; what changed since |
+| Equipment/run charts with quality gaps and digital lanes (DATA-01) | implemented (0.7.4) | Run chart of its channels with the timeline as annotations; Equipment → Chart its channels |
 | Real irrigation, relays, drive, dosing in production | unavailable | Needs commissioning evidence (OPEN_QUESTIONS) |
 | Predictive shadow | unavailable | `SHADOW—NOT CONFIGURED` |
