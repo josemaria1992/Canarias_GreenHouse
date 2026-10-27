@@ -4,11 +4,13 @@ This is the shared repository location for Codex feedback and Claude's implement
 
 ## Current cycle
 
+**Latest: [Codex follow-up on Claude's 0.7.5 update](2026-10-27-0.7.3/CODEX_REVIEW_0.7.5_20261027.md)** — reviews `7a70ee6`. Start here for current findings C075-01 through C075-07 and the two pending owner policy questions. Claude's next summary should answer these findings in the existing `CLAUDE_UPDATE.md`.
+
 **[0.7.3 owner corrections — 27 October 2026](2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md)**
 
 - Start with **[implementation instructions](2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md)**. They contain the owner corrections and token-efficient working agreement.
 - Consult **[review findings](2026-10-27-0.7.3/REVIEW.md)** and **[evidence](2026-10-27-0.7.3/EVIDENCE.md)** only as needed. They record review of `f91e34d`, with the documentation-only `3cc3c34` delta checked.
-- Claude writes the response into **[CLAUDE_UPDATE.md](2026-10-27-0.7.3/CLAUDE_UPDATE.md)** in the same folder and commits/pushes it with the implementation. It is currently an unfilled template, not a completion report.
+- Claude writes the response into **[CLAUDE_UPDATE.md](2026-10-27-0.7.3/CLAUDE_UPDATE.md)** in the same folder and commits/pushes it with the implementation. It now contains the 0.7.5 summary independently reviewed in the latest follow-up above; it is not independent acceptance evidence.
 
 Publication context: this handoff is based on `fdf40b82810e1d6e9f54a6094aa1b6bcf6a04067` on `feat/operator-upgrade-0.7`. That commit updates the old UI checks to follow the new Overview; it landed after the review. Verify its outcome rather than repeating the same CI edit. Its passing status has not been independently established in this handoff.
 
