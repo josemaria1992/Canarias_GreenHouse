@@ -16,6 +16,7 @@ import contextlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -173,6 +174,12 @@ class AcceptIn(ProgramRefIn):
 class DesignImportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     replace: bool = False                 # replace a twin design that was not exported (the second press)
+
+
+class ReconcileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answers: dict[str, Literal["yes", "no"]] = Field(max_length=2000)    # question id -> the owner's factual answer
+    replace: bool = False
 
 
 class ProposalIn(BaseModel):
@@ -704,31 +711,84 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                        actor=p.username)
             return {"source": "graph", "topology_rev": svc.blocks.topology()["rev"], "replaced": bool(own and differs)}
         # 0.7.3: the earlier drawing, kept as drawn, becomes the twin's saved design (the same guard against replacing
-        # a design that was not exported); its placeholders and sketches stay visible until they are resolved
-        prop = legacy_proposal()
-        own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
-        has = bool(cur_t["graph"].get("nodes")) or bool((cur_d.get("diagram") or {}).get("placeholders"))
-        if own and has and not body.replace:
-            raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
-                                     "Import from Overview replaces them: press it again to replace them")
-        try:
-            svc.blocks.save_drawing(p.username, "installation", prop["topology"], prop["diagram"],
-                                    expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"],
-                                    note="imported from the Overview's earlier drawing")
-        except BlockRefused as e:
-            raise HTTPException(409, f"the Overview's drawing could not be loaded: {e}")
-        hist.event("TWIN_DESIGN_IMPORTED", {"source": "earlier drawing", "kept": prop["kept"],
-                                            "ambiguous": len(prop["ambiguous"]), "unresolved": len(prop["unresolved"])},
-                   actor=p.username)
-        return {"source": "legacy", "proposal": {k: prop[k] for k in ("ambiguous", "unresolved", "matched", "to_create",
-                                                                        "kept", "source", "meaning")},
-                "replaced": bool(own and has)}
+        # a design that was not exported); C077-08: with the answers given for this drawing before, applied again
+        return save_legacy(p.username, body.replace, "imported from the Overview's earlier drawing")
 
-    def legacy_proposal() -> dict:
+    # C077-08: the owner's answers to the earlier drawing's reconciliation questions, kept per drawing (its digest), so
+    # every later Import from Overview of the same drawing is complete without asking again
+    answers_path = state_dir / "legacy-answers.json"
+
+    def answers_doc() -> dict:
+        with contextlib.suppress(OSError, ValueError):
+            return json.loads(answers_path.read_text(encoding="utf-8"))
+        return {}
+
+    def answers_save(doc: dict) -> None:
+        tmp = answers_path.with_name(answers_path.name + ".tmp")
+        tmp.write_text(json.dumps(doc, indent=1, sort_keys=True), encoding="utf-8")
+        tmp.replace(answers_path)
+
+    def legacy_proposal(answers: dict | None = None) -> dict:
         from ..topology.migrate import propose
         lay, _ = live_layout()
         items = svc.blocks.items()
-        return propose(lay, {k: v.get("kind") for k, v in items.items()}, {k: v.get("name") for k, v in items.items()})
+        rec = answers_doc().get(layout.digest(lay)) or {}
+        return propose(lay, {k: v.get("kind") for k, v in items.items()}, {k: v.get("name") for k, v in items.items()},
+                       answers if answers is not None else rec.get("answers") or {})
+
+    def legacy_view(prop: dict) -> dict:
+        return {k: prop[k] for k in ("ambiguous", "unresolved", "matched", "to_create", "kept", "source", "meaning",
+                                     "questions", "blockers", "ready")}
+
+    def save_legacy(actor: str, replace: bool, note: str, answers: dict | None = None) -> dict:
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        prop = legacy_proposal(answers)
+        digest = prop["source"]["digest"]
+        doc = answers_doc()
+        rec = doc.get(digest) or {}
+        own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+        has = bool(cur_t["graph"].get("nodes")) or bool((cur_d.get("diagram") or {}).get("placeholders"))
+        # the twin's design is still exactly what the last import of this drawing saved: nothing of the user's is lost
+        untouched = rec.get("saved") == [cur_t["rev"], cur_d["rev"]]
+        if own and has and not untouched and not replace:
+            raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                     "Import from Overview replaces them: press it again to replace them")
+        try:
+            svc.blocks.save_drawing(actor, "installation", prop["topology"], prop["diagram"],
+                                    expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"], note=note)
+        except BlockRefused as e:
+            raise HTTPException(409, f"the Overview's drawing could not be loaded: {e}")
+        doc[digest] = rec | {"saved": [svc.blocks.topology()["rev"], svc.blocks.diagram("installation")["rev"]]}
+        if answers is not None:
+            doc[digest] |= {"answers": answers, "actor": actor, "utc": datetime.now(timezone.utc).isoformat()}
+        answers_save(doc)
+        hist.event("TWIN_DESIGN_IMPORTED", {"source": "earlier drawing", "kept": prop["kept"], "ready": prop["ready"],
+                                            "questions": len(prop["questions"]), "blockers": len(prop["blockers"]),
+                                            "answered": sum(1 for q in prop["questions"] if q["answer"])},
+                   actor=actor)
+        return {"source": "legacy", "proposal": legacy_view(prop), "replaced": bool(own and has and not untouched)}
+
+    @app.get("/api/twin/design/reconcile")
+    def reconcile_view(p: Principal = Depends(require(Perm.OPS_READ))):
+        """The earlier drawing's reconciliation: the factual questions its geometry raises, with the drawing's
+        suggestion and any answer given, and what still blocks a simulation, by name."""
+        live = (svc.snap or {}).get("hydraulics") or {}
+        if ((live.get("topology") or {}).get("graph") or {}).get("nodes"):
+            return {"drawing": "graph", "questions": [], "blockers": [], "ready": True}
+        return {"drawing": "legacy"} | legacy_view(legacy_proposal())
+
+    @app.post("/api/twin/design/reconcile")
+    def reconcile(body: ReconcileIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Apply the answers in one step: kept for this drawing, then the twin's design is the earlier drawing with them
+        applied (the same guard as Import from Overview). Only a yes connects anything."""
+        refused(svc.import_snapshot, p.username)
+        live = (svc.snap or {}).get("hydraulics") or {}
+        if ((live.get("topology") or {}).get("graph") or {}).get("nodes"):
+            raise HTTPException(409, "the Overview already has an installation graph: there is nothing to reconcile")
+        lay, _ = live_layout()
+        prev = (answers_doc().get(layout.digest(lay)) or {}).get("answers") or {}
+        merged = prev | {k: v for k, v in body.answers.items()}
+        return save_legacy(p.username, body.replace, "the earlier drawing with the reconciliation answers", merged)
 
     @app.get("/api/twin/design/reference")
     def design_reference(p: Principal = Depends(require(Perm.OPS_READ))):

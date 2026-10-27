@@ -188,6 +188,7 @@ class Engine:
         self._rep: dict[str, dict] = {}          # repeat window key -> {"n": cycles requested, "last_end": mono}
         self._resume: dict[str, dict] = {}       # program -> the rest of a cycle waiting for its partner pump (owner)
         self._turn_wait: dict[str, dict] = {}    # occurrence key -> a scheduled start waiting for its pump group (C077-02)
+        self._pair_pumps: set[str] | None = None  # the duty pairs' pumps, read once per tick (programs() reads a store)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> dict:
@@ -506,6 +507,7 @@ class Engine:
     # ------------------------------------------------------------------ tick
     def tick(self) -> None:
         with self._lock:
+            self._pair_pumps = {p for _v, b in self.programs().values() for p in (b.duty or ())}
             now_utc = self.clock.utc()
             if self.last_tick_utc is not None and now_utc < self.last_tick_utc - timedelta(seconds=5):
                 self.event("CLOCK_STEPPED_BACK", {"from": self.last_tick_utc.isoformat(), "to": now_utc.isoformat()},
@@ -555,6 +557,7 @@ class Engine:
                 if end and datetime.fromisoformat(end) <= now_utc:
                     self.store.occurrence_update(c["waiting"]["key"], "MISSED", outcome="conflict unresolved until the window ended")
                     self._close_conflict(cid, "EXPIRED", "system")
+            self._pair_pumps = None                 # outside a tick (a start by hand) the programs are read afresh
 
     def _settle_stopping(self) -> None:
         auto = [o for o in self.ops.values() if o.origin == "AUTO"]
@@ -854,7 +857,8 @@ class Engine:
         sectors never water at the same time): a program holds a token for each pump of its own pair, and for each
         pump it switches that belongs to an active program's pair, from its start until its verified stop. Programs
         that use none of these pumps are not serialized. Configuration decides the group, never equipment names."""
-        pumps = {p for _v, b in self.programs().values() for p in (b.duty or ())}
+        pumps = self._pair_pumps if self._pair_pumps is not None else {
+            p for _v, b in self.programs().values() for p in (b.duty or ())}
         mine = set(body.duty or ()) | {i for i in actuators(body) if i in pumps}
         return [f"turn:{p}" for p in sorted(mine)]
 

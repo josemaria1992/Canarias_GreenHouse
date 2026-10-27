@@ -759,7 +759,9 @@
       const d = st.diagram;
       return { links: (d.placeholders || []).map(x => ({ id: x.id, label: x.label, kind: x.kind })),
         pipes: (d.sketches || []).map(x => ({ id: x.id, edge: x.edge || null })),
-        meters: st.graph.nodes.filter(n => n.kind === "meter" && !edgesOf(n.id).length).map(n => ({ id: n.id, label: nameOf(n.id) })) };
+        meters: st.graph.nodes.filter(n => n.kind === "meter" && !edgesOf(n.id).length).map(n => ({ id: n.id, label: nameOf(n.id) })),
+        // connections the router found no room to draw (equipment drawn too close): they exist, but are not shown
+        unrouted: st.diagram.routes.filter(r => !r.points || r.points.length < 2).map(r => ({ id: r.edge, label: edge(r.edge) ? pipeName(edge(r.edge)) : `pipe ${r.edge}` })) };
     }
     function select(sel) { st.sel = sel; draw(); }
     // UX-02: insert a flow meter into the selected pipe, with the result previewed in words

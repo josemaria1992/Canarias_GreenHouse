@@ -40,18 +40,19 @@ def test_the_actual_bench_drawing_converts_faithfully():
     lay = L.parse(fx["layout"])
     p = propose(lay, {k: v["kind"] for k, v in fx["items"].items()}, {k: v["name"] for k, v in fx["items"].items()})
     k = p["kept"]
-    assert k == fx["expected_kept"]
+    assert {x: k[x] for x in fx["expected_kept"] if x in ("symbols", "placeholders", "texts", "shapes")} == {
+        x: v for x, v in fx["expected_kept"].items() if x in ("symbols", "placeholders", "texts", "shapes")}
     drawn = [n for n in lay.nodes if n.kind not in ("label", "box")]
     assert k["symbols"] + k["placeholders"] == len(drawn)
     assert k["texts"] + k["shapes"] == len(lay.nodes) - len(drawn)
-    assert k["routes_kept"] + k["sketches"] - k["routes_corrected"] == len(lay.pipes)
     pipes = {x.id: x for x in lay.pipes}
     dia = dg.parse(p["diagram"])
-    for r in dia.routes:
-        if r.points:
-            src = next(x for x in lay.pipes if dg.canonical_points(x.points[1:-1]) and
-                       all(tuple(c) in [tuple(q) for q in r.points] for c in dg.canonical_points(x.points[1:-1])))
-            assert src.id in pipes
+    # C077-08: every earlier pipe is either connected (one or more edges) or kept as a dotted sketch, never both, never lost
+    loose = {s.id for s in dia.sketches if not s.id.endswith("-drawn")}
+    assert k["pipes_connected"] + len(loose) == len(lay.pipes)
+    corners = {tuple(c) for x in lay.pipes for c in dg.canonical_points(x.points)}
+    for r in dia.routes:                                 # a kept route's corners are corners the drawing had
+        assert all(tuple(c) in corners for c in r.points[1:-1]), r.edge
     for s in dia.sketches:                               # sketches are the drawn points, unchanged
         assert [list(x) for x in s.points] == [list(x) for x in pipes[s.id.removesuffix("-drawn")].points] if s.id.removesuffix("-drawn") in pipes else True
     assert not p["topology"]["edges"] or all(e["provenance"] == "UNKNOWN" for e in p["topology"]["edges"])

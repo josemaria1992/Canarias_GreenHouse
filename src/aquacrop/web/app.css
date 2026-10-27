@@ -447,3 +447,7 @@ fieldset.bad-field, .rule.bad-field { border-color: var(--bad); }
 .hed-key-line.k-sketch { border-top: 2px dotted var(--muted); }
 .hed-key-line.k-tap { border-top: 1px dashed var(--muted); }
 .hed-key-line.k-ph { width: 14px; height: 10px; border: 1.5px solid var(--ink); }
+/* C077-08: the earlier drawing's reconciliation questions in the twin */
+.reconcile li { margin: .35rem 0; }
+.reconcile label.inline { display: inline-flex; align-items: center; gap: .25rem; margin: 0 0 0 .6rem; white-space: nowrap; }
+.reconcile input[type=radio] { min-height: 0; padding: 0; }

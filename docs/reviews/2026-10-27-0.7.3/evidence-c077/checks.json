@@ -1,0 +1,37 @@
+[
+ {
+  "id": "C077-08 import lists the questions and is not ready",
+  "ok": true,
+  "detail": "13 questions; Earlier drawing: complete the connections"
+ },
+ {
+  "id": "C077-08 the suggested answers applied: ready to simulate",
+  "ok": true,
+  "detail": "Earlier drawing: complete the connections | Connections complete: ready to simulate"
+ },
+ {
+  "id": "C077-08 every connection is drawn or named as not drawn yet (never hidden)",
+  "ok": true,
+  "detail": "45 connections: 37 drawn, 8 named as not drawn yet; 49 symbols; dotted sketches 32 -> 16 (the rest are drawn references)"
+ },
+ {
+  "id": "C077-07 a vertical meter's glyph is turned with its pipe",
+  "ok": true,
+  "detail": "translate(608 168) rotate(90 12 12)"
+ },
+ {
+  "id": "C077-08 a later import applies the kept answers (no question open)",
+  "ok": true,
+  "detail": "Earlier drawing: complete the connections"
+ },
+ {
+  "id": "C077-06 an empty design shows nothing of the old drawing; equipment offered to place",
+  "ok": true,
+  "detail": "{\"nodes\":0,\"sketches\":0,\"ph\":0,\"places\":41}"
+ },
+ {
+  "id": "no page error",
+  "ok": true,
+  "detail": ""
+ }
+]

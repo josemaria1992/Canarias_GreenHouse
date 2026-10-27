@@ -130,3 +130,36 @@ def test_c077_06_an_empty_design_clears_only_the_twins_drawing_and_keeps_equipme
     assert {i for i in t2["items"]} >= {p[0] for p in PARTS}              # still listed beside the drawing to place
     assert live.get("/api/overview/diagram", headers=hl).json() == ov_before
     assert live.get("/api/equipment/items", headers=hl).json() == items_before
+
+
+def test_c077_08_answers_are_kept_per_drawing_and_a_later_import_is_complete_without_asking(live_and_twin):
+    """Codex 0.7.7 C077-08: the reconciliation is answered once in the twin; the answers are kept for that earlier
+    drawing, so the next Import from Overview applies them without asking, and nothing is called ready while a
+    blocker is left."""
+    app, live, twin_app, twin, bus, hl = live_and_twin
+    frames = len(bus.write_frames())
+    _parts(live, hl)
+    H = _twin_h(twin, "bench1")
+    first = twin.post("/api/twin/design/import", json={}, headers=H).json()["proposal"]
+    qs = first["questions"]
+    assert qs and all(q["answer"] is None for q in qs) and first["ready"] is False
+    t0 = twin.get("/api/topology").json()
+    view = twin.get("/api/twin/design/reconcile").json()
+    assert view["drawing"] == "legacy" and [q["id"] for q in view["questions"]] == [q["id"] for q in qs]
+    assert view["ready"] == (view["blockers"] == [])
+    r = twin.post("/api/twin/design/reconcile", json={"answers": {q["id"]: "yes" for q in qs}}, headers=H)
+    assert r.status_code == 200, r.text                  # the design is still the import's: no second press needed
+    after = r.json()["proposal"]
+    assert all(q["answer"] == "yes" for q in after["questions"]) and after["ready"] == (after["blockers"] == [])
+    assert not any(b["id"].startswith("answer:") for b in after["blockers"])
+    t1, d1 = twin.get("/api/topology").json(), twin.get("/api/diagram/installation").json()
+    assert t1["rev"] >= t0["rev"] and len(t1["graph"]["edges"]) >= len(t0["graph"]["edges"])   # an unchanged save adds no revision
+    assert d1["diagram"]["symbols"]
+    again = twin.post("/api/twin/design/import", json={}, headers=H)
+    assert again.status_code == 200 and again.json()["replaced"] is False, again.text
+    assert all(q["answer"] == "yes" for q in again.json()["proposal"]["questions"])
+    t2 = twin.get("/api/topology").json()
+    assert t2["graph"] == t1["graph"]                    # repeatable: the same complete graph, nothing asked again
+    bad = twin.post("/api/twin/design/reconcile", json={"answers": {"x": "maybe"}}, headers=H)
+    assert bad.status_code == 422
+    assert len(bus.write_frames()) == frames             # nothing reaches a module

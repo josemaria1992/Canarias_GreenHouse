@@ -20,7 +20,7 @@ import re
 
 from .. import diagram as dg
 from .. import layout as legacy
-from .definitions import SYMBOLS, parse
+from .definitions import SYMBOLS, parse, ports_of
 
 DEFAULT_OUT = {"source": "out", "tank": "out", "pump": "out", "valve": "out", "meter": "out", "sector": "drain"}
 DEFAULT_IN = {"tank": "in", "pump": "in", "valve": "in", "meter": "in", "sector": "in"}
@@ -53,7 +53,8 @@ def _safe_id(old: str, taken: set[str]) -> str:
 SMALL = {"pump": 40, "valve": 40, "sensor": 30, "source": 40, "meter": 40}
 
 
-def propose(lay: legacy.Layout, item_kinds: dict[str, str | None], names: dict[str, str] | None = None) -> dict:
+def propose(lay: legacy.Layout, item_kinds: dict[str, str | None], names: dict[str, str] | None = None,
+            answers: dict[str, str] | None = None) -> dict:
     """The earlier drawing as one drawing of the new kind, faithfully (0.7.3): every symbol, label, box and pipe is
     kept where and as large as it was drawn. A symbol mapped to an equipment item with a water kind becomes its graph
     node; every other symbol stays as a marked placeholder. A pipe whose two ends name mapped symbols becomes an edge
@@ -121,63 +122,11 @@ def propose(lay: legacy.Layout, item_kinds: dict[str, str | None], names: dict[s
         sw, sh = w or SYMBOLS[k]["w"], h or SYMBOLS[k]["h"]
         x, y = (n.x, n.y) if big else (n.x - sw / 2, n.y - sh / 2)   # the old drawing placed small symbols by their centre
         symbols.append(dg.Symbol(node=n.item, x=dg.snap(max(-100, x)), y=dg.snap(max(-100, y)), label=n.label[:80], w=w, h=h))
-    # what the old water model inferred from geometry: evidence for the reviewer, never a connection
-    from ..twin.water import Network
-    try:
-        net = Network(legacy.canonical(lay))
-    except Exception:                               # an unreadable old drawing: everything stays for review
-        net = None
-    edges, routes = [], []
-    syms = {s.node: s for s in symbols}
-    for p in lay.pipes:
-        a, b = by_legacy.get(p.from_node or ""), by_legacy.get(p.to_node or "")
-        info = net.pipes.get(p.id) if net else None
-        inline = [by_legacy.get(x, x) for _, x in (info.inline if info else [])]
-        joined = bool(info and (info.branches or info.end_join))
-        why = None
-        if not (a and b):
-            why = "a pipe end is not attached to a symbol by name" + (f" (the drawing suggests {', '.join(inline)} on it)" if inline else "")
-            ambiguous.append({"legacy": p.id, "kind": "PIPE_END", "why": why, "fix": "connect its ports explicitly in the editor"})
-        elif inline or joined:
-            why = (f"the old drawing had {', '.join(names.get(x, x) for x in inline)} drawn on this pipe" if inline
-                   else "another pipe touched this one in the old drawing")
-            ambiguous.append({"legacy": p.id, "kind": "INLINE" if inline else "JOIN", "why": why,
-                              "suggests": {"from": a, "to": b, "through": inline},
-                              "fix": "decide the connection: through that equipment, through a junction, or not connected"})
-        elif nodes[a]["kind"] not in DEFAULT_OUT or nodes[b]["kind"] not in DEFAULT_IN:
-            why = f"no default ports from a {nodes[a]['kind']} to a {nodes[b]['kind']}"
-            ambiguous.append({"legacy": p.id, "kind": "PORTS", "why": why, "fix": "connect it in the editor"})
-        if why:
-            sketches.append(dg.Sketch(id=_safe_id(p.id, taken), points=[tuple(pt) for pt in p.points], why=why[:240]))
-            continue
-        eid = _edge_id(p.id, {e["id"] for e in edges})
-        ka, kb = nodes[a]["kind"], nodes[b]["kind"]
-        edges.append({"id": eid, "src": {"node": a, "port": DEFAULT_OUT[ka]},
-                      "dst": {"node": b, "port": DEFAULT_IN[kb]}, "provenance": "UNKNOWN"})
-        (pa, _), (pb, _) = dg.anchor(ka, syms[a], DEFAULT_OUT[ka]), dg.anchor(kb, syms[b], DEFAULT_IN[kb])
-        drawn = dg.canonical_points([pa, *[tuple(x) for x in p.points[1:-1]], pb])
-        routes.append({"edge": eid, "points": drawn, "mode": "MANUAL", "legacy": p.id, "original": p.points})
-    graph = {"nodes": sorted(nodes.values(), key=lambda n: n["id"]), "edges": edges,
-             "measures": [m for m in measures if m["sensor"] in nodes and m["node"] in nodes]}
-    topo = parse(graph)                              # raises if the proposal is malformed: a bug, never silent
-    view = dg.Diagram(view="installation", title=lay.title, width=max(lay.width, 400), height=max(lay.height, 300),
-                      symbols=symbols, routes=[dg.Route(edge=r["edge"], points=r["points"], mode="MANUAL") for r in routes],
-                      texts=texts, shapes=shapes, placeholders=placeholders)
-    # a drawn route that is not horizontal/vertical, or does not meet its ports, is rerouted; the original stays visible
-    bad = {i["object"] for i in dg.route_issues(view, topo) if i["severity"] == "ERROR" and i["rule"].startswith("ROUTE_")}
-    kept = []
-    for r in routes:
-        if r["edge"] in bad:
-            kept.append(dg.Route(edge=r["edge"], mode="AUTO"))
-            sketches.append(dg.Sketch(id=_safe_id(r["legacy"] + "-drawn", taken), points=[tuple(x) for x in r["original"]],
-                                      edge=r["edge"], why="the pipe as it was drawn (not horizontal/vertical or off its ports): "
-                                                          "shown for reference; the connection is rerouted"))
-        else:
-            kept.append(dg.Route(edge=r["edge"], points=r["points"], mode="MANUAL"))
-    view = view.model_copy(update={"routes": kept, "sketches": sketches})
+    from .reconcile import pipes                     # C077-08: explicit links kept, geometry asked once
+    graph, view, extra = pipes(lay, nodes, symbols, by_legacy, measures, names, item_kinds, answers or {}, taken,
+                               texts, shapes, placeholders, to_create, unresolved, ambiguous)
     return {"kind": "AQUACROP_MIGRATION_PROPOSAL", "source": {"kind": "AQUACROP_LAYOUT", "digest": legacy.digest(lay)},
-            "topology": topo.model_dump(mode="json"), "diagram": view.model_dump(mode="json"),
-            "ambiguous": ambiguous, "unresolved": unresolved, "matched": matched, "to_create": to_create,
-            "kept": {"symbols": len(symbols), "placeholders": len(placeholders), "texts": len(texts), "shapes": len(shapes),
-                     "routes_kept": sum(1 for r in kept if r.points), "routes_corrected": len(bad), "sketches": len(sketches)},
-            "meaning": "the earlier drawing kept as drawn; explicit links became connections, nothing ambiguous did"}
+            "topology": graph, "diagram": view.model_dump(mode="json"),
+            "ambiguous": ambiguous, "unresolved": unresolved, "matched": matched, "to_create": to_create} | extra | {
+            "meaning": "the earlier drawing kept as drawn; its explicit links became connections, and what only its "
+                       "geometry suggests became a connection only where a person answered yes"}

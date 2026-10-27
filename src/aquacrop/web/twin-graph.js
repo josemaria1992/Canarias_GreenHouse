@@ -30,9 +30,9 @@
   let loads = 0;
   async function load() {
     const n = ++loads;
-    const [topo, dia, ch, props] = await Promise.all([api("GET", "api/topology"), api("GET", "api/diagram/installation"), api("GET", "api/twin/changes").catch(() => null),
-      api("GET", "api/twin/design/proposals").catch(() => null)]);
-    if (n === loads) { G.loaded = { topo, dia }; G.ch = ch; G.props = props ? props.drawings : []; }   // an earlier, slower answer never replaces a later one
+    const [topo, dia, ch, props, rec] = await Promise.all([api("GET", "api/topology"), api("GET", "api/diagram/installation"), api("GET", "api/twin/changes").catch(() => null),
+      api("GET", "api/twin/design/proposals").catch(() => null), api("GET", "api/twin/design/reconcile").catch(() => null)]);
+    if (n === loads) { G.loaded = { topo, dia }; G.ch = ch; G.props = props ? props.drawings : []; G.rec = rec; }   // an earlier, slower answer never replaces a later one
   }
   function ledgerTable(gw) {
     const l = gw.ledger;
@@ -78,7 +78,8 @@
       const p = r.proposal, k = p.kept || {};
       G.migration = p; G.editing = false; G.draft = null;
       build(v);
-      G.msg.flow = { text: `The earlier Overview drawing is now the twin's saved design, as drawn: ${k.symbols || 0} linked symbol(s), ${k.placeholders || 0} placeholder(s), ${k.sketches || 0} pipe sketch(es). ${p.ambiguous.length} ambiguous and ${p.unresolved.length} unlinked part(s) are listed below; nothing is connected by guesswork.` };
+      G.msg.flow = { text: `The earlier Overview drawing is now the twin's saved design: ${k.pipes_connected || 0} pipe(s) connected from what the drawing states. ` +
+        (p.ready ? "It is complete and ready to simulate." : `${(p.questions || []).filter(q => !q.answer).length} question(s) to answer and ${(p.blockers || []).filter(b => !b.id.startsWith("answer:")).length} other thing(s) to resolve are listed below; nothing is connected by guesswork.`) };
     } else {
       G.migration = null; G.editing = false; G.draft = null;
       G.msg.flow = { text: r.replaced ? "Imported from the Overview: the twin's earlier design was replaced." : "Imported from the Overview: the twin's design is the approved drawing." };
@@ -129,9 +130,57 @@
           h("div", { class: "row" }, noteEl, h("button", { disabled: !can("equipment_edit") || pv.missing.length > 0, onclick: () => exportOverview(v, noteEl) }, "Export to Overview"), note("export"))],
       h("p", { class: "muted small" }, "Exporting sends the design with this twin run's proof. It changes nothing on the real system until it is approved there, and approving applies the drawing and equipment changes only: it does not verify wiring, activate a program or switch anything. Equipment without a channel arrives as planned and unassigned."));
   }
-  function migrationBox() {
-    const m = G.migration;
+  /** C077-08: the earlier drawing's reconciliation. Its explicit links are already connections; here the owner answers,
+   *  once, the factual questions only its geometry raises (each with the drawing's suggestion), then sees by name what
+   *  still blocks a simulation. Never "ready" while a blocker is left; the answers are kept for later imports. */
+  function reconcileBox(v, m) {
+    const qs = m.questions || [];
+    const open = qs.filter(q => !q.answer);
+    G.recAns = G.recAns || {};
+    const choice = q => G.recAns[q.id] || q.answer || q.suggest;
+    const pick = (q, a) => () => { G.recAns[q.id] = a; G.sig = null; draw(v); };
+    const others = (m.blockers || []).filter(b => !b.id.startsWith("answer:"));
+    const apply = async () => {
+      const replace = G.arm === "rec"; G.arm = null;
+      const answers = {}; for (const q of qs) answers[q.id] = choice(q);
+      try {
+        const r = await api("POST", "api/twin/design/reconcile", { answers, replace });
+        G.recAns = {}; G.migration = r.proposal; await load(); build(v);
+        G.msg.rec = { text: r.proposal.ready ? "Answers applied: the design is complete and ready to simulate." : `Answers applied and kept for later imports. ${r.proposal.blockers.length} thing(s) still block a simulation (listed).` };
+      } catch (e) {
+        const msg = String(e.message || e);
+        if (/press it again/.test(msg)) { G.arm = "rec"; G.msg.rec = { text: "The twin's design was changed after the import. Press Apply again to replace it with the earlier drawing and these answers.", bad: true }; }
+        else G.msg.rec = { text: msg, bad: true };
+      }
+      G.sig = null; draw(v);
+    };
+    const R = G.ed && G.ed.remaining ? G.ed.remaining() : null;
+    const undrawn = R && R.unrouted ? R.unrouted : [];
+    return h("div", { class: "card", "data-reconcile": "" },
+      h("div", { class: "row" }, h("h3", null, "Earlier drawing: complete the connections"),
+        m.ready ? h("span", { class: "pill ok", "data-ready": "yes" }, "Connections complete: ready to simulate")
+          : h("span", { class: "pill warn", "data-ready": "no" }, `Not ready to simulate: ${(m.blockers || []).length} to resolve`),
+        undrawn.length ? h("span", { class: "pill warn", "data-undrawn": String(undrawn.length) }, `${undrawn.length} pipe(s) not drawn yet`) : null),
+      undrawn.length ? h("p", { class: "small warn" }, `${undrawn.length} connection(s) exist but have no room to be drawn where the earlier drawing placed the equipment (too close together): `,
+        undrawn.map(u => u.label).join("; "), ". Edit the drawing, move that equipment apart, then Reroute selected. The simulation follows the connections, not the lines; nothing is hidden from it.") : null,
+      h("p", { class: "small" }, `Kept from the drawing without asking: ${(m.kept || {}).pipes_connected || 0} pipe(s) as connections, with the gate valves, pumps and flow meters linked to them in series. `,
+        qs.length ? "The questions below are what only the drawing's geometry suggests; the suggestion is selected. Change what is wrong, then Apply." : "Nothing in the drawing needs a decision."),
+      qs.length ? h("ol", { class: "small reconcile" }, qs.map(q => h("li", { "data-q": q.id },
+        h("span", null, q.text, q.answer ? h("span", { class: "muted" }, ` (answered ${q.answer})`) : null), " ",
+        h("label", { class: "inline" }, h("input", { type: "radio", name: "rq-" + q.id, checked: choice(q) === "yes", onchange: pick(q, "yes"), disabled: !can("equipment_edit") }), " Yes"),
+        h("label", { class: "inline" }, h("input", { type: "radio", name: "rq-" + q.id, checked: choice(q) === "no", onchange: pick(q, "no"), disabled: !can("equipment_edit") }), " No")))) : null,
+      qs.length ? h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit"), class: G.arm === "rec" ? "danger" : "", onclick: apply },
+        G.arm === "rec" ? "Replace and apply" : open.length ? `Apply these answers (${open.length} new)` : "Apply these answers"), note("rec")) : null,
+      others.length ? [h("strong", { class: "small" }, "Still blocking a simulation:"),
+        h("ul", { class: "small", "data-blockers": "" }, others.map(b => h("li", null, `${b.text} — ${b.fix}.`)))] : null);
+  }
+  function migrationBox(v) {
+    const r = G.rec && G.rec.drawing === "legacy" ? G.rec : null;
+    const d0 = G.loaded && G.loaded.dia.diagram || {};
+    const fromLegacy = (d0.sketches || []).length || (d0.placeholders || []).length || (r && (r.questions || []).some(q => q.answer));
+    const m = G.migration || (r && fromLegacy && !G.editing ? r : null);
     if (!m) return null;
+    if (m.questions) return reconcileBox(v, m);
     return h("div", { class: "card", "data-migration": "" }, h("h3", null, "From the earlier Overview drawing: decide these"),
       h("p", { class: "muted small" }, `Source: ${m.source && m.source.digest ? "digest " + m.source.digest.slice(0, 12) : "the earlier drawing"}. It stays unchanged on the Overview as a reference. ${m.meaning || ""}`),
       m.ambiguous.length ? h("ul", { class: "small" }, m.ambiguous.map(a => h("li", null, `${a.legacy}: ${a.why}. ${a.fix}.`))) : h("p", { class: "small" }, "Nothing ambiguous."),
@@ -182,7 +231,8 @@
     const pv = G.ch && G.ch.preview;
     const R = G.ed && G.ed.remaining ? G.ed.remaining() : null;
     return JSON.stringify({ e: G.editing, a: G.arm, m: G.msg, d: G.draft, b: G.built, mig: !!G.migration, ld: !!G.loaded,
-      fin: R ? [R.links.length, R.pipes.length, R.meters.length] : null, pr: (G.props || []).map(f => f.file),
+      rec: G.rec ? [G.rec.ready, (G.rec.questions || []).map(q => q.answer), (G.rec.blockers || []).length] : null, ra: G.recAns || null,
+      fin: R ? [R.links.length, R.pipes.length, R.meters.length, (R.unrouted || []).length] : null, pr: (G.props || []).map(f => f.file),
       pv: pv ? [pv.empty, pv.hydraulics && [pv.hydraulics.graph_changed, pv.hydraulics.drawing_changed], pv.items.length, pv.bindings.length,
         pv.programs.length, pv.missing.length, (pv.twin_only || []).length] : null });
   }
@@ -201,7 +251,7 @@
       note("flow"), note("save")));
     put(G.body, h("div", { class: "row" }, h("h2", null, "Installation design"), status()),
       h("p", { class: "muted small" }, "1 Import from Overview, or start a new design · 2 place the equipment from the Equipment page and connect it · 3 save, then run it below · 4 Export to Overview."),
-      G.flow, h("div", { class: "hed-twin" }, G.host, G.side), finishBox(), proposalsBox(v), migrationBox(), exportBox(v),
+      G.flow, h("div", { class: "hed-twin" }, G.host, G.side), finishBox(), proposalsBox(v), migrationBox(v), exportBox(v),
       h("p", { class: "muted small" }, "The water follows only the connections drawn here; a crossing never joins pipes. Saving changes the twin, never the real system."));
     drawSide(v);
   }
