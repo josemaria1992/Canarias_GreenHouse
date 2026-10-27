@@ -995,12 +995,15 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         live_engine = LiveEngineHost(svc, hist, equipment, programs, session_id)
 
         def proof_refusal(program_id: str, version: int) -> str | None:
+            from ..programs.authoring import superseded_safety
             from ..programs.proof import refusal
             v = programs.get(program_id, version)
-            return refusal(v["simulation"], v["digest"], proof_context(program_id, version))
+            return superseded_safety(v["body"], blocks) or refusal(v["simulation"], v["digest"],
+                                                                    proof_context(program_id, version))
         live_engine.proof_refusal = proof_refusal
     app.state.live_engine = live_engine
-    operation_routes.register(app, require, live_engine, programs, equipment, cfg, proof_context=proof_context)
+    operation_routes.register(app, require, live_engine, programs, equipment, cfg, proof_context=proof_context,
+                              blocks=blocks)
 
     @app.get("/api/twin-link")
     def twin_link(p: Principal = Depends(require(Perm.OPS_READ))):

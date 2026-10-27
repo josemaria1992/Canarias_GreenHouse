@@ -132,7 +132,10 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                         "summary": f"from {nm.get(body.get('supply'), body.get('supply'))} to "
                                    f"{nm.get(body.get('destination'), body.get('destination'))}"
                                    + (", measured" if body.get("meter") else ", timed only"),
-                        "latest_version": latest["version"], "latest_status": latest["status"]})
+                        "latest_version": latest["version"], "latest_status": latest["status"],
+                        # every validated version's body: a form pinned to an older version describes that one
+                        "validated_bodies": {str(x["version"]): x["body"] for x in blocks.blocks()
+                                             if x["block_id"] == b["block_id"] and x["status"] == "VALIDATED"}})
         return out
 
     def readings() -> list[dict]:
@@ -223,7 +226,7 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
 
     @app.get("/api/programs")
     def program_list(p: Principal = Depends(require(Perm.READ))):
-        from ..programs.authoring import WateringForm, summary
+        from ..programs.authoring import WateringForm, summary, superseded_safety
         import_evidence()
         now = datetime.now(timezone.utc)
         out = []
@@ -253,7 +256,8 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
                     sim |= {"current": why is None, "why_not_current": why}
             row = {k: v[k] for k in ("program_id", "public_id", "id_rev", "version", "status", "name", "digest",
                                      "updated_utc")} | {
-                "next": nxt, "form": form, "summary": words, "describe": describe(body), "simulation": sim}
+                "next": nxt, "form": form, "summary": words, "describe": describe(body), "simulation": sim,
+                "safety_refusal": superseded_safety(body, blocks) if blocks is not None else None}
             if ops:                                  # a viewer reads summaries, not definitions or readiness details
                 row |= {"body": body, "validation": v["validation"], "created_by": v["created_by"],
                         "simulation": None if sim is None else v["simulation"] | sim}

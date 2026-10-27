@@ -455,5 +455,37 @@ def pydantic_problems(e) -> list[dict]:
         msg = err.get("msg", "").removeprefix("Value error, ")
         if err.get("type") in ("string_pattern_mismatch", "string_type", "missing", "int_parsing", "float_parsing"):
             msg = f"{FIELD_WORDS.get(loc, loc.replace('.', ' ') or 'a value')}: missing or not valid"
+        if not loc or loc in ("endpoint",):           # a form-level rule: name the field it is about
+            low = msg.lower()
+            loc = next((f for words, f in (("maximum operation time", "endpoint.max_minutes"),
+                                           ("watering time", "endpoint.minutes"), ("litres", "endpoint.litres"),
+                                           ("days", "schedule.days"), ("window", "schedule.windows")) if words in low), loc)
         out.append({"field": loc or None, "message": msg[:1].upper() + msg[1:]})
     return out
+
+
+def superseded_safety(body: dict, blocks) -> str | None:
+    """Owner decision of 27 October 2026: a program compiled over a block version whose safety settings (maximum
+    runtime, start conditions, stop conditions) were changed by a newer VALIDATED block version does not start again
+    until it is reviewed with the new version, validated and twin-tested. A block draft changes nothing. Returns why,
+    or None. Checked on every real start, at bench activation and in the Programs list."""
+    from ..blocks.definitions import Safety
+    a = body.get("authoring") or {}
+    bid, bv = a.get("block_id"), a.get("block_version")
+    if not bid or not bv:
+        return None
+    versions = [b for b in blocks.blocks() if b["block_id"] == bid]
+    mine = next((b for b in versions if b["version"] == bv), None)
+    newer = [b for b in versions if b["status"] == "VALIDATED" and b["version"] > bv]
+    if mine is None or not newer:
+        return None
+    latest = max(newer, key=lambda b: b["version"])
+    old = Safety.model_validate(mine["body"].get("safety") or {})
+    new = Safety.model_validate(latest["body"].get("safety") or {})
+    what = [w for w, k in (("maximum runtime", "max_runtime_s"), ("start conditions", "permissives"),
+                           ("stop conditions", "guards")) if getattr(old, k) != getattr(new, k)]
+    if not what:
+        return None
+    return (f"the block {latest['name']} changed its safety settings ({', '.join(what)}) in v{latest['version']}; "
+            f"this program uses v{bv}: review it with v{latest['version']} (Review and use), validate it and test it "
+            "in the Digital Twin before it can start again")

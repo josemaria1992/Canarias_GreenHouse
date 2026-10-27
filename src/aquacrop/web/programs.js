@@ -77,7 +77,12 @@
   function radio(name, value, cur, label, on) {
     return h("label", { class: "radio" }, h("input", { type: "radio", name, value, checked: cur === value ? true : null, onchange: () => { on(value); U.refresh(); } }), label);
   }
-  function blockOf(P, F) { return P.blocks.find(b => b.block_id === F.form.block_id); }
+  // the block as the form uses it: the pinned version's body (safety, meter, plan), not the newest one's
+  function blockOf(P, F) {
+    const b = P.blocks.find(x => x.block_id === F.form.block_id);
+    const pinned = b && F.form.block_version && (b.validated_bodies || {})[String(F.form.block_version)];
+    return pinned && F.form.block_version !== b.version ? Object.assign({}, b, { version: F.form.block_version, body: pinned }) : b;
+  }
   function safetyText(blk) {
     const s = blk && blk.body && blk.body.safety && blk.body.safety.max_runtime_s;
     return s ? `Safety (set on the block): one operation never runs longer than ${Math.round(s / 6) / 10} min, startup to verified stop.`
@@ -87,8 +92,8 @@
     const f = F.form;
     const usable = P.blocks.filter(b => b.status === "VALIDATED");
     const others = P.blocks.filter(b => b.status !== "VALIDATED" && b.status !== "RETIRED");
-    const blk = blockOf(P, F);
-    const newer = blk && blk.version !== f.block_version ? blk : null;
+    const blk = blockOf(P, F), latestBlk = P.blocks.find(b => b.block_id === f.block_id);
+    const newer = latestBlk && latestBlk.version !== f.block_version ? latestBlk : null;
     return h("fieldset", { class: bad("block_id") ? "bad-field" : null }, h("legend", null, "1. Where?"),
       usable.length ? usable.map(b => radio("prog-block", b.block_id, f.block_id, `${b.name} — ${b.summary} (v${b.version})`, v => { f.block_id = v; f.block_version = b.version; }))
         : h("p", { class: "warn small" }, "No validated block yet. Create and validate one on Blocks: a program waters through a block."),
@@ -265,6 +270,7 @@
       val.issues && val.issues.length ? h("ul", { class: "bad small" }, val.issues.map(x => h("li", null, x))) : null,
       ctx.physical_needs && ctx.physical_needs.length && can("ops_read") ? h("details", null, h("summary", { class: "small" }, `Before a physical test (${ctx.physical_needs.length})`), h("ul", { class: "small" }, ctx.physical_needs.map(x => h("li", null, x)))) : null,
       sim && sim.passed ? h("p", { class: "muted small" }, `Twin result accepted by ${sim.accepted_by} (${new Date(sim.accepted_utc).toLocaleString()}): ${sim.meaning}.`) : null,
+      v.safety_refusal ? h("p", { class: "small bad", "data-safety-refusal": "" }, pill("CANNOT START", "bad"), " ", v.safety_refusal) : null,
       sim && sim.passed && sim.current === false ? h("p", { class: "small warn" }, sim.why_not_current) : null,
       can("equipment_edit") ? h("div", { class: "row" },
         !legacy ? h("button", { class: "small", onclick: edit }, v.status === "DRAFT" && v.form.form_version !== 1 ? "Edit" : "Change (new version)") : null,

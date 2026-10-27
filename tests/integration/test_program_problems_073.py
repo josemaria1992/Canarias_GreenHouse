@@ -45,3 +45,14 @@ def test_the_program_list_offers_the_latest_validated_block_version(tmp_path, ic
         assert c.post("/api/blocks/validate", json={"block_id": "s1", "version": 2}, headers=h).status_code == 200
         bl = {x["block_id"]: x for x in c.get("/api/programs", headers=h).json()["blocks"]}["s1"]
         assert bl["version"] == 2 and bl["body"]["safety"]["max_runtime_s"] == 900
+
+
+def test_a_form_level_rule_names_its_field(tmp_path, icfg):
+    from fastapi.testclient import TestClient
+    from tests.integration.test_api_installation import ORIGIN, _app, login
+    from tests.integration.test_program_forms_070 import FORM, ready_block
+    with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:
+        h = login(c, "admin1")
+        ready_block(c, h)
+        r = c.post("/api/programs/preview", json={"form": dict(FORM, endpoint={"kind": "TIME", "minutes": 5})}, headers=h)
+        assert r.status_code == 422 and r.json()["detail"]["field"] == "endpoint.max_minutes", r.text

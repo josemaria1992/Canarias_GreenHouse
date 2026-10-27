@@ -50,7 +50,7 @@ class ProgramRefIn(_B):
     accept_overlaps: bool = False
 
 
-def register(app, require, host, programs, equipment, cfg, *, proof_context=None) -> None:
+def register(app, require, host, programs, equipment, cfg, *, proof_context=None, blocks=None) -> None:
     why_not = ("Programs cannot run on this real system: scheduled bench tests are not enabled in its configuration. "
                "They need an approved IO 8CH allowlist and an armed test session (ADR-0018).")
 
@@ -127,6 +127,10 @@ def register(app, require, host, programs, equipment, cfg, *, proof_context=None
             it = host_items.get(iid)
             if it and it.command_point and it.command_point not in cfg.bench_tests.allowlist:
                 problems.append(f"{it.name}: {it.command_point} is not an approved bench test output")
+        if blocks is not None:
+            from ..programs.authoring import superseded_safety
+            if (why := superseded_safety(v["body"], blocks)) is not None:
+                problems.append(why)
         if problems:
             raise HTTPException(409, "not ready for a physical test: " + "; ".join(problems))
         return await call(programs.activate, p.username, STORE_ID, body.program_id, body.version,
