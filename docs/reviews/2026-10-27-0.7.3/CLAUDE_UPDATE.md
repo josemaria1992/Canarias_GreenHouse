@@ -1,6 +1,6 @@
-# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06) and C077 fixes
+# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes and UX-07
 
-Status: **C077-01..08 are implemented on the branch and NOT deployed** (see C077 below). UX-07 is in progress. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
+Status: **C077-01..08 and UX-07 are implemented on the branch and NOT deployed** (see below). Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
 
 ## Source identity
@@ -81,10 +81,36 @@ These are the owner's facts about the physical bench. They are recorded here and
 |---|---|
 | `start:fill-main`, `fill-a`, `fill-b`, `fill-acid`: does each fill pipe join the mains pipe? | **Yes.** A pipe runs from mains to each tank with a valve in between. These are the explicit `v-fill-*` valves. |
 | `inline:dose-a/b/acid:v-out-*`: is the outlet valve in series on the dosing pipe? | **Clarification asked.** The owner answered "flow meters in series". The `flow-tp-*` meters are already explicit and in series, but `v-out-*` are valve items. It is still open whether each dosing line has an outlet valve. |
-| `inline:return:rp2`: is Return pump 2 in series with Return pump 1? | **No.** They are parallel pumps inside the drainage tank, and the second one is there in case one fails. This needs a "parallel spare" answer in the import, like Main pumps 1 and 2. Being added. |
+| `inline:return:rp2`: is Return pump 2 in series with Return pump 1? | **No.** They are parallel pumps inside the drainage tank, and the second one is there in case one fails. Added in `fc34fe6`: a pump drawn on a line that already has a pump is asked Yes (in series), No, or **Parallel spare**. Parallel spare gives it the same suction and the same downstream as its partner, never in series. A test confirms that with this answer the bench drawing is ready and that Return pumps 1 and 2 both take from the drainage tank and join before the return meter. |
 | `tap:ec`, `tap:ph`: do they measure Main tank? | **Yes.** |
 | `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no temperature sensor in any tank. Where the configured "Main tank temperature" sensor is, or whether it should be removed, is still open. |
 | `tap:pres-s1`, `tap:pres-s2`: do they measure the sector pipes? | **Yes.** |
+
+## UX-07 equipment types without code
+
+Implementation: `6bf1c25`. The import's parallel-spare answer is `fc34fe6`. Author tests and Claude's browser demo only; independent acceptance: **NOT RUN**.
+
+| Requirement | What was built | Evidence |
+|---|---|---|
+| No JSON, same model | New type and Edit open one guided form (`web/type-form.js`). It writes the existing `TypeBody` through the existing `POST /api/equipment/types/draft`; there is no second schema or store. The JSON textarea and the enum help text are removed. Type cards read in words. | `tests/integration/test_type_form_ux07.py`: for every kind, the form's output is accepted by the draft endpoint and the answered polarity is stored. Browser: no textarea on the page. |
+| Choose what it is | 13 visual kinds plus "Copy an existing type". | `evidence-ux07/01-kind-picker.png` |
+| Icons and symbol preview | A gallery of every icon (18), with an enlarged preview. Beside it is the actual diagram symbol with labelled connection points, drawn by `AqHydraulicEditor.symbolPreview`, which uses the renderer's own box, icon and port rules. The icon never adds ports or behaviour. A tank preview is labelled representative: capacity is entered on each tank item. | Browser: 18/18 icons chosen and previewed. The pump preview is 40×40 with Suction and Discharge, the same as the diagram renderer draws it (`02-…`, `04-tank-form.png`). |
+| Relevant questions | Pump: control output, "running?", "fault?". Valve: open and closed position. Sensors and meters: what it measures, unit, signal (4–20 mA, 0–20 mA, 0–5 V, 1–5 V, each explained). Contact polarity starts unchosen and blocks saving until it is answered. | Browser checks UX07-2 and UX07-8 (`03-pump-form.png`, `05-…`). |
+| Details and limits | Details with value type, unit, range and "must be filled in". Limits in minutes and seconds with explanations. Missing and duplicate names are reported where they are added. | UX07-5 |
+| Add a feature | Reading, status signal, detail, control output, or "something the form cannot do". A second control output, and anything unsupported, is explained. The need is kept on the page with "not sent, and nobody has been notified", plus a Copy button. | UX07-5, UX07-9 (custom type with a temperature reading, a Door open signal and a Manufacturer detail; twin stays NOT MODELLED) |
+| Summary, save, reopen | Summary in words; missing fields named per field. Reopening a draft gives the same summary and answers. A second edit changes only the edited field: simulation, operations and roles are kept. A no-change edit of the built-in Valve saves the same definition. | UX07-5, UX07-6 |
+| State and permissions | Entries, selection and the open editor survive refreshes, keyed per editor (UX-06). Activation is unchanged: the types page stays administrator-only, and an operator's activation is refused by the server; the administrator activates. | UX07-4, UX07-11 |
+
+Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts), headless Chromium, real clicks and typing, **25/25** (`evidence-ux07/checks.json`, script `check_ux07.cjs`). The demo found and fixed three defects:
+- the Add buttons stayed disabled after typing;
+- an old missing-field message stayed after the field was fixed;
+- the limits fields were laid out in a column.
+
+**Unsupported, and explained in the form:** a second control output (close, reverse, a second speed); any behaviour the engine has no logic for; twin models beyond the existing ones (NOT MODELLED stays). A CLOSED position signal is shown with the equipment, but programs do not use it.
+
+**Owner decisions still needed:**
+- Where requests for unsupported needs go, and who reviews them. Until then they are kept on the page only.
+- Whether operators should reach the types page to draft types. The server already lets operators save drafts, but the page is administrator-only, as before. Permissions were not changed.
 
 ## UX-01..UX-06
 
@@ -116,6 +142,7 @@ These are the owner's facts about the physical bench. They are recorded here and
   - UAT-12 tour fix: `eafeb85`.
   - On `7075853` at the time of writing: 12 checks passing, 24 pending, 0 failing. **Not reported green.**
 
+- **UX-07 (author tests):** `tests/js/type_form.test.js` (6), `tests/integration/test_type_form_ux07.py`, the equipment-type and import suites, all 8 JS test files; browser 25/25.
 - **C077 (author tests, not acceptance):** full suite on `b1db08f`: 824 Python tests passed, 0 failed; all 8 `tests/js/*.test.js` passed. Browser checks on a bench-data copy, 7/7 (`evidence-c077/checks.json`). Independent acceptance: NOT RUN.
 
 ## Deployment and access
@@ -131,11 +158,11 @@ These are the owner's facts about the physical bench. They are recorded here and
 
 ## Remaining
 
-- **C077:** not deployed. Owner clarifications: the dosing outlet valves and where the temperature sensor is. A parallel-spare answer for Return pump 2 is being added. Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
-- **UX-07:** in progress, not yet in this branch.
+- **C077:** not deployed. Owner clarifications: the dosing outlet valves and where the temperature sensor is. Return pump 2 can now be answered as a parallel spare (`fc34fe6`). Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
+- **UX-07:** not deployed. Owner decisions on request routing and on operator access to the types page.
 
 - CI result on `7075853`.
 - The signed-in real-bench walkthrough by the owner.
 - VPN DNS or hosts entries for other clients, and the DHCP reservation.
 
-Ready for independent Codex re-review of C077-01..08: **YES**, apart from the open items above. UX-07: **not yet**.
+Ready for independent Codex re-review of C077-01..08 and UX-07: **YES**, apart from the open items above. Nothing is deployed.
