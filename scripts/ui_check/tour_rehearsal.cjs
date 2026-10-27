@@ -161,7 +161,9 @@ async function speed(p, n) {
 }
 async function stopAll(p) {
   await show(p, "overview");
-  await viewButton(p, "Stop all processes");
+  // 0.7.1: the Overview's Stop all is disabled while nothing runs (its note says so); pressed only when it can act
+  const b = p.locator("section.view:not(.hidden) button", { hasText: exact("Stop all processes") }).first();
+  if (await b.isEnabled()) await b.click();
   await until(p, async () => Object.values(await procs(p)).every(x => x.state === "STOPPED" || x.state === "FAULT_LOCKOUT"), 30000);
 }
 const simS = async p => (await get(p, "/api/status")).twin.sim_s;
