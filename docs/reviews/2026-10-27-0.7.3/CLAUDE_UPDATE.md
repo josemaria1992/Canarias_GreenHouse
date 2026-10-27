@@ -1,6 +1,6 @@
-# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes and UX-07
+# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes, UX-07 and R402
 
-Status: **C077-01..08 and UX-07 are implemented on the branch and NOT deployed** (see below). Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
+Status: **C077-01..08, UX-07 and R402-01..06 are implemented on the branch** (see below); deployment is recorded under Deployment. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
 
 ## Source identity
@@ -86,6 +86,25 @@ These are the owner's facts about the physical bench. They are recorded here and
 | `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no temperature sensor in any tank. Where the configured "Main tank temperature" sensor is, or whether it should be removed, is still open. |
 | `tap:pres-s1`, `tap:pres-s2`: do they measure the sector pipes? | **Yes.** |
 
+## R402 findings (Codex review of e40285f)
+
+Author tests and Claude's browser checks only. Independent acceptance: **NOT RUN**.
+
+| ID | Implementation | Author evidence | Remaining |
+|---|---|---|---|
+| R402-01 Stop all and a waiting turn | `0c44246`. Stop all and the asynchronous stop (lease loss) settle every start that waits for its pump group, each with a `PROGRAM_START_CANCELLED` record. A weekly start, or a repeat window's next cycle, is recorded CANCELLED for that window. A condition is disarmed until it clears and re-arms as usual. A keep-between program counts as just stopped, so its minimum off time applies. Future windows and the mode are unchanged. A condition waiting its turn now shows WAITING. | `tests/unit/test_recovery_c077.py`: weekly, repeat and condition, each with Stop all and with lease loss: no ON for 180 s, the occurrence CANCELLED, mode still AUTO. The condition re-arms only after clearing. Codex's probe `stopped_turn`: **0 ONs** after Stop all (was 2). | Whether leaving AUTO should also record waiting occurrences CANCELLED is unchanged (they are cleared; AUTO re-entry skips windows already begun). |
+| R402-02 flow units | `3a20a28`. `FLOW_TO_L_MIN` covers L/min, L/h, m³/h (m3/h) and L/s. A litre step converts each reading from the meter's scaling unit, so targets, the volume cap and the minimum-flow threshold all see L/min. A litre meter reading another quantity is refused at start, and a litre step fails if one appears. The twin writes its L/min water into a meter in that meter's unit. | The same physical 10 L/min meter scaled in each unit delivers its 5 L target within 0.6 L of the water that actually flowed. A pressure "meter" is refused with no ON. Codex's L/h probe no longer finishes early (50 L at 10 L/min needs about 5 min). | Physical flow: NOT RUN. |
+| R402-03 target met during a changeover | `0c44246`. During a pump replacement in a litre step, a met target (when no later RUN or DELIVER needs a pump) or the equipment's volume cap ends the operation through the established stop path, with every OFF retried until verified. The partner is **not** started (`PROGRAM_PUMP_REPLACEMENT_NOT_NEEDED`). A later watering step still brings the partner in. | Residual flow with dropped OFFs (the 11 L case): no standby ON, result DONE, all outputs OFF. The cap crossed by residual flow gives RUNTIME_GUARD with no standby ON. A later RUN step still replaces. Codex's probe: **0** additional ONs. | Water that flows while an unverified pump keeps running after the stop is not counted (the stop path does not meter); the alarm path is unchanged. |
+| R402-04 Button polarity | `2fdad78`. Any new type (a built-in kind, Button or switch included) and any copy starts every digital input with no polarity, so the form asks and refuses to save until it is answered. Editing a stored type keeps its saved polarity. | JS model tests (Button, copy, stored edit). The API saves the answered polarity for every kind. Browser: a new Button has no polarity chosen and is refused until answered, then saved `inverted: true` as answered (`evidence-r402/03-…`). | — |
+| R402-05 what a reading measures | `2fdad78`. For a new reading, choosing what it measures sets its key, label and unit, so it persists. A reading already in a saved version keeps its key and quantity, because items hold its channel and history; the choice is shown fixed with the reason. A unit that does not fit the quantity is named before saving. | JS model tests, and an API journey: selector → draft endpoint → reopened form gives pressure/bar. Browser: Flow rate changed to Pressure saves as `pressure`/bar and reopens as Pressure, bar, fixed (`04-…`). | — |
+| R402-06 readiness after New design or edits | `8cbc344`. The reconcile view states whether the saved design is still exactly the import's result (the revisions it recorded). After a New design or any saved edit it is never ready: it names the change and the current graph's own errors, and keeps the answers for a deliberate re-import. | API: reconciled import → edit saved → "changed"; → New design saved → empty, not ready, answers kept. Browser 8/8 on a bench copy: remove a connection, save, reload → not ready; re-import → ready with nothing asked; New design, save, reload → no ready panel (`evidence-r402/01-…`, `02-…`). | — |
+
+**Validation:**
+- Full suite on the final code: 844 passed, 8 skipped, 0 failed (on 8cbc344); all JS test files pass.
+- Codex's probes: re-run as described in the table.
+- UX-07 browser demo re-run: 25/25.
+- The demos revealed one harness slip, my seed's invalid pH/EC icon. A test-only focus step was needed because the app does not redraw while a text field has focus; a real click on a list moves the focus.
+
 ## UX-07 equipment types without code
 
 Implementation: `6bf1c25`. The import's parallel-spare answer is `fc34fe6`. Author tests and Claude's browser demo only; independent acceptance: **NOT RUN**.
@@ -165,4 +184,4 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 - The signed-in real-bench walkthrough by the owner.
 - VPN DNS or hosts entries for other clients, and the DHCP reservation.
 
-Ready for independent Codex re-review of C077-01..08 and UX-07: **YES**, apart from the open items above. Nothing is deployed.
+Ready for independent Codex re-review of R402-01..06 (and the C077/UX-07 rows they amend): **YES**, apart from the open owner items above.

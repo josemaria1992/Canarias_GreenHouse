@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.8 (2026-10-27): review C077 and R402, equipment types without code (UX-07)
+
+- Sectors on one pump group take turns; a stop (Stop all, a user stop, leaving AUTO, a lost lease, a changed program)
+  cancels what waits, whether the rest of a cycle or a start waiting its turn; no restart springs back (C077-01/02,
+  R402-01).
+- A failed pump gets OFF again until verified; litres are counted through a changeover; a target met or the volume cap
+  reached meanwhile ends the cycle without starting the spare pump; litres count in the meter's own flow unit
+  (L/min, L/h, m³/h, L/s) and other quantities are refused (C077-03/04/05, R402-02/03).
+- Twin: New design is really empty; an inline meter snaps to the grid and turns; the earlier drawing imports with its
+  connections and one reconciliation (yes / no / parallel spare); its completion describes only the design it saved
+  (C077-06/07/08, R402-06).
+- Equipment types: a guided form replaces the JSON editor (kind, icon gallery with the real diagram symbol, relevant
+  questions, Add a feature, a summary in words); a new or copied type asks every contact's polarity; what a reading
+  measures persists (UX-07, R402-04/05).
+
 ## 0.7.7 (2026-10-27): owner answers on pump replacement
 
 - Either pump serves either sector (the block's duty pair). When the healthy pump is busy with the other sector, the
