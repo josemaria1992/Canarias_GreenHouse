@@ -213,8 +213,8 @@ class ProgramBody(_M):
     action: Action = Field(discriminator="type")
     on_failure: Literal["STOP_AND_ALARM"] = "STOP_AND_ALARM"
     enabled: bool = True
-    permissives: tuple[Condition, ...] = Field(default=(), max_length=8)     # 0.7.0
-    guards: tuple[Condition, ...] = Field(default=(), max_length=8)          # 0.7.0
+    permissives: tuple[Condition, ...] = Field(default=(), max_length=16)    # 0.7.0; 0.7.3: the block's own first
+    guards: tuple[Condition, ...] = Field(default=(), max_length=16)         # 0.7.0
     authoring: dict | None = None           # 0.7.0: the form this body was compiled from (programs/authoring.py)
     basis: Literal["WATERING_AFTER_STARTUP"] | None = None   # what a timed run's duration counts
 

@@ -269,6 +269,13 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
     normal_stop = _stop_plan(block.plan.normal_stop, steps, "normal stop")
     fault_stop = _stop_plan(block.plan.fault_stop, steps, "fault stop")
     steps.extend(normal_stop)
+    # 0.7.3: the block's own start and stop conditions apply to every program over it, before the program's own
+    bp = tuple(Rule.model_validate(c.model_dump()) for c in block.safety.permissives)
+    bg = tuple(Rule.model_validate(c.model_dump()) for c in block.safety.guards)
+    for i, r in enumerate(bp):
+        _check_rule(r, views, f"the block's start condition {i + 1}")
+    for i, r in enumerate(bg):
+        _check_rule(r, views, f"the block's stop condition {i + 1}")
     for i, r in enumerate(f.permissives):
         _check_rule(r, views, f"start condition {i + 1}")
     for i, r in enumerate(f.guards):
@@ -309,7 +316,7 @@ def compile_form(f: WateringForm, block: BlockBody, block_status: str, views: di
     body = {"description": f.description, "trigger": trigger,
             "action": {"type": "SEQUENCE", "steps": steps, "max_runtime_s": guard_s}
             | ({"normal_stop": normal_stop} if normal_stop else {}) | ({"fault_stop": fault_stop} if fault_stop else {}),
-            "permissives": [_cond(r) for r in f.permissives], "guards": [_cond(r) for r in f.guards],
+            "permissives": [_cond(r) for r in bp + f.permissives], "guards": [_cond(r) for r in bg + f.guards],
             "authoring": f.model_dump(mode="json"), "basis": "WATERING_AFTER_STARTUP" if e.kind == "TIME" else None}
     if len(steps) > 32:
         raise FormRefused("the block's plan and the watering make more than 32 steps", "block_id")
@@ -345,7 +352,7 @@ def _cond(r: Rule) -> dict:
 OPS = {"ABOVE": "is above", "BELOW": "is below", "IS_ON": "is on", "IS_OFF": "is off"}
 
 
-def summary(f: WateringForm, block_name: str, names: dict[str, str], tz: str, now_utc: datetime) -> dict:
+def summary(f: WateringForm, block_name: str, names: dict[str, str], tz: str, now_utc: datetime, block=None) -> dict:
     """Plain words for the program card and the preview, from the form; plus the next three starts."""
     e, s = f.endpoint, f.schedule
     what = (f"water for {e.minutes:g} min (after the startup steps)" if e.kind == "TIME" else
@@ -380,9 +387,12 @@ def summary(f: WateringForm, block_name: str, names: dict[str, str], tz: str, no
                    for t in s.times]
         nxt = [w.start_local for w in sc.upcoming("preview", entries, tz, now_utc, 30)
                if w.start_utc > now_utc][:3]
-    rule = lambda r: f"{names.get(r.item, r.item)} {r.role} {OPS[r.op]}{'' if r.value is None else f' {r.value:g} {r.unit}'} for {r.persist_s:g} s"  # noqa: E731
+    rule = lambda r: f"{names.get(r.item, r.item)} {r.role} {OPS[r.op]}{'' if r.value is None else f' {r.value:g} {r.unit or ""}'.rstrip()} for {r.persist_s:g} s"  # noqa: E731
     return {"text": f"{block_name}: {what}, {when}; {guard}.", "next": nxt,
-            "start_conditions": [rule(r) for r in f.permissives], "stop_conditions": [rule(r) for r in f.guards]}
+            "start_conditions": [rule(r) for r in f.permissives], "stop_conditions": [rule(r) for r in f.guards],
+            # 0.7.3: the block's own conditions, applied with the program's
+            "block_start_conditions": [rule(r) for r in (block.safety.permissives if block else ())],
+            "block_stop_conditions": [rule(r) for r in (block.safety.guards if block else ())]}
 
 
 FIELD_WORDS = {"block_id": "the block", "endpoint.minutes": "minutes per cycle", "endpoint.litres": "litres per cycle",

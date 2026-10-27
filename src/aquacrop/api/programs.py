@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..equipment.definitions import TypeBody
+from ..blocks.definitions import parse as _parse_block
 from ..programs.definitions import actuators, errors_text, parse, validate
 from ..programs.proof import refusal as proof_refusal
 from ..programs.schedule import overlap, upcoming
@@ -197,7 +198,7 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
         conflicts = sorted({f"{o['name']} ({', '.join(sorted(mine & set(actuators(parse(o['body'])))))})"
                             for o in programs.versions() if o["status"] == "VALIDATED"
                             and mine & set(actuators(parse(o["body"])))})
-        return {"summary": summary(f, b["name"], nm, cfg.site.timezone, datetime.now(timezone.utc)),
+        return {"summary": summary(f, b["name"], nm, cfg.site.timezone, datetime.now(timezone.utc), _parse_block(b["body"])),
                 "steps": [step_words(s, nm) for s in pbody["action"]["steps"]],
                 # R07-02: the plans the engine follows, in the operator's words (programs/engine.py _choose_plan)
                 "fault_stop": stop_words(pbody["action"].get("fault_stop"), nm, "after a failure or a stop condition"),

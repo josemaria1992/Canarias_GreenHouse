@@ -143,13 +143,14 @@
         h("p", { class: "muted small" }, "Each window starts its first cycle at once; the next cycle starts the wait after the previous one ended verified. At the finish a running cycle is stopped. A window right after another starts its own first cycle as soon as the earlier one is verified stopped, without the earlier wait."),
         h("p", { class: "muted small" }, `Times are ${P.timezone}. A start in the spring clock change gap starts at 03:00 with its full length; the repeated autumn hour runs once.`)] : null);
   }
-  function ruleRows(P, list, title, help) {
+  function ruleRows(P, list, title, help, keyOf) {
     const sensors = P.readings;
+    keyOf = keyOf || (i => `${list === P0.form.form.permissives ? "permissives" : "guards"}.${i}`);
     return h("div", null, h("h4", null, title), h("p", { class: "muted small" }, help),
       list.map((r, i) => {
         const opts = sensors.find(x => x.item_id === r.item && x.role === r.role);
         const analog = !opts || opts.signal === "ANALOG";
-        const rowKey = `${list === P0.form.form.permissives ? "permissives" : "guards"}.${i}`;
+        const rowKey = keyOf(i);
         return h("div", { class: "row wrap rule" + (bad(rowKey) ? " bad-field" : "") },
           problemFor(rowKey).map(m => h("span", { class: "bad small", role: "alert" }, m)),
           h("select", { "aria-label": `${title} ${i + 1} reading`, onchange: ev => { const [it, ro] = ev.target.value.split("|"); r.item = it; r.role = ro; const o = sensors.find(x => x.item_id === it && x.role === ro); r.unit = o && o.unit; r.op = o && o.signal === "ANALOG" ? "ABOVE" : "IS_ON"; r.value = o && o.signal === "ANALOG" ? r.value : null; U.refresh(); } },
@@ -173,6 +174,8 @@
     return h("div", { class: "preview", "data-preview": "" },
       h("p", null, h("strong", null, pv.summary.text)),
       pv.summary.next.length ? h("p", { class: "small" }, "Next windows: ", pv.summary.next.join(" · ")) : null,
+      (pv.summary.block_start_conditions || []).length ? h("p", { class: "small", "data-block-conditions": "" }, "The block requires: ", pv.summary.block_start_conditions.join("; and ")) : null,
+      (pv.summary.block_stop_conditions || []).length ? h("p", { class: "small" }, "The block stops it if: ", pv.summary.block_stop_conditions.join("; or ")) : null,
       pv.summary.start_conditions.length ? h("p", { class: "small" }, "Starts only if: ", pv.summary.start_conditions.join("; and ")) : null,
       pv.summary.stop_conditions.length ? h("p", { class: "small" }, "Stops if: ", pv.summary.stop_conditions.join("; or ")) : null,
       h("ol", { class: "small" }, pv.steps.map(s => h("li", null, s))),
@@ -284,4 +287,5 @@
       Object.values(latest).filter(v => v.status !== "RETIRED").sort((a, b) => a.name.localeCompare(b.name)).map(v => card(P, O && O.available ? O : null, v)),
       Object.keys(latest).length ? null : h("div", { class: "card" }, h("p", { class: "muted" }, "No program yet.")));
   };
+  window.AqRuleRows = (readings, list, title, help) => ruleRows({ readings }, list, title, help, i => `block.${title}.${i}`);
 })();

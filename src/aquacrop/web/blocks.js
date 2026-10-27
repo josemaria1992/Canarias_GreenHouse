@@ -159,7 +159,8 @@
       h("fieldset", { "data-safety-settings": "" }, h("legend", null, "Safety settings"),
         h("label", null, "Maximum runtime of one operation (min) ", h("input", { type: "number", min: 0.1, max: 1440, step: "any", class: "w-num", value: minutes(safety.max_runtime_s) == null ? "" : minutes(safety.max_runtime_s),
           "aria-label": "Maximum runtime in minutes", oninput: ev => { safety.max_runtime_s = ev.target.value === "" ? null : Math.round(Number(ev.target.value) * 60); } })),
-        h("p", { class: "muted small" }, "An independent bound for every program over this block, set once here: from the startup to the verified stop, one operation never runs longer. When it is reached the normal stop runs and every stop is still verified. No value is proposed: enter the one that is right for this installation.")),
+        h("p", { class: "muted small" }, "An independent bound for every program over this block, set once here: from the startup to the verified stop, one operation never runs longer. When it is reached the normal stop runs and every stop is still verified. No value is proposed: enter the one that is right for this installation."),
+        blockConditions(safety)),
       h("h3", null, "Startup"), stepRows(F, "startup", nodes, names),
       h("h3", null, "Normal stop"), stepRows(F, "normal_stop", nodes, names),
       h("h3", null, "Fault stop"), h("p", { class: "muted small" }, "Empty: every started item is switched off, the last started first, and each stop is verified."),
@@ -186,7 +187,7 @@
       onSelect: id => { B.sel = B.sel === id ? null : id; U.refresh(); } });
     return h("details", { class: "card", open: B.viewOpen === false ? null : true, ontoggle: ev => { B.viewOpen = ev.target.open; } },
       h("summary", null, h("strong", null, "Installation (read-only)")),
-      h("p", { class: "muted small" }, "For orientation only: nothing here moves, connects or removes equipment. Design the drawing in Digital Twin."),
+      h("p", { class: "muted small" }, "For orientation only: nothing here moves, connects or removes equipment."),
       box, side);
   }
 
@@ -197,11 +198,19 @@
     mount("v-blocks",
       h("div", { class: "card" }, h("h2", null, "Blocks"),
         h("p", { class: "muted" }, "A block brings together equipment that works for one purpose — watering a sector, returning drainage, filling a tank — and holds the steps and safety settings that make it safe to run. Programs water through blocks."),
-        h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit") || !!B.form, onclick: () => { B.form = emptyForm(); B.issues = null; B.idOwned = false; U.refresh(); } }, "New block"),
-          h("a", { class: "small", href: "#equipment" }, "Equipment"), h("a", { class: "small", href: "#twin" }, "Design the drawing in Digital Twin"))),
+        h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit") || !!B.form, onclick: () => { B.form = emptyForm(); B.issues = null; B.idOwned = false; U.refresh(); } }, "New block")),
       orientation(topo, dia, usedBy, blockNames),
       B.form ? blockForm(T, topo, usedBy) : null,
       T.blocks.length ? T.blocks.filter(b => b.status !== "RETIRED").map(b => blockCard(T, b)) : h("div", { class: "card" }, h("p", { class: "muted" }, "No block yet.")),
       T.blocks.some(b => b.status === "RETIRED") ? h("details", null, h("summary", { class: "small" }, "Retired blocks"), T.blocks.filter(b => b.status === "RETIRED").map(b => blockCard(T, b))) : null);
   };
+  // 0.7.3: the block's own start and stop conditions, applied to every program over it with the program's own
+  function blockConditions(safety) {
+    safety.permissives = safety.permissives || []; safety.guards = safety.guards || [];
+    if (!B.readings) { B.readings = []; api("GET", "/api/programs").then(r => { B.readings = r.readings || []; U.refresh(); }).catch(() => {}); }
+    if (!window.AqRuleRows) return null;
+    return h("div", { "data-block-conditions": "" },
+      window.AqRuleRows(B.readings, safety.permissives, "Block start conditions", "Every program over this block starts only when all of these hold (a missing or stale reading counts as not holding), in addition to the program's own start conditions."),
+      window.AqRuleRows(B.readings, safety.guards, "Block stop conditions", "Any one of these stops every program over this block through its normal stop. No threshold is proposed: enter the ones that are right for this installation."));
+  }
 })();

@@ -67,8 +67,27 @@ class Plan(_B):
     provenance: Literal["TEMPLATE_EXAMPLE", "OWNER_CONFIGURED", "REVIEWED"] = "TEMPLATE_EXAMPLE"
 
 
+class BlockCondition(_B):
+    """0.7.3: a reading the block itself requires (start) or watches (stop), for every program over it. Checked
+    against the equipment when a program is compiled; a missing or stale reading never permits a start."""
+    item: str = Field(pattern=ID)
+    role: str = Field(pattern=ID)
+    op: Literal["ABOVE", "BELOW", "IS_ON", "IS_OFF"]
+    value: float | None = None
+    unit: str | None = Field(default=None, max_length=16)
+    persist_s: float = Field(default=5, ge=0, le=3600)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if (self.op in ("ABOVE", "BELOW")) != (self.value is not None):
+            raise ValueError("above/below need a value with its unit; is on/is off take none")
+        return self
+
+
 class Safety(_B):
     max_runtime_s: float | None = Field(default=None, gt=0, le=86400)    # one operation, startup to verified stop
+    permissives: tuple[BlockCondition, ...] = Field(default=(), max_length=8)    # 0.7.3: all must hold to start
+    guards: tuple[BlockCondition, ...] = Field(default=(), max_length=8)         # 0.7.3: any one stops it
 
 
 class BlockBody(_B):
@@ -93,6 +112,10 @@ def digest(body: BlockBody) -> str:
     d = body.model_dump(mode="json")
     if body.safety == Safety():
         d.pop("safety")                       # blocks written before 0.7.1 keep their digest
+    else:
+        for k in ("permissives", "guards"):   # and those written before 0.7.3
+            if not d["safety"][k]:
+                d["safety"].pop(k)
     return hashlib.sha256(json.dumps(d, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
