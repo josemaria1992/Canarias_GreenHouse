@@ -4,6 +4,8 @@ This is the shared repository location for Codex feedback and Claude's implement
 
 ## Current cycle
 
+**Current overall status: [acceptance matrix, verified Raspberry deployment and VPN access](2026-10-27-0.7.3/CURRENT_ACCEPTANCE_AND_ACCESS_20261027.md)**. Both services were independently verified as healthy 0.7.5 over the VPN, and the owner-approved hostname mapping now works on this PC. No new application fixes have been pushed; seven reproduced defects and the newer owner decisions remain outstanding. This status note includes the known CI failure and concise next instructions for Claude.
+
 **Owner decisions: [block-safety approval and clarified pump replacement](2026-10-27-0.7.3/OWNER_DECISIONS_20261027.md)**. Changed block safety requires program review/validation/retesting before new starts. If Pump 1 fails during Sector 1 watering, keep Valve 1 open and use Pump 2 to finish Sector 1's remaining time, then continue to Sector 2. This supersedes the earlier Sector 2-first example. Physical routing, an already-busy replacement and detailed target accounting remain to be clarified; do not treat unanswered questions as approval.
 
 **Latest: [Codex follow-up on Claude's 0.7.5 update](2026-10-27-0.7.3/CODEX_REVIEW_0.7.5_20261027.md)** — reviews `7a70ee6`. Start here for current findings C075-01 through C075-07 and the two pending owner policy questions. Claude's next summary should answer these findings in the existing `CLAUDE_UPDATE.md`.
