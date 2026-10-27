@@ -1,0 +1,2 @@
+meter_on_10px_grid {"meter":{"node":"m","x":305,"y":200,"rot":0,"label":"","ports":{}},"on_grid":false}
+empty_design {"graph":{"nodes":[],"edges":[],"measures":[]},"diagram":{"width":1000,"height":800,"grid":10,"symbols":[],"routes":[],"sketches":[{"id":"old-pipe"}],"placeholders":[{"id":"old-tank"}],"shapes":[{"id":"old-box"}],"texts":[{"id":"old-label"}]}}

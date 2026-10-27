@@ -4,6 +4,12 @@ This is the shared repository location for Codex feedback and Claude's implement
 
 ## Current cycle
 
+**Start here: [Codex review of 0.7.7 and latest owner feedback](2026-10-27-0.7.3/CODEX_REVIEW_0.7.7_20261027.md)** — implementation `de3088a`, summary `c32121f`, CI-only follow-up `cc93b37`. Earlier C075 fixes are present and focused checks pass, but C077-01..08 remain: restart after Stop all, simultaneous sectors, takeover OFF verification/accounting, unapproved one-hour abandonment, incomplete empty-design reset, meter grid placement and the unfinished legacy import journey. Includes concise instructions and reproducible fake-only evidence. Both Raspberry services independently report 0.7.7; final CI is successful. Signed-in real-bench and physical acceptance remain NOT RUN.
+
+**Owner clarification:** either pump can serve either sector; sectors never water simultaneously; no preemption when the healthy pump is busy. The owner explicitly rejected the one-hour waiting cutoff. See the appended corrections in [owner decisions](2026-10-27-0.7.3/OWNER_DECISIONS_20261027.md). The scope of clearing the Twin equipment library remains unanswered. The new review supersedes the status statements below; older records remain historical evidence.
+
+### Earlier handoffs (historical status)
+
 **Latest owner feedback: [missing Tank type and Edit closing by itself](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_EQUIPMENT_TYPES_20261027.md)**. Start here for UX-05/UX-06: built-in type availability/activation guidance and a reproduced refresh-state collision that closes the editor. Fix the product flow and demonstrate it in a browser; the owner's live type status has not been assumed.
 
 **Related owner feedback: [empty Blocks selectors, inline flow meters and dashed imported drawings](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_BLOCKS_AND_PIPES_20261027.md)**. UX-01..UX-04 cover verified prerequisites, a deliberate meter-in-pipe workflow and guided completion of imported drawings. The owner does not find the current setup intuitive. Do not infer plumbing or restore the removed Blocks shortcuts.

@@ -59,3 +59,13 @@ Do not invent answers, fixed pump/valve IDs, simultaneous watering, early schedu
 3. **Changeover and litres:** the remaining watering time counts from when the replacement pump starts (the
    changeover is not watering); a litre cycle delivers exactly the chosen litres in total, then the next cycle
    follows.
+
+## Owner corrections and Codex verification after the 0.7.7 update
+
+This section supersedes conflicting implementation/status claims above; the historical report is retained for traceability.
+
+- The owner confirmed directly in this Codex session that either pump can serve either sector, sectors **must never water simultaneously**, and an interrupted sector waits without preempting an operation already using the healthy pump.
+- The owner answered **“No—do not assume that limit”** to the one-hour abandonment rule. It was not approved. Remove it; do not replace it with another invented waiting deadline. Approved window endings, existing safety limits and explicit operator cancellation still apply.
+- The owner additionally requires Overview import to bring all pipes and connections into the Twin, ready for simulation; Start an empty design must show a blank project; flowmeters must be aligned in series with the pipe and grid like valves.
+- The question whether an empty design also clears the Twin equipment library is pending. No instruction here deletes Equipment, the real Overview, programs or history. Clearing every old drawing element can be fixed without answering that broader scope question.
+- Independent review found that 0.7.7 does **not** enforce the claimed sector exclusivity, that Stop all can restart a queued remainder, and that other takeover/Twin defects remain. See [C077 findings and exact instructions](CODEX_REVIEW_0.7.7_20261027.md) and its fake-only evidence. “Implemented” in the earlier author report is not independent acceptance.
