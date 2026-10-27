@@ -290,6 +290,50 @@
       st.sel = { type: "symbol", id: jid };
       changed(); say(`Junction added: ${pipeName(e)} now joins here. Connect its free branch with Connect pipe.`);
     }
+    /** UX-02: put an inline flow meter into a pipe: the pipe becomes upstream → meter inlet, meter outlet →
+     *  downstream, the meter sits on the pipe's longest straight run turned with the flow, both halves keep 90° routes.
+     *  One undoable step; anything that cannot be routed leaves everything as it was. A tap on the pipe moves to the
+     *  upstream half (said in the message). */
+    function insertMeter(edgeId, meterId) {
+      const e = edge(edgeId), r = route(edgeId), it = opt.items[meterId];
+      if (!e || !r) return say("Select a connected pipe first. A dotted earlier-drawing line is not a connection yet.", true);
+      if (!it || it.kind !== "meter") return say("Only an inline flow meter (a flow meter type with an inlet and an outlet) goes into a pipe; a sensor is associated instead.", true);
+      const placed = node(meterId);
+      if (placed && edgesOf(meterId).length) { st.sel = { type: "symbol", id: meterId }; draw(); return say(`${it.name} is already connected in the drawing (shown selected). Remove its pipes first to move it into another pipe.`, true); }
+      const pts = r.points && r.points.length >= 2 ? r.points : null;
+      if (!pts) return say("This pipe is not routed yet: reroute it, then insert the meter.", true);
+      let best = 0, len = -1;
+      for (let i = 0; i < pts.length - 1; i++) { const l = Math.abs(pts[i + 1][0] - pts[i][0]) + Math.abs(pts[i + 1][1] - pts[i][1]); if (l > len) { len = l; best = i; } }
+      const a = pts[best], b = pts[best + 1], horiz = a[1] === b[1];
+      if (len < SYM.meter.w + 40) return say("No straight part of this pipe is long enough for the meter: move its equipment apart first.", true);
+      const rot = horiz ? (b[0] > a[0] ? 0 : 180) : (b[1] > a[1] ? 90 : 270);
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      checkpoint();
+      if (!placed) st.graph.nodes.push({ id: meterId, kind: "meter", item: meterId });
+      st.diagram.symbols = st.diagram.symbols.filter(x => x.node !== meterId);
+      const sm = { node: meterId, x: mid[0] - SYM.meter.w / 2, y: mid[1] - SYM.meter.h / 2, rot, label: "", ports: {} };
+      st.diagram.symbols.push(sm);
+      const pin = G.anchor("meter", sm, "in");                        // the inlet sits exactly on the pipe's line
+      if (pin) { if (horiz) sm.y += a[1] - pin.y; else sm.x += a[0] - pin.x; }
+      st.graph.edges = st.graph.edges.filter(x => x.id !== edgeId);
+      st.diagram.routes = st.diagram.routes.filter(x => x.edge !== edgeId);
+      const keep = Object.assign({}, e); delete keep.id; delete keep.src; delete keep.dst;
+      const e1 = Object.assign({}, keep, { id: edgeId + "-in", src: e.src, dst: { node: meterId, port: "in" }, lineage: edgeId });
+      const e2 = Object.assign({}, keep, { id: edgeId + "-out", src: { node: meterId, port: "out" }, dst: e.dst, lineage: edgeId });
+      st.graph.edges.push(e1, e2);
+      st.diagram.routes.push({ edge: e1.id, points: [], mode: "AUTO", pins: [] }, { edge: e2.id, points: [], mode: "AUTO", pins: [] });
+      const taps = (st.graph.measures || []).filter(m => m.edge === edgeId);
+      taps.forEach(m => { m.edge = e1.id; });
+      (st.diagram.sketches || []).forEach(k => { if (k.edge === edgeId) k.edge = e1.id; });
+      const res = reroute([e1.id, e2.id]);
+      if (!res.ok) { Object.assign(st, st.undo.pop()); draw(); return say(`Meter not inserted: ${res.reason}. Nothing changed.`, true); }
+      st.sel = { type: "symbol", id: meterId };
+      changed();
+      say(`${it.name} inserted: ${nameOf(e.src.node)} → ${it.name} (inlet → outlet) → ${nameOf(e.dst.node)}.` +
+        (taps.length ? ` ${taps.length} tap(s) on this pipe now measure the upstream half.` : "") +
+        (it.planned ? " It is planned: litres are measured only once its flow channel is chosen, verified and scaled on Equipment." : ""));
+      return true;
+    }
     function removeSelection() {
       if (!st.sel) return;
       checkpoint();
@@ -401,7 +445,7 @@
       const ro = opt.readOnly;
       if (opt.viewOnly) return put(bar,
         toolButton("Zoom in", () => { st.zoom = Math.min(4, st.zoom * 1.25); draw(); }), toolButton("Zoom out", () => { st.zoom = Math.max(0.25, st.zoom / 1.25); draw(); }),
-        toolButton("Fit", () => { st.zoom = 1; draw(); }));
+        toolButton("Fit", () => { st.zoom = 1; draw(); }), legend());
       put(bar, 
         toolButton("Select", () => { st.tool = "select"; st.pending = null; draw(); }, st.tool === "select"),
         toolButton("Connect pipe", () => { st.tool = "connect"; st.pending = null; draw(); say("Choose an outlet port, then the port it feeds."); }, st.tool === "connect", ro),
@@ -412,7 +456,7 @@
         toolButton("Turn", () => st.sel && st.sel.type === "symbol" && rotate(st.sel.id), false, ro || !(st.sel && st.sel.type === "symbol")),
         toolButton("Remove", removeSelection, false, ro || !st.sel),
         toolButton("Zoom in", () => { st.zoom = Math.min(4, st.zoom * 1.25); draw(); }), toolButton("Zoom out", () => { st.zoom = Math.max(0.25, st.zoom / 1.25); draw(); }),
-        toolButton("Fit", () => { st.zoom = 1; draw(); }),
+        toolButton("Fit", () => { st.zoom = 1; draw(); }), legend(),
         el("label", { class: "small" }, el("input", { type: "checkbox", checked: st.snap ? true : null, onchange: ev => { st.snap = ev.target.checked; } }), " Snap to grid"));
     }
     function drawStatus() {
@@ -451,8 +495,14 @@
         svg("rect", { x: -40, y: -40, width: W + 80, height: H + 80, fill: "url(#hed-grid)", class: "hed-bg", "data-bg": "1" })];
       for (const sh of st.diagram.shapes || []) kids.push(svg("g", { class: "hed-shape" }, svg("rect", { x: sh.x, y: sh.y, width: sh.w, height: sh.h, rx: 4 }),
         sh.label ? svg("text", { x: sh.x + 6, y: sh.y + 16, class: "hed-label" }, sh.label) : null));
-      for (const k of st.diagram.sketches || []) kids.push(svg("polyline", { points: k.points.map(q => q.join(",")).join(" "), class: "hed-sketch" + (k.edge ? " corrected" : ""),
-        "data-sketch": k.id, role: "img", "aria-label": `Drawn pipe, not connected: ${k.why}` }, svg("title", null, `Earlier drawing, not a connection: ${k.why}`)));
+      for (const k of st.diagram.sketches || []) {            // UX-03: an earlier pipe, selectable to confirm it
+        const sel = st.sel && st.sel.type === "sketch" && st.sel.id === k.id, pts = k.points.map(q => q.join(",")).join(" ");
+        kids.push(svg("g", { "data-sketch": k.id, tabindex: "0", role: "button", "aria-label": `Earlier pipe, not a water connection yet: ${k.why}`,
+          onpointerdown: ev => { grab(ev); st.sel = { type: "sketch", id: k.id }; draw(); } },
+          svg("polyline", { points: pts, class: "hed-hit" }),
+          svg("polyline", { points: pts, class: "hed-sketch" + (k.edge ? " corrected" : "") + (sel ? " sel" : "") }),
+          svg("title", null, `Earlier pipe, not a water connection yet: ${k.why}`)));
+      }
       for (const ph of st.diagram.placeholders || []) {
         const sel = st.sel && st.sel.type === "placeholder" && st.sel.id === ph.id;
         const live = st.overlay && st.overlay.states ? st.overlay.states["ph:" + ph.id] : null;
@@ -461,8 +511,8 @@
           svg("rect", { x: ph.x, y: ph.y, width: ph.w, height: ph.h, rx: ph.kind === "tank" ? 4 : 8 }),
           iconAt(KIND_ICON[ph.kind] || null, { x: ph.x, y: ph.y, w: ph.w, h: ph.h }),
           svg("text", { x: ph.x + ph.w / 2, y: ph.y + ph.h + 14, class: "hed-label", "text-anchor": "middle" }, ph.label),
-          svg("text", { x: ph.x + ph.w / 2, y: ph.y + ph.h + 28, class: "hed-state st-planned", "text-anchor": "middle" }, live ? live.word : "NOT MAPPED"),
-          svg("title", null, `Not mapped yet: ${ph.why}`)));
+          svg("text", { x: ph.x + ph.w / 2, y: ph.y + ph.h + 28, class: "hed-state st-planned", "text-anchor": "middle" }, "Needs equipment link"),
+          svg("title", null, `Kept from the earlier drawing; needs an equipment link: ${ph.why}${live ? " (its reading: " + live.word + ")" : ""}`)));
       }
       for (const t of st.diagram.texts || []) kids.push(svg("text", { x: t.x, y: t.y, class: "hed-text" }, t.text));
       const routes = {};
@@ -543,7 +593,7 @@
         let to = null;
         if (m.node && sym(m.node)) { const t = G.box(node(m.node).kind, sym(m.node)); to = [t.x + t.w / 2, t.y + t.h / 2]; }
         if (m.edge && routes[m.edge]) { const p = routes[m.edge]; to = p[Math.floor(p.length / 2)]; }
-        if (to) kids.push(svg("path", { d: `M${b.x + b.w / 2} ${b.y + b.h / 2}L${to[0]} ${b.y + b.h / 2}L${to[0]} ${to[1]}`, class: "hed-tap" }, svg("title", null, `${nameOf(m.sensor)} measures this (a tap: it carries no water)`)));
+        if (to) kids.push(svg("path", { d: `M${b.x + b.w / 2} ${b.y + b.h / 2}L${to[0]} ${b.y + b.h / 2}L${to[0]} ${to[1]}`, class: "hed-tap" }, svg("title", null, m.node ? `${nameOf(m.sensor)} measures the level of ${nameOf(m.node)}: no water connection` : `${nameOf(m.sensor)} measures this pipe (a tap): no water connection`)));
       }
       for (const g of st.guides || []) kids.push(svg("line", g.axis === "dy" ? { x1: -40, x2: W + 40, y1: g.at, y2: g.at, class: "hed-guide" }
         : { y1: -40, y2: H + 40, x1: g.at, x2: g.at, class: "hed-guide" }));
@@ -574,6 +624,7 @@
             el("li", null, el("span", null, it.name), it.public_id ? el("span", { class: "mono small muted" }, ` ${it.public_id}`) : null, " ",
               opt.readOnly ? null : el("button", { class: "small", "aria-label": `Place ${it.name}`, onclick: () => placeItem(id) }, "Place"))))))
         : el("p", { class: "muted small" }, "Every water item is in the drawing. Create more on the Equipment page, then import again."));
+      if (st.sel && st.sel.type === "sketch") parts.push(sketchPanel(st.sel.id));
       if (st.sel && st.sel.type === "placeholder") {
         const ph = (st.diagram.placeholders || []).find(x => x.id === st.sel.id);
         if (ph) {
@@ -626,12 +677,76 @@
           el("p", { class: "small" }, `${r.mode === "MANUAL" ? "Routed by you (" + r.pins.length + " kept bend" + (r.pins.length === 1 ? "" : "s") + ")" : "Routed automatically"} · ${r.points.length - 1} segment(s)`),
           cross.length ? el("p", { class: "small" }, `Crosses ${cross.join(", ")}: pipes cross; not connected.`) : null,
           el("p", { class: "muted small" }, "Drag a square handle to move that segment; the ends stay on their ports. Use Junction to join pipes deliberately."));
+        parts.push(meterPanel(e));
       }
       const checks = issues();
       parts.push(el("h3", null, "Checks"), checks.length ? el("ul", { class: "hed-issues" }, checks.map(i => el("li", { class: i.severity === "ERROR" ? "bad" : "warn" },
         `${i.message}. ${i.fix}. `, objectOf(i) ? el("button", { class: "small ghost", onclick: () => { st.sel = objectOf(i); draw(); } }, "Show on diagram") : null)))
         : el("p", { class: "muted small" }, "No problem found in the drawing. Save, then validate the blocks that use it."));
       put(side, ...parts);
+    }
+    // UX-03: an earlier pipe kept as drawn. Its ends are matched to the nearest drawn equipment with a free outlet
+    // and inlet; the user confirms that pipe (a real connection) or connects it another way. Never automatic.
+    function sketchEnds(k) {
+      const near = pt => st.diagram.symbols.filter(x => node(x.node) && node(x.node).kind !== "junction").map(x => {
+        const b = G.box(node(x.node).kind, x), dx = Math.max(b.x - pt[0], 0, pt[0] - b.x - b.w), dy = Math.max(b.y - pt[1], 0, pt[1] - b.y - b.h);
+        return [Math.hypot(dx, dy), x.node];
+      }).filter(([d]) => d <= 40).sort((a, b) => a[0] - b[0]).map(([, id]) => id);
+      const pick = (ids, flows, other) => { for (const id of ids) { if (id === other) continue; const n = node(id), p = SYM[n.kind].ports.find(q => flows.includes(q.flow) && portFree(n, q.id)); if (p) return { node: id, port: p.id, label: p.label }; } return null; };
+      for (const [s0, s1] of [[k.points[0], k.points[k.points.length - 1]], [k.points[k.points.length - 1], k.points[0]]]) {
+        const a = pick(near(s0), ["out", "both"]), b = a && pick(near(s1), ["in", "both"], a.node);
+        if (a && b) return { a, b };
+      }
+      return null;
+    }
+    function confirmSketch(id) {
+      const k = (st.diagram.sketches || []).find(x => x.id === id), ends = k && sketchEnds(k);
+      if (!ends) return say("Its ends are not at drawn equipment with a free outlet and inlet: use Connect pipe to join what it shows.", true);
+      const n = st.graph.edges.length;
+      connect({ node: ends.a.node, port: ends.a.port }, { node: ends.b.node, port: ends.b.port });
+      if (st.graph.edges.length > n) {                        // connected: the reference line has done its job
+        st.diagram.sketches = st.diagram.sketches.filter(x => x.id !== id);
+        draw();
+      }
+    }
+    function sketchPanel(id) {
+      const k = (st.diagram.sketches || []).find(x => x.id === id);
+      if (!k) return null;
+      const ends = sketchEnds(k);
+      return el("div", { "data-sketch-panel": "" }, el("h3", null, "Earlier pipe"),
+        el("p", { class: "small" }, "Kept as it was drawn. It is not a water connection yet: ", k.why, "."),
+        ends ? [el("p", { class: "small" }, `Confirm it as a pipe: ${nameOf(ends.a.node)} ${ends.a.label.toLowerCase()} → ${nameOf(ends.b.node)} ${ends.b.label.toLowerCase()}.`),
+          opt.readOnly ? null : el("button", { class: "small", onclick: () => confirmSketch(id) }, "Connect these ends")]
+          : el("p", { class: "muted small" }, "Its ends are not at drawn equipment with a free outlet and inlet (or the equipment is not placed yet). Place the equipment, or use Connect pipe; crossings never join pipes."));
+    }
+    function legend() {
+      const d = st.diagram, has = (d.sketches || []).length || (d.placeholders || []).length || (st.graph.measures || []).length;
+      if (!has) return null;
+      const sw = (cls, text) => el("span", { class: "hed-key" }, el("span", { class: "hed-key-line " + cls }), text);
+      return el("span", { class: "hed-legend small", "data-legend": "" }, sw("k-pipe", "water pipe"),
+        (d.sketches || []).length ? sw("k-sketch", "earlier pipe, not connected yet") : null,
+        (st.graph.measures || []).length ? sw("k-tap", "measures (no water)") : null,
+        (d.placeholders || []).length ? sw("k-ph", "needs equipment link") : null);
+    }
+    function remaining() {
+      const d = st.diagram;
+      return { links: (d.placeholders || []).map(x => ({ id: x.id, label: x.label, kind: x.kind })),
+        pipes: (d.sketches || []).map(x => ({ id: x.id, edge: x.edge || null })),
+        meters: st.graph.nodes.filter(n => n.kind === "meter" && !edgesOf(n.id).length).map(n => ({ id: n.id, label: nameOf(n.id) })) };
+    }
+    function select(sel) { st.sel = sel; draw(); }
+    // UX-02: insert a flow meter into the selected pipe, with the result previewed in words
+    function meterPanel(e) {
+      const meters = Object.entries(opt.items).filter(([, it]) => it.kind === "meter");
+      if (!meters.length) return el("p", { class: "muted small" }, "No flow meter exists on Equipment yet: create one there, then insert it into this pipe.");
+      const free = meters.filter(([id]) => !node(id) || !edgesOf(id).length), busy = meters.filter(([id]) => node(id) && edgesOf(id).length);
+      const choose = el("select", { "aria-label": "Flow meter to insert", disabled: opt.readOnly || !free.length ? true : null },
+        free.map(([id, it]) => el("option", { value: id }, it.name + (node(id) ? " (drawn, not connected)" : ""))));
+      return el("div", { "data-insert-meter": "" }, el("h4", null, "Flow meter in this pipe"),
+        free.length ? [el("p", { class: "small" }, `${nameOf(e.src.node)} → [flow meter: inlet → outlet] → ${nameOf(e.dst.node)}`),
+          el("div", { class: "row" }, choose, el("button", { class: "small", disabled: opt.readOnly ? true : null, onclick: () => insertMeter(e.id, choose.value) }, "Insert flow meter into this pipe"))] :
+          el("p", { class: "muted small" }, "Every flow meter is already connected."),
+        busy.length ? el("p", { class: "muted small" }, "Already in the drawing: ", busy.map(([id, it]) => el("button", { class: "small ghost", onclick: () => { st.sel = { type: "symbol", id }; draw(); } }, `Show ${it.name}`))) : null);
     }
     function objectOf(i) {
       const o = (i.object || "").split(".")[0];
@@ -809,6 +924,7 @@
       issues, placeItem, connect, joinHere, moveSymbol, rotate, removeSelection, reroute, rerouteSelected, undo, redo,
       straighten, alignShift, setAnchor,
       drop: dropSensor,
+      insertMeter, confirmSketch, remaining, select,
       state: st,
     };
   }

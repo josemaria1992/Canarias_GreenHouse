@@ -253,6 +253,21 @@
       missingTypes(E),
       h("p", { class: "muted small" }, "The ID fills in from the name (Valve 1 → Valve_1) until you change it, and can be changed later. Properties, scaling and alarm limits are edited after creation. The icon is only a picture."));
   }
+  // C075-03: equipment an imported project proposed, created here (with its imported settings) or dismissed
+  function importedCard(E, props) {
+    const items = (props && props.items) || [];
+    if (!items.length) return null;
+    const active = new Set(activeTypes(E).map(t => t.type_id));
+    return h("div", { class: "card", "data-imported-items": "" }, h("h3", null, `Equipment from an imported project (${items.length})`),
+      h("table", { class: "compact small" }, h("tbody", null, items.map(x => h("tr", null, h("td", null, x.name), h("td", { class: "mono" }, x.item_id),
+        h("td", null, x.type_name || x.type_id, active.has(x.type_id) ? "" : " — this type is not available yet (see below)"),
+        h("td", null, h("button", { class: "small", disabled: !can("equipment_edit") || !active.has(x.type_id) ? true : null,
+          onclick: () => send("imp", "POST", "/api/equipment/items", { item_id: x.item_id, name: x.name, type_id: x.type_id, icon: x.icon || "generic", body: x.body },
+            `${x.name} created with its imported settings. Choose and verify its channels here; place it in the Digital Twin.`) }, "Create"), " ",
+          h("button", { class: "small ghost", disabled: !can("equipment_edit") ? true : null,
+            onclick: () => send("imp", "POST", "/api/project/proposals/dismiss", { file: x.file, item_id: x.item_id }, `${x.name} dismissed.`) }, "Dismiss")))))),
+      note("imp"), h("p", { class: "muted small" }, "Channels are never imported: they are chosen and verified on this installation."));
+  }
   // UX-05: the water-system types an installation needs, when one is not choosable yet: what state it is in and the
   // permitted next step (an administrator makes a built-in type available; an operator is told who can)
   const NEEDED = ["water_source", "tank", "pump", "valve", "flow", "sector", "level"];
@@ -271,7 +286,8 @@
   }
 
   VIEWS.equipment = async function () {
-    const [E, board] = await Promise.all([api("GET", "/api/equipment"), api("GET", "/api/board").catch(() => null)]);
+    const [E, board, props] = await Promise.all([api("GET", "/api/equipment"), api("GET", "/api/board").catch(() => null),
+      api("GET", "/api/project/proposals").catch(() => null)]);
     const pts = board ? board.modules.flatMap(m => m.points.map(p => ({ point: p.id, kind: p.kind }))) : [];
     const live = E.items.filter(i => i.status === "ACTIVE"), retired = E.items.filter(i => i.status === "RETIRED");
     mount("v-equipment",
@@ -280,7 +296,7 @@
         h("a", { href: "/api/equipment/export", download: "aquacrop-equipment.json" }, "Export"),
         can("equipment_activate") ? h("a", { href: "#equipment-types" }, "Equipment types") : null),
         h("p", { class: "muted" }, "Each item is made from an equipment type. Choose the channel of each role, then verify it with the device connected. A verified channel is still not an output permission: physical switching also needs the bench-test profile and an armed test session.")),
-      newItemCard(E), live.map(it => itemCard(E, it, pts)),
+      newItemCard(E), importedCard(E, props), live.map(it => itemCard(E, it, pts)),
       retired.length ? h("details", { class: "card" }, h("summary", null, `Retired (${retired.length})`), retired.map(it => h("p", null, `${it.name} · retired ${fmtTime(it.updated_utc)}`))) : null);
   };
 

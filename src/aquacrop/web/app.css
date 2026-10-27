@@ -433,8 +433,17 @@ fieldset.bad-field, .rule.bad-field { border-color: var(--bad); }
 .hed-shape rect { fill: none; stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 6 4; }
 .hed-sketch { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 2 5; stroke-linecap: round; }
 .hed-sketch.corrected { stroke: var(--warn); opacity: .6; }
-.hed-ph rect { fill: none; stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 3; }
+.hed-ph rect { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; opacity: .85; }
+.hed-ph .hed-state { fill: var(--warn); font-weight: 600; }
 .hed-ph.sel rect { stroke: var(--accent); stroke-width: 3; }
 .hed-ph { cursor: pointer; }
 .hed-text { font-size: 12px; fill: var(--ink); }
 .hed-cap { font-size: 10px; fill: var(--muted); }
+.hed-sketch.sel { stroke: var(--accent); stroke-width: 3; }
+/* UX-03: a compact legend of what each line means */
+.hed-legend { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-left: 8px; }
+.hed-key { display: inline-flex; align-items: center; gap: 4px; }
+.hed-key-line { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--sim); }
+.hed-key-line.k-sketch { border-top: 2px dotted var(--muted); }
+.hed-key-line.k-tap { border-top: 1px dashed var(--muted); }
+.hed-key-line.k-ph { width: 14px; height: 10px; border: 1.5px solid var(--ink); }

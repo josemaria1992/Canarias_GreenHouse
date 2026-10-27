@@ -30,8 +30,9 @@
   let loads = 0;
   async function load() {
     const n = ++loads;
-    const [topo, dia, ch] = await Promise.all([api("GET", "api/topology"), api("GET", "api/diagram/installation"), api("GET", "api/twin/changes").catch(() => null)]);
-    if (n === loads) { G.loaded = { topo, dia }; G.ch = ch; }   // an earlier, slower answer never replaces a later one
+    const [topo, dia, ch, props] = await Promise.all([api("GET", "api/topology"), api("GET", "api/diagram/installation"), api("GET", "api/twin/changes").catch(() => null),
+      api("GET", "api/twin/design/proposals").catch(() => null)]);
+    if (n === loads) { G.loaded = { topo, dia }; G.ch = ch; G.props = props ? props.drawings : []; }   // an earlier, slower answer never replaces a later one
   }
   function ledgerTable(gw) {
     const l = gw.ledger;
@@ -132,11 +133,46 @@
         ? h("ul", { class: "small" }, m.unresolved.filter(a => !(m.to_create || []).some(c => c.legacy === a.legacy)).map(a => h("li", null, `${a.label}: ${a.why}. ${a.fix}.`))) : null);
   }
 
+  // UX-04: what is left after an import, in the order to do it, each with a way to find it on the drawing
+  function finishBox() {
+    const R = G.ed && G.ed.remaining ? G.ed.remaining() : null;
+    if (!R || !(R.links.length + R.pipes.length + R.meters.length)) return null;
+    const show = sel => () => { G.ed.select(sel); G.host.scrollIntoView({ block: "nearest" }); };
+    const item = (done, title, rest) => h("li", { class: done ? "muted" : "" }, h("strong", null, (done ? "Done: " : "") + title), rest);
+    return h("div", { class: "card", "data-finish": "" }, h("h3", null, "Finish the imported drawing"),
+      h("p", { class: "small" }, "Your drawing is preserved; some equipment and water connections still need confirmation."),
+      h("ol", { class: "small" },
+        item(!R.links.length, `Link equipment (${R.links.length} left)`, R.links.length ? [h("p", { class: "muted" }, "Select one, press Edit the drawing, then Place here with its Equipment item. If none is offered, create it on Equipment (main dashboard) with that name; it appears here on the next refresh."),
+          h("div", { class: "row wrap" }, R.links.slice(0, 12).map(x => h("button", { class: "small ghost", onclick: show({ type: "placeholder", id: x.id }) }, `Show ${x.label}`)))] : null),
+        item(!R.pipes.length, `Confirm the earlier pipes (${R.pipes.length} left)`, R.pipes.length ? [h("p", { class: "muted" }, "Select a dotted line: Connect these ends makes it a real pipe when its ends are at equipment; otherwise use Connect pipe. Crossings never join pipes."),
+          h("button", { class: "small ghost", onclick: show({ type: "sketch", id: R.pipes[0].id }) }, "Show the next one")] : null),
+        item(!R.meters.length, `Put flow meters into their pipes (${R.meters.length} not connected)`, R.meters.length ? [h("p", { class: "muted" }, "Select the pipe the meter belongs in, then Insert flow meter into this pipe."),
+          h("div", { class: "row wrap" }, R.meters.map(x => h("button", { class: "small ghost", onclick: show({ type: "symbol", id: x.id }) }, `Show ${x.label}`)))] : null),
+        item(false, "Save in the twin, run it, then Export to Overview", h("p", { class: "muted" }, "The main dashboard's Overview changes only when that export is approved there. Then Blocks can choose the connected equipment."))),
+      h("p", { class: "muted small" }, "Setup order: Equipment → place and connect here → export → approve on the main dashboard → Blocks → Programs and twin testing."));
+  }
+  function proposalsBox(v) {
+    if (!(G.props || []).length) return null;
+    const open = async f => {
+      const replace = G.arm === "prop:" + f.file; G.arm = null;
+      try { const r = await api("POST", "api/twin/design/import-proposal", { file: f.file, replace }); await load(); build(v);
+        G.msg.flow = { text: `The imported project's drawing is now the twin's design${r.conflicts.length ? "; " + r.conflicts.length + " record(s) of that project were not imported (conflicts)" : ""}. Finish it below, then Export to Overview.` }; }
+      catch (e) { const m = String(e.message || e); if (/press it again/.test(m)) { G.arm = "prop:" + f.file; G.msg.flow = { text: "The twin's design has changes not exported. Press Open again to replace them.", bad: true }; } else G.msg.flow = { text: m, bad: true }; }
+      draw(v);
+    };
+    return h("div", { class: "card", "data-project-drawings": "" }, h("h3", null, "Drawings from an imported project"),
+      h("ul", { class: "small" }, G.props.map(f => h("li", null, `${f.symbols} symbol(s), ${f.placeholders} to link, ${f.connections} connection(s)${f.conflicts.length ? ", " + f.conflicts.length + " conflict(s)" : ""} `,
+        h("button", { class: "small" + (G.arm === "prop:" + f.file ? " danger" : ""), disabled: !can("equipment_edit"), onclick: () => open(f) }, G.arm === "prop:" + f.file ? "Replace the twin's design" : "Open as the twin's design")))),
+      h("p", { class: "muted small" }, "Opening it makes it the twin's design (the Overview is not changed); then it follows the normal path: finish, run, Export to Overview, approval."));
+  }
+
   /** What the card's buttons and texts depend on: they are rebuilt only when it changes, so a click or a note being
    *  typed is never lost to the once-a-second refresh (the water panel beside the drawing still follows every second). */
   function signature() {
     const pv = G.ch && G.ch.preview;
+    const R = G.ed && G.ed.remaining ? G.ed.remaining() : null;
     return JSON.stringify({ e: G.editing, a: G.arm, m: G.msg, d: G.draft, b: G.built, mig: !!G.migration, ld: !!G.loaded,
+      fin: R ? [R.links.length, R.pipes.length, R.meters.length] : null, pr: (G.props || []).map(f => f.file),
       pv: pv ? [pv.empty, pv.hydraulics && [pv.hydraulics.graph_changed, pv.hydraulics.drawing_changed], pv.items.length, pv.bindings.length,
         pv.programs.length, pv.missing.length, (pv.twin_only || []).length] : null });
   }
@@ -155,7 +191,7 @@
       note("flow"), note("save")));
     put(G.body, h("div", { class: "row" }, h("h2", null, "Installation design"), status()),
       h("p", { class: "muted small" }, "1 Import from Overview, or start a new design · 2 place the equipment from the Equipment page and connect it · 3 save, then run it below · 4 Export to Overview."),
-      G.flow, h("div", { class: "hed-twin" }, G.host, G.side), migrationBox(), exportBox(v),
+      G.flow, h("div", { class: "hed-twin" }, G.host, G.side), finishBox(), proposalsBox(v), migrationBox(), exportBox(v),
       h("p", { class: "muted small" }, "The water follows only the connections drawn here; a crossing never joins pipes. Saving changes the twin, never the real system."));
     drawSide(v);
   }
