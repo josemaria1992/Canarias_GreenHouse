@@ -47,8 +47,10 @@ def package_digest(doc: dict) -> str:
 
 
 def program_items(body: dict) -> set[str]:
-    """Every equipment item a program body names (trigger and action)."""
-    out = set()
+    """Every equipment item a program body names (trigger, action, conditions) and both pumps of a duty pair
+    (0.7.5 review C075-01: the standby can run the operation, so its settings and channels are part of every proof,
+    readiness and export decision that uses this set)."""
+    out = set(x for x in (body.get("duty") or []) if isinstance(x, str))
 
     def walk(x):
         if isinstance(x, dict):

@@ -57,3 +57,18 @@ test("a level sensor moved onto a tank is associated; a temperature sensor is no
   assert.equal(st.diagram.symbols.find(x => x.node === "lvl").x, before + 100);   // carried with its tank
   assert.equal(st.graph.edges.length, 0);
 });
+
+test("C075-06: a refused tank move leaves the tank, its sensor and the pipe exactly as they were", () => {
+  const symbols = { tank: { w: 100, h: 120, ports: [{ id: "out", flow: "out", side: "E", offset: 0.85, label: "Outlet", many: true }] },
+    sensor: { w: 30, h: 30, ports: [] }, pump: { w: 40, h: 40, ports: [{ id: "in", flow: "in", side: "W", offset: 0.5, label: "Inlet" }] } };
+  const items = { tank: { kind: "tank", name: "Tank", capacity_L: 5000 }, level: { kind: "sensor", name: "Level", level: true }, pump: { kind: "pump", name: "Pump" } };
+  const graph = { nodes: Object.keys(items).map(id => ({ id, item: id, kind: items[id].kind })),
+    edges: [{ id: "pipe", src: { node: "tank", port: "out" }, dst: { node: "pump", port: "in" } }], measures: [{ sensor: "level", node: "tank", mode: "TAP" }] };
+  const diagram = { width: 900, height: 600, grid: 10, symbols: [{ node: "tank", x: 100, y: 100 }, { node: "level", x: 120, y: 120 }, { node: "pump", x: 600, y: 182 }], routes: [{ edge: "pipe", points: [] }] };
+  const ed = E.create(fakeEl("div"), { symbols: symbols, items, graph, diagram, readOnly: false });
+  const before = JSON.stringify(ed.get().diagram);
+  assert.equal(ed.moveSymbol("tank", 1200, 100, true), false);
+  assert.equal(JSON.stringify(ed.get().diagram), before);
+  assert.equal(ed.moveSymbol("tank", 160, 100, true), true);                 // an accepted move carries the sensor
+  assert.equal(ed.get().diagram.symbols.find(s => s.node === "level").x, 180);
+});

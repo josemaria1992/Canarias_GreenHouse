@@ -779,12 +779,24 @@ class Engine:
         if key:
             self.store.occurrence_update(key, "RUNNING", doc={"op_id": op.op_id, "limit_s": limit})
         self.event("PROGRAM_OP_STARTED", {"op_id": op.op_id, "program": pid, "version": ver, "origin": origin,
-                                          "key": key, "limit_s": round(limit, 1)} | ({"lead": lead} if lead else {}),
-                   actor)
+                                          "key": key, "limit_s": round(limit, 1), "context": self._run_context(body)}
+                   | ({"lead": lead} if lead else {}), actor)
         if a.type in ("RUN_FOR", "DELIVER_VOLUME", "KEEP_BETWEEN"):
             if not self._switch_on(op, a.item):
                 return op
         return op
+
+    def _run_context(self, body: ProgramBody) -> dict:
+        """What this operation runs with, held at its start (C075-05): every item the program names (both pumps of a
+        duty pair), its settings digest and its channels. Run history reads this instead of guessing from times."""
+        from ..equipment.definitions import digest as item_digest
+        from ..twin.changes import program_items
+        out = {}
+        for iid in sorted(program_items(body.model_dump(mode="json"))):
+            it = self._items.get(iid)
+            out[iid] = None if it is None else {"body": item_digest(it.body.model_dump(mode="json")),
+                                                 "points": dict(sorted(it.points.items()))}
+        return {"items": out}
 
     def _duty(self, pid: str, body: ProgramBody) -> tuple[ProgramBody, str]:
         """The lead for this start: the pump of the pair that started least recently (the first on a tie). A lead

@@ -335,11 +335,19 @@
       say(`${nameOf(id)} now measures the level of ${nameOf(under[0])} (an association: no pipe). Change it in its panel.`);
     }
     function moveSymbol(id, x, y, commit) {
-      const s = sym(id), old = { x: s.x, y: s.y };
-      for (const c of carried(id)) { c.x += x - s.x; c.y += y - s.y; }
+      // C075-06: the symbol and everything it carries move together or not at all; a refused move restores every
+      // position and route it touched
+      const s = sym(id), kids = carried(id), moved = [s, ...kids], old = moved.map(m => [m.x, m.y]);
+      const touched = new Set([...edgesOf(id), ...kids.flatMap(k => edgesOf(k.node))]);
+      const routes = st.diagram.routes.filter(r => touched.has(r.edge)).map(r => [r, JSON.stringify(r)]);
+      for (const c of kids) { c.x += x - s.x; c.y += y - s.y; }
       s.x = x; s.y = y;
-      const r = reroute(edgesOf(id));
-      if (!r.ok) { s.x = old.x; s.y = old.y; reroute(edgesOf(id)); say(`Not moved there: ${r.reason}`, true); return false; }
+      const r = reroute([...touched]);
+      if (!r.ok) {
+        moved.forEach((m, i) => { m.x = old[i][0]; m.y = old[i][1]; });
+        for (const [route, was] of routes) Object.assign(route, JSON.parse(was));
+        say(`Not moved there: ${r.reason}`, true); return false;
+      }
       if (commit && r.notes.length) say(r.notes.join("; "));
       return true;
     }

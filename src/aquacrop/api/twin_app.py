@@ -175,6 +175,12 @@ class DesignImportIn(BaseModel):
     replace: bool = False                 # replace a twin design that was not exported (the second press)
 
 
+class ProposalIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str = Field(pattern=r"^drawing-[0-9a-f]{16}\.json$")
+    replace: bool = False
+
+
 def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_hosts: list[str],
                     allowed_origins: list[str], bind_host: str = "127.0.0.1", session_id: str | None = None) -> FastAPI:
     feed_dir, state_dir = Path(feed_dir), Path(state_dir)
@@ -637,6 +643,38 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         save_draft(lay)
         hist.event("TWIN_LAYOUT_SAVED", {"digest": layout.digest(lay), "symbols": len(lay.nodes)}, actor=p.username)
         return {"digest": layout.digest(lay), "issues": layout.issues(lay, svc.items.items)}
+
+    @app.get("/api/twin/design/proposals")
+    def design_proposals(p: Principal = Depends(require(Perm.OPS_READ))):
+        """Drawings brought in by a project import on the main dashboard (C075-03), to open as the twin's design."""
+        from .. import exchange as xch
+        return {"drawings": xch.drawing_proposals(feed_dir / "proposals")}
+
+    @app.post("/api/twin/design/import-proposal")
+    def design_import_proposal(body: ProposalIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """An imported project's drawing becomes the twin's design (the same guard as Import from Overview); it then
+        follows the normal path: edit, run, Export to Overview, approval on the main dashboard."""
+        from .. import exchange as xch
+        try:
+            d = xch.read_proposal(feed_dir / "proposals", body.file)
+        except xch.ExchangeRefused as e:
+            raise HTTPException(404, str(e))
+        dr = d.get("drawing") or {}
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+        has = bool(cur_t["graph"].get("nodes")) or bool((cur_d.get("diagram") or {}).get("placeholders"))
+        if own and has and not body.replace:
+            raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                     "opening the imported drawing replaces them: press it again to replace them")
+        try:
+            svc.blocks.save_drawing(p.username, "installation", dr.get("graph") or {"nodes": [], "edges": []},
+                                    {k: v for k, v in (dr.get("diagram") or {}).items() if k != "background"},
+                                    expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"],
+                                    note=f"imported project drawing {body.file}")
+        except BlockRefused as e:
+            raise HTTPException(409, f"the imported drawing could not be opened: {e}")
+        hist.event("TWIN_DESIGN_IMPORTED", {"source": "project import", "file": body.file}, actor=p.username)
+        return {"source": "project", "conflicts": d.get("conflicts") or [], "replaced": bool(own and has)}
 
     @app.post("/api/twin/design/import")
     def design_import(body: DesignImportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

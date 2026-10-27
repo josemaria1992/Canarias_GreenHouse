@@ -275,6 +275,12 @@ def _check_namespace(hist: Historian, cfg: InstallationConfig, session_id: str) 
                          f"use a separate state directory or db_path for {cfg.profile.value}")
 
 
+class ProposalRefIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str = Field(pattern=r"^(items|drawing)-[0-9a-f]{16}\.json$")
+    item_id: str | None = Field(default=None, max_length=48)
+
+
 class ProjectIn(BaseModel):
     """A project document to preview or apply (IMPORT-01, 0.7.3); its size is limited again when it is read."""
     model_config = ConfigDict(extra="forbid")
@@ -906,16 +912,34 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     from ..equipment.store import EquipmentRefused
     from ..programs.store import ProgramRefused
 
+    import threading as _threading
+    project_lock = _threading.Lock()                  # C075-04: preview check and writes happen as one step
+    imports_dir = state_dir / "imports"
+    feed_proposals = feed_dir / "proposals" if feed_dir is not None else None
+
     def _project(text: str) -> dict:
         try:
             return xch.loads(text)
         except xch.ExchangeRefused as e:
             raise HTTPException(422, str(e))
 
+    def current_drawing() -> dict:
+        """The installation as the Overview draws it (C075-03): the explicit graph, or the earlier drawing through the
+        same faithful converter, with that earlier layout and its digest kept for the exchange."""
+        t = blocks.topology()
+        if t["graph"].get("nodes"):
+            return {"graph": t["graph"], "diagram": blocks.diagram("installation").get("diagram") or {}}
+        from ..topology.migrate import propose
+        lay = layouts.current()[0]
+        its = blocks.items()
+        pr = propose(lay, {k: v.get("kind") for k, v in its.items()}, {k: v.get("name") for k, v in its.items()})
+        return {"graph": pr["topology"], "diagram": pr["diagram"], "source": pr["source"],
+                "legacy_layout": layout_mod.canonical(lay)}
+
     @app.get("/api/project/export")
     def project_export(fmt: str = Query("json", pattern="^(json|yaml)$"),
                        p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
-        doc = xch.export(equipment, blocks, programs, __version__)
+        doc = xch.export(equipment, blocks, programs, __version__, current_drawing())
         hist.event("PROJECT_EXPORTED", {"format": fmt}, actor=p.username)
         return Response(xch.dumps(doc, fmt), media_type="application/json" if fmt == "json" else "application/yaml",
                         headers={"Content-Disposition": f'attachment; filename="aquacrop-project.{fmt}"'})
@@ -927,18 +951,41 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     @app.post("/api/project/import/apply")
     def project_apply(body: ProjectIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
         doc = _project(body.text)
-        pv = xch.preview(doc, equipment, blocks, programs)
-        if body.expected_digest != pv["digest"]:
+        if not body.expected_digest:
             raise HTTPException(409, "preview the document first: apply only what the preview showed")
-        try:
-            out = xch.apply(doc, p.username, equipment, blocks, programs, state_dir / "imports")
-        except (EquipmentRefused, BlockRefused, ProgramRefused) as e:
-            raise HTTPException(409, f"stopped at a record that could not be written: {e}")
-        hist.event("PROJECT_IMPORTED", {"digest": pv["digest"], "written": len(out["written"]),
+        with project_lock:
+            try:
+                out = xch.apply(doc, p.username, equipment, blocks, programs, imports_dir, body.expected_digest,
+                                drawing_dirs=(feed_proposals,) if feed_proposals else ())
+            except xch.StalePreview as e:
+                raise HTTPException(409, str(e))
+            except xch.ExchangeRefused as e:
+                raise HTTPException(409, str(e))
+        hist.event("PROJECT_IMPORTED", {"digest": out["digest"], "written": len(out["written"]),
                                         "proposals": len(out["proposals"]), "conflicts": len(out["not_written"])},
                    actor=p.username)
         publish()
         return out
+
+    @app.get("/api/project/proposals")
+    def project_proposals(p: Principal = Depends(require(Perm.OPS_READ))):
+        """What an import left to finish (C075-03): items to create on Equipment, drawings to open in the twin."""
+        try:
+            return {"items": xch.item_proposals(imports_dir, {i["item_id"] for i in equipment.items()}),
+                    "drawings": xch.drawing_proposals(imports_dir)}
+        except xch.ExchangeRefused as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/project/proposals/dismiss")
+    def project_dismiss(body: ProposalRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        try:
+            xch.dismiss(imports_dir, body.file, body.item_id)
+            if body.item_id is None and feed_proposals is not None and body.file.startswith("drawing-"):
+                (feed_proposals / body.file).unlink(missing_ok=True)
+        except xch.ExchangeRefused as e:
+            raise HTTPException(404, str(e))
+        hist.event("PROJECT_PROPOSAL_DISMISSED", {"file": body.file, "item_id": body.item_id}, actor=p.username)
+        return {"ok": True}
 
     # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
     from . import operation as operation_routes

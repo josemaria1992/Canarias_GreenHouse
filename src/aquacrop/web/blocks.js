@@ -133,6 +133,7 @@
     const meters = nodes.filter(n => n.kind === "meter");
     const safety = body.safety = body.safety || { max_runtime_s: null };
     const save = async () => {
+      if (dutyProblem(F)) { tell("save", dutyProblem(F), true); U.refresh(); return; }
       const r = await call("save", "POST", "/api/blocks", { block_id: F.block_id, name: F.name, body, expected_version: F.expected_version });
       if (r) { F.expected_version = r.version; B.issues = r.issues; tell("save", r.issues.filter(i => i.severity === "ERROR").length ? "Saved as a draft. Correct the problems below before it validates." : "Saved as a draft."); }
       U.refresh();
@@ -160,7 +161,7 @@
         h("label", null, "Maximum runtime of one operation (min) ", h("input", { type: "number", min: 0.1, max: 1440, step: "any", class: "w-num", value: minutes(safety.max_runtime_s) == null ? "" : minutes(safety.max_runtime_s),
           "aria-label": "Maximum runtime in minutes", oninput: ev => { safety.max_runtime_s = ev.target.value === "" ? null : Math.round(Number(ev.target.value) * 60); } })),
         h("p", { class: "muted small" }, "An independent bound for every program over this block, set once here: from the startup to the verified stop, one operation never runs longer. When it is reached the normal stop runs and every stop is still verified. No value is proposed: enter the one that is right for this installation."),
-        blockConditions(safety), dutyPicker(body, nodes, names)),
+        blockConditions(safety), dutyPicker(F, body, nodes, names)),
       h("h3", null, "Startup"), stepRows(F, "startup", nodes, names),
       h("h3", null, "Normal stop"), stepRows(F, "normal_stop", nodes, names),
       h("h3", null, "Fault stop"), h("p", { class: "muted small" }, "Empty: every started item is switched off, the last started first, and each stop is verified."),
@@ -214,14 +215,31 @@
       window.AqRuleRows(B.readings, safety.guards, "Block stop conditions", "Any one of these stops every program over this block through its normal stop. No threshold is proposed: enter the ones that are right for this installation."));
   }
   // 0.7.3 PROG-09: two member pumps sharing one duty; each start leads with the one that started least recently
-  function dutyPicker(body, nodes, names) {
+  // 0.7.3 PROG-09: two member pumps sharing one duty; each start leads with the one that started least recently.
+  // C075-02: the partial choice lives in the form (F.duty), each change reads the current state; save refuses a
+  // half-chosen pair instead of dropping it.
+  function dutyChoose(F, body, i, value) {
+    F.duty = F.duty || (body.duty ? body.duty.pumps.slice() : ["", ""]);
+    F.duty[i] = value;
+    body.duty = F.duty[0] && F.duty[1] ? { pumps: F.duty.slice() } : null;
+    return F.duty;
+  }
+  function dutyProblem(F) {
+    const d = F.duty || ["", ""];
+    if (!!d[0] !== !!d[1]) return "Lead alternation: choose the second pump too, or clear the first.";
+    if (d[0] && d[0] === d[1]) return "Lead alternation needs two different pumps.";
+    return null;
+  }
+  function dutyPicker(F, body, nodes, names) {
     const pumps = nodes.filter(n => n.kind === "pump" && (body.members || []).includes(n.id));
     if (pumps.length < 2 && !body.duty) return null;
-    const cur = (body.duty && body.duty.pumps) || ["", ""];
-    const sel = i => h("select", { "aria-label": i ? "Second pump" : "First pump", onchange: ev => { const p = cur.slice(); p[i] = ev.target.value; body.duty = p[0] && p[1] ? { pumps: p } : null; if (!p[0] && !p[1]) body.duty = null; } },
+    const cur = F.duty || (body.duty ? body.duty.pumps : ["", ""]);
+    const sel = i => h("select", { "aria-label": i ? "Second pump" : "First pump", onchange: ev => { dutyChoose(F, body, i, ev.target.value); U.refresh(); } },
       h("option", { value: "" }, "—"), pumps.map(n => h("option", { value: n.id, selected: cur[i] === n.id ? true : null }, names[n.id] || n.id)));
     return h("div", { "data-duty": "" }, h("h4", null, "Lead alternation (two pumps, one duty)"),
       h("div", { class: "row wrap" }, sel(0), h("span", null, " and "), sel(1)),
-      h("p", { class: "muted small" }, "The startup starts the first pump; each start the engine leads with the pump that started least recently. A lead that cannot start (a fault input, its limits, no channel) hands that start to the standby, and it is recorded. Leave empty for one pump."));
+      dutyProblem(F) ? h("p", { class: "bad small", role: "alert" }, dutyProblem(F)) : null,
+      h("p", { class: "muted small" }, "The startup starts the first pump; each start the engine leads with the pump that started least recently. A lead that cannot start (a fault input, its limits, no channel) hands that start to the standby, and it is recorded. Leave both empty for one pump."));
   }
+  window.AqBlocks = Object.assign(window.AqBlocks || {}, { dutyChoose, dutyProblem });
 })();

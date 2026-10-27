@@ -78,3 +78,16 @@ def test_simulation_only_never_starts_on_real_equipment():
         r.e.run_now("t", "prep")
     r.e.physical = False                                                  # the twin runs it
     r.e.run_now("t", "prep")
+
+
+def test_c075_01_the_standby_pump_is_part_of_the_proof_context():
+    from aquacrop.programs.proof import context
+    from aquacrop.topology.definitions import parse as topology
+    views = _pumps()
+    body = _body(duty=("pump-a", "pump-b")).model_dump(mode="json")
+    ver = {"body": body, "digest": "same-program"}
+    graph = topology({"nodes": [{"id": i, "item": i, "kind": "pump"} for i in views], "edges": []})
+    before = context(ver, views, graph)
+    views["pump-b"].points["start"] = "digital_A.DO5"                  # only the standby is rebound
+    after = context(ver, views, graph)
+    assert before["items"] == ["pump-a", "pump-b"] and before["digest"] != after["digest"]

@@ -48,7 +48,8 @@ def list_runs(hist, *, start=None, end=None, program=None, result=None, limit=10
                     "sim_started_utc": p.get("sim_utc"), "sim_ended_utc": ep.get("sim_utc"),
                     "result": res, "reason": ep.get("reason"), "runtime_s": ep.get("runtime_s"),
                     "measured_L": ep.get("measured_L"), "uncertain_L": ep.get("uncertain_L"),
-                    "requested_L": ep.get("requested_L"), "runtime": p.get("runtime")})
+                    "requested_L": ep.get("requested_L"), "runtime": p.get("runtime"), "lead": p.get("lead"),
+                    "context": p.get("context")})
         if len(out) >= limit:
             break
     return out
@@ -82,7 +83,10 @@ def run_detail(hist, op_id: str, programs=None) -> dict | None:
             body = programs.get(run["program_id"], run["version"])["body"]
         except Exception:
             body = None
-    conf = configuration(hist, run["started_utc"], body) if body else None
+    conf = configuration(hist, run["started_utc"], body, run.get("context")) if body else None
+    if conf is not None:
+        conf["lead"] = run.get("lead")
+        conf["stop_plan"] = next((e["what"] for e in timeline if e["kind"] == "PROGRAM_OP_STOPPING"), None)
     return run | {"timeline": timeline, "program_body": body, "configuration": conf,
                   "chart": {"points": [b | {"label": f"{b['name']} {b['role']}"} for b in (conf or {}).get("bindings", [])
                                        if b["point"]],
@@ -91,28 +95,22 @@ def run_detail(hist, op_id: str, programs=None) -> dict | None:
                                        "quality are shown as recorded, never filled"}}
 
 
-def _refs(x, out: set) -> set:
-    """Every equipment item a program body names (actions, steps, meters, sensors, conditions)."""
-    if isinstance(x, dict):
-        for k, v in x.items():
-            if k in ("item", "meter", "sensor") and isinstance(v, str):
-                out.add(v)
-            else:
-                _refs(v, out)
-    elif isinstance(x, list):
-        for v in x:
-            _refs(v, out)
-    return out
-
-
-def configuration(hist, at_utc: str, body: dict) -> dict:
+def configuration(hist, at_utc: str, body: dict, held: dict | None = None) -> dict:
     """HIST-03 (0.7.3): the configuration the run executed with, rebuilt from the versioned records as they were
     when it started: the block version the program was compiled over, each item's version and type version, and
     each channel binding in force. Later edits do not change it; what changed since is listed beside it."""
     items, bindings, changed = [], [], []
-    for iid in sorted(_refs(body, set()) | set((body.get("duty") or []))):
-        then = hist.query("SELECT item_id, version, status, type_id, type_version, name, digest, json FROM equipment_items "
-                          "WHERE item_id=? AND created_utc<=? ORDER BY version DESC LIMIT 1", (iid, at_utc))
+    from ..twin.changes import program_items
+    held_items = (held or {}).get("items") or {}
+    for iid in sorted(program_items(body)):
+        h = held_items.get(iid)
+        if h:                                      # C075-05: the record the engine held at the start, by its digest
+            then = hist.query("SELECT item_id, version, status, type_id, type_version, name, digest, json FROM "
+                              "equipment_items WHERE item_id=? AND digest=? ORDER BY version DESC LIMIT 1", (iid, h["body"]))
+        else:                                      # runs recorded before 0.7.6: rebuilt from record times
+            then = hist.query("SELECT item_id, version, status, type_id, type_version, name, digest, json FROM "
+                              "equipment_items WHERE item_id=? AND created_utc<=? ORDER BY version DESC LIMIT 1",
+                              (iid, at_utc))
         now = hist.query("SELECT version, name, digest FROM equipment_items WHERE item_id=? ORDER BY version DESC LIMIT 1",
                          (iid,))
         if not then:
@@ -123,14 +121,19 @@ def configuration(hist, at_utc: str, body: dict) -> dict:
         items.append(t | {"scaling": ib.get("scaling") or {}, "properties": ib.get("properties") or {}})
         if now and now[0]["digest"] != t["digest"]:
             changed.append(f"{t['name']}: edited after this run (v{t['version']} then, v{now[0]['version']} now)")
-        for (role,) in hist.query("SELECT DISTINCT role FROM channel_bindings WHERE item_id=?", (iid,)):
-            b = hist.query("SELECT point, status, utc FROM channel_bindings WHERE item_id=? AND role=? AND utc<=? "
-                           "ORDER BY seq DESC LIMIT 1", (iid, role, at_utc))
+        roles = sorted(set(h["points"]) if h else {r for (r,) in hist.query(
+            "SELECT DISTINCT role FROM channel_bindings WHERE item_id=?", (iid,))})
+        for role in roles:
+            if h:
+                b = [{"point": h["points"][role], "status": "AS RUN", "utc": at_utc}]
+            else:
+                b = hist.query("SELECT point, status, utc FROM channel_bindings WHERE item_id=? AND role=? AND utc<=? "
+                               "ORDER BY seq DESC LIMIT 1", (iid, role, at_utc))
             cur = hist.query("SELECT point, status FROM channel_bindings WHERE item_id=? AND role=? ORDER BY seq DESC LIMIT 1",
                              (iid, role))
             then_b = dict(b[0]) if b else {"point": None, "status": "NOT BOUND", "utc": None}
             bindings.append({"item_id": iid, "name": t["name"], "role": role} | then_b)
-            if cur and (cur[0]["point"], cur[0]["status"]) != (then_b["point"], then_b["status"]):
+            if cur and (cur[0]["point"] != then_b["point"] or not h and cur[0]["status"] != then_b["status"]):
                 changed.append(f"{t['name']} {role}: {then_b['point'] or 'no channel'} ({then_b['status']}) then, "
                                f"{cur[0]['point'] or 'no channel'} ({cur[0]['status']}) now")
     block = None
