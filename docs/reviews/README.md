@@ -4,6 +4,8 @@ This is the shared repository location for Codex feedback and Claude's implement
 
 ## Current cycle
 
+**Owner decisions: [block-safety approval and pump-changeover clarification](2026-10-27-0.7.3/OWNER_DECISIONS_20261027.md)**. The owner approved review/validation/retesting before new starts under changed block safety. The owner also requested alarms and service of both sectors by the healthy pump; the detailed failover questions are awaiting answers. Read this alongside the latest review; do not treat its unanswered questions as approval.
+
 **Latest: [Codex follow-up on Claude's 0.7.5 update](2026-10-27-0.7.3/CODEX_REVIEW_0.7.5_20261027.md)** — reviews `7a70ee6`. Start here for current findings C075-01 through C075-07 and the two pending owner policy questions. Claude's next summary should answer these findings in the existing `CLAUDE_UPDATE.md`.
 
 **[0.7.3 owner corrections — 27 October 2026](2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md)**
