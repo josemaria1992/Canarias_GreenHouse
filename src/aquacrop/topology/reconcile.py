@@ -83,17 +83,17 @@ def pipes(lay, nodes, symbols, by_legacy, measures, names, item_kinds, answers, 
     length = {pid: _length(pts) for pid, pts in pts_of.items()}
     questions, blockers = [], []
 
-    def ask(qid, kind, text, value, pipe=None):
+    def ask(qid, kind, text, value, pipe=None, choices=("yes", "no")):
         a = answers.get(qid)
-        a = a if a in ("yes", "no") else None
+        a = a if a in choices else None
         questions.append({"id": qid, "kind": kind, "pipe": pipe, "text": text, "suggest": "yes", "value": value,
-                          "answer": a})
+                          "answer": a, "choices": list(choices)})
         return a
 
     plan = {}
     for p in lay.pipes:
         info = net.pipes.get(p.id) if net else None
-        pl = {"start": None, "end": None, "members": [], "why": [], "open": [], "dangles": []}
+        pl = {"start": None, "end": None, "members": [], "why": [], "open": [], "dangles": [], "parallel": []}
         plan[p.id] = pl
         for end, named, touch in (("start", p.from_node, info.start_node if info else None),
                                   ("end", p.to_node, info.end_node if info else None)):
@@ -146,10 +146,16 @@ def pipes(lay, nodes, symbols, by_legacy, measures, names, item_kinds, answers, 
             if not x or x in ends or x in explicit or nodes[x]["kind"] not in ("valve", "pump", "meter"):
                 continue
             qid = f"inline:{p.id}:{x}"
+            # owner, 27 Oct 2026: two pumps on one line can be a duty pair side by side (one is the spare), not in series
+            twin = next((y for y in explicit if nodes[y]["kind"] == "pump"), None) if nodes[x]["kind"] == "pump" else None
             a = ask(qid, "INLINE", f"{word(x)} is drawn on the earlier pipe {p.id} without being linked to it: is it in "
-                    "series in that pipe?", {"node": x}, p.id)
+                    "series in that pipe" + (f", or beside {word(twin)} as its parallel spare?" if twin else "?"),
+                    {"node": x} | ({"parallel_to": twin} if twin else {}), p.id,
+                    ("yes", "no", "parallel") if twin else ("yes", "no"))
             if a == "yes":
                 pl["members"].append((tt, x))
+            elif a == "parallel":
+                pl["parallel"].append((x, twin))
             elif a is None:
                 pl["open"].append(qid)
         pl["members"].sort()
@@ -250,6 +256,18 @@ def pipes(lay, nodes, symbols, by_legacy, measures, names, item_kinds, answers, 
             ok.discard(pid)
             pl["why"].append(bad)
             continue
+        for x, twin in pl["parallel"]:                # beside its partner: the same upstream and downstream as it
+            ein = next(e for e, _, _ in mine if e["dst"]["node"] == twin)
+            eout = next(e for e, _, _ in mine if e["src"]["node"] == twin)
+            for src, dst in ((dict(ein["src"]), {"node": x, "port": "in"}), ({"node": x, "port": "out"}, dict(eout["dst"]))):
+                for end in (src, dst):
+                    if nodes[end["node"]]["kind"] == "junction" and end["node"] != x:
+                        end["port"] = jport(end["node"], (syms[x].x, syms[x].y))
+                eid = _edge_id(f"{pid}-{x}-{'in' if dst['node'] == x else 'out'}", eids)
+                eids.add(eid)
+                (pa, _), (pb, _) = dg.anchor(nodes[src["node"]]["kind"], syms[src["node"]], src["port"]),                     dg.anchor(nodes[dst["node"]]["kind"], syms[dst["node"]], dst["port"])
+                mine.append(({"id": eid, "src": src, "dst": dst, "provenance": "UNKNOWN"},
+                             {"edge": eid, "points": dg.canonical_points([pa, pb]), "legacy": None}, (eid, pid, 0.0, 0.0)))
         for e, r, s in mine:
             edges.append(e)
             routes.append(r)

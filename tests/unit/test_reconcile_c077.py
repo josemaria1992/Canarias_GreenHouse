@@ -102,3 +102,21 @@ def test_the_same_answers_give_the_same_design_every_time():
     _, p1, *_ = _bench(answers=a)
     _, p2, *_ = _bench(answers=dict(reversed(list(a.items()))))
     assert p1["topology"] == p2["topology"] and p1["diagram"] == p2["diagram"]
+
+
+def test_a_second_pump_on_a_line_can_be_its_parallel_spare():
+    """Owner, 27 Oct 2026: Return pumps 1 and 2 are side by side in the drainage tank, the second in case one fails."""
+    q = next(q for q in _bench()[1]["questions"] if q["id"] == "inline:return:rp2")
+    assert q["choices"] == ["yes", "no", "parallel"] and q["value"]["parallel_to"] == "rp1"
+    assert all(x["choices"] == ["yes", "no"] for x in _bench()[1]["questions"] if x["id"] != q["id"])
+    answers = _all_yes() | {"inline:return:rp2": "parallel"}
+    lay, p, kinds, names = _bench(answers=answers)
+    assert p["ready"] is True and p["kept"]["pipes_connected"] == len(lay.pipes)
+    e = p["topology"]["edges"]
+    into = {x["dst"]["node"]: x["src"]["node"] for x in e}
+    out = {x["src"]["node"]: x["dst"]["node"] for x in e}
+    assert into["rp1"] == into["rp2"] == "tank-sump"          # same suction
+    assert out["rp1"] == out["rp2"]                            # they join before the return line continues
+    assert not any(x["src"]["node"] == "rp1" and x["dst"]["node"] == "rp2" for x in e)   # never in series
+    items = {k: {"kind": v, "name": names[k]} for k, v in kinds.items()}
+    assert not [i for i in issues(parse(p["topology"]), items) if i["severity"] == "ERROR"]

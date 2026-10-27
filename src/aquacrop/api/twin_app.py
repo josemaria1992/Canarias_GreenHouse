@@ -178,7 +178,7 @@ class DesignImportIn(BaseModel):
 
 class ReconcileIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    answers: dict[str, Literal["yes", "no"]] = Field(max_length=2000)    # question id -> the owner's factual answer
+    answers: dict[str, Literal["yes", "no", "parallel"]] = Field(max_length=2000)    # question id -> the owner's factual answer
     replace: bool = False
 
 
