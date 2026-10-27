@@ -1,9 +1,15 @@
-# AquaCrop 0.7.1: results ledger
+# AquaCrop 0.7.1 to 0.7.3: results ledger
 
-Source: branch `feat/operator-upgrade-0.7`, draft PR josemaria1992/Canarias_GreenHouse#11 (not merged). Release
-built from commit `15f2854ab7c67632fe5c288b8c4e54969aedd80d` (clean tree): `aquacrop-0.7.1.zip`, 2285 files,
-SHA-256 `70065d9d69ae06120c76e88f37e296ba18c6adea27ae60abf75e0811e89e284e`; the wheel carries the same commit in
-`aquacrop/_build.json`. `scripts/verify_release.py` on the extracted ZIP: **28/28 PASS** (Windows 11, Python 3.12).
+Source: branch `feat/operator-upgrade-0.7`, draft PR josemaria1992/Canarias_GreenHouse#11 (not merged).
+
+| Release | Commit (clean tree) | ZIP SHA-256 | verify_release.py | Full suite on that commit |
+|---|---|---|---|---|
+| 0.7.1 | `15f2854ab7c67632fe5c288b8c4e54969aedd80d` | `70065d9d69ae06120c76e88f37e296ba18c6adea27ae60abf75e0811e89e284e` | 28/28 PASS | 757 passed, 8 skipped, 1 failed: a poll-overrun timing test while a release build ran in parallel; it passed 3/3 alone and in the previous full run |
+| 0.7.2 | `06d7c6e9ffbb41b2b9c50b44ce54fada6919ede5` | `d51cb5d362c6dd37edc3c822f4f9498322c7f16d367f935c3c26607903e7729f` | 28/28 PASS | 758 passed, 8 skipped |
+| **0.7.3** (installed) | `f91e34da58f55f4fa7fe725a532969439dbe6525` | `26d6580814d47026fa853f5ce8b69f8212e676f220dcba60b3a473155ba96c3c` | 28/28 PASS | 758 passed, 8 skipped (17 min, Windows 11, Python 3.12) |
+
+Each wheel carries its commit in `aquacrop/_build.json`; ZIPs have 2285-2286 files including the CM4 wheelhouses for
+Python 3.11 and 3.13 and the bundled Windows Python.
 
 Evidence kinds are kept apart: **software** (automated tests), **browser** (real clicks and typing on a private test
 instance of this build, simulated profile, stopped afterwards), **packaged release**, **controller** (the bench CM4),
@@ -43,9 +49,30 @@ instance of this build, simulated profile, stopped afterwards), **packaged relea
 | Upgrade 0.6.12 → 0.7.1 and rollback on a copy of the bench database | PASS | `docs/results-0.7.1/upgrade-rollback-rehearsal.json` |
 | Full suite | see below | |
 
-## Bench (controller) — filled in at deployment
+## Bench (controller): deployment, 27 October 2026
 
-See the section *Deployment* added when the release was installed.
+| Step | Result |
+|---|---|
+| Inventory before | 0.6.12 (`/opt/aquacrop/releases/0.6.12`), schema 5, 37 item versions (33 active), 9 bindings, 1 draft program, 3 accounts; services `aquacrop-greenhouse` and `aquacrop-twin`; accepted Overview drawing `899f27e51f00ea2a` (25 Oct 16:18); twin `layout-draft.json` and an unaccepted proposal `layout-b2de1be954f8` in the feed |
+| Backups off the controller | `%LOCALAPPDATA%\AquaCropackupsench-pre-0.7.1-20261026T230817Z` and `...-20261027T074429Z` (SQLite online copies of main and twin, layout, change journal, twin state, feed, `/etc/aquacrop`; SHA-256 checked after copying); the upgrade tool's own verified backups in `/var/lib/aquacrop/backups/pre-upgrade` and `pre-migrate-v5-2026-10-27T074555...` |
+| Local preview states | `%LOCALAPPDATA%\AquaCropackups\consolidation-20261026` (8000/8001 dev pair, 8030/8031 review pair, demo) |
+| Rehearsal on a copy | PASS: `docs/results-0.7.1/upgrade-rollback-rehearsal.json` (0.6.12 backup, 5→7, every row kept, 0.6.12 refuses schema 7, 0.6.12 maintenance restore returns schema 5); twin database 5→7 PASS |
+| Owner data on this build (copy) | PASS: Overview keeps `899f27e5…` (47 symbols) with the migration note, 33 items keep their IDs and have a water kind, program kept, wizard 403 for a plain operator and allowed for a commissioning operator, viewer sees the Overview only |
+| Install | `deploy/aquacrop-cm4.py upgrade`: 0.6.12 → 0.7.1 → 0.7.2 → **0.7.3**, each from its verified ZIP |
+| After | `https://aquacrop-bench.local/api/health` and `/twin/api/health`: both `0.7.3+f91e34da58.w967e67c5`; each side reports the other "same build"; schema 7, integrity ok, 37/9/1/3 records kept; accepted drawing and twin draft byte-identical to the backup; no command and no lease since the upgrade; no warnings in the service logs; releases 0.6.12 to 0.7.2 kept for rollback |
+| Signed-in pages on the bench | **NOT RUN by me**: I have no bench account and did not create one on the real installation. The same build was checked signed in on a copy of the bench database (row above) and in the browser on a private simulated instance |
+| Physical outputs, module writes, AUTO, commissioning | NOT RUN (nothing switched) |
+
+Rollback: `deploy/aquacrop-cm4.py rollback --to 0.6.12` and restore both databases from the pre-upgrade backups
+(the main database from `pre-upgrade`, the twin's from the off-controller copy): 0.6.12 refuses schema 7.
+
+## Retired local previews
+
+The PC services on 127.0.0.1:8000 (dev main, 0.6.10 snapshot / 0.7 files), :8001 (twin from the desktop 0.6.10
+checkout), :8030 and :8031 (temporary review pair) were re-identified by port, PID and command line and stopped
+(process trees; Windows had to terminate them, they have no window to close). Their databases pass integrity checks
+afterwards, and all four state folders are in the consolidation backup. No source folder or database was deleted.
+The only owner entry point is **https://aquacrop-bench.local/**.
 
 ## Open (agreed scope not built in 0.7.1)
 
