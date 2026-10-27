@@ -481,7 +481,7 @@ def test_pages_name_their_scripts_by_build_and_say_which_build_answers(live_and_
     import json
     import os
     from pathlib import Path
-    f = Path(os.environ["AQUACROP_FEED_DIR"]) / "identity-twin.json"
+    f = Path(os.environ["AQUACROP_FEED_DIR"]) / "evidence" / "identity-twin.json"   # where the twin may write
     f.write_text(json.dumps(json.loads(f.read_text()) | {"build": "0.7.0+old"}), encoding="utf-8")
     v = live.get("/api/version", headers=hl).json()
     assert v["partner"]["match"] is False and "0.7.0+old" in v["partner"]["detail"]

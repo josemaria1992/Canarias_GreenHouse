@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.2 (2026-10-27): the twin reports its build where it may write
+
+- On the controller the twin's account may write only in the feed's `evidence` folder, so its build identity was not
+  published and the main dashboard could not confirm that the twin runs the same build. The twin now writes it there
+  (`aquacrop.build`), and the main dashboard reads it there. Found when 0.7.1 was installed on the bench.
+- Everything in 0.7.1 below, including the conversion of pre-0.7 drawings (tank, sector and source symbols matched to
+  items of that kind by name; water kinds of pre-0.7 types from their built-in template).
+
 ## 0.7.1 (2026-10-27): the owner's approved page structure, editable IDs, windows, one bench application
 
 Owner decisions of 26 October 2026 (`OWNER_APPROVED_DECISIONS.md`) and the independent re-review of `7bc098c`.

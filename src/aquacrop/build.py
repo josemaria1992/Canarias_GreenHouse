@@ -82,12 +82,19 @@ def web_drift() -> str | None:
 IDENTITY_FILE = "identity-{runtime}.json"
 
 
+def _identity_path(feed_dir: Path, runtime: str) -> Path:
+    """The main service owns the feed folder; the twin may write only in its `evidence` folder (on the controller the
+    feed root is not writable by the twin's account), so each identity lives where its writer can write it."""
+    base = Path(feed_dir) / ("evidence" if runtime.upper() == "TWIN" else "")
+    return base / IDENTITY_FILE.format(runtime=runtime.lower())
+
+
 def publish(feed_dir: Path | None, runtime: str, extra: dict | None = None) -> None:
     """Write this process's identity for its partner (main <-> twin) to read. Best effort: never stops a start."""
     if feed_dir is None:
         return
     try:
-        p = Path(feed_dir) / IDENTITY_FILE.format(runtime=runtime.lower())
+        p = _identity_path(feed_dir, runtime)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(identity() | {"runtime": runtime} | (extra or {}), indent=1), encoding="utf-8")
@@ -100,7 +107,7 @@ def partner(feed_dir: Path | None, runtime: str) -> dict:
     """The other runtime's identity as it last wrote it, and whether it is this build."""
     if feed_dir is None:
         return {"runtime": runtime, "known": False, "match": None, "detail": "no shared feed folder here"}
-    p = Path(feed_dir) / IDENTITY_FILE.format(runtime=runtime.lower())
+    p = _identity_path(feed_dir, runtime)
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
