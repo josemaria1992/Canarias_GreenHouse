@@ -957,11 +957,34 @@
       state: st,
     };
   }
+  /** UX-07: one symbol as the Overview and the Twin draw it (same box, icon and port anchors), with its connection
+   *  points labelled, for the equipment type form. A tank is drawn at the default size: each tank's own capacity sets it. */
+  function symbolPreview(symbols, kind, opt = {}) {
+    if (!symbols || !symbols[kind] || kind === "junction") return null;
+    const G = geometry(symbols), d = symbols[kind], pad = 80;
+    const s = { node: "preview", x: pad, y: 24, rot: opt.rot || 0 }, b = G.box(kind, s);
+    const W = b.w + 2 * pad, H = b.h + 24 + 44;
+    const kids = [svg("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: kind === "tank" ? 4 : 8, class: "hed-box k-" + kind })];
+    if (window.AqIcons && KIND_ICON[kind]) {
+      const i = window.AqIcons.icon(KIND_ICON[kind], 24);
+      const g = svg("g", { transform: `translate(${b.x + b.w / 2 - 12} ${b.y + b.h / 2 - 12})${kind === "meter" && s.rot ? ` rotate(${s.rot} 12 12)` : ""}`, class: "hed-icon" });
+      for (const c of [...i.childNodes]) g.appendChild(c);
+      kids.push(g);
+    }
+    for (const p of d.ports) {
+      const a = G.anchor(kind, s, p.id);
+      const lx = a.side === "E" ? a.x + 9 : a.side === "W" ? a.x - 9 : a.x, ly = a.side === "N" ? a.y - 9 : a.side === "S" ? a.y + 18 : a.y + 4;
+      kids.push(svg("circle", { cx: a.x, cy: a.y, r: 5, class: "hed-port", "data-port": p.id }, svg("title", null, p.label)),
+        svg("text", { x: lx, y: ly, class: "hed-port-label", "text-anchor": a.side === "E" ? "start" : a.side === "W" ? "end" : "middle" }, p.label));
+    }
+    return svg("svg", { class: "hed hed-preview", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "data-symbol": kind,
+      "aria-label": `${KIND_WORD[kind]} as drawn in the water diagram${d.ports.length ? ", connection points: " + d.ports.map(p => p.label).join(", ") : ""}` }, ...kids);
+  }
   /** A tank's schematic size from its capacity: the same rule as aquacrop/diagram.py `tank_size`. */
   function tankSize(cap) {
     if (!cap || cap <= 0) return { w: 100, h: 120 };
     const k = Math.min(2, Math.max(0.6, Math.sqrt(cap / 5000)));
     return { w: Math.round(100 * k / 10) * 10, h: Math.round(120 * k / 10) * 10 };
   }
-  window.AqHydraulicEditor = { create, geometry, tankSize };
+  window.AqHydraulicEditor = { create, geometry, tankSize, symbolPreview };
 })();

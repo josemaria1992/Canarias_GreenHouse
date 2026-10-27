@@ -301,24 +301,21 @@
   };
 
   // ---------------------------------------------------------------- equipment types
-  function typeEditor(E, t) {
-    const ta = h("textarea", { rows: 16, cols: 90, spellcheck: "false", "aria-label": "Type definition (JSON)" });
-    ta.value = JSON.stringify(t ? t.body : { category: "", default_icon: "generic", roles: [], operations: [], limits: {}, simulation: { behavior: "NOT_MODELLED" } }, null, 2);
-    const id = h("input", { maxlength: 48, value: t ? t.type_id : "", disabled: !!t, "aria-label": "Type id" });
-    const name = h("input", { maxlength: 80, value: t ? t.name : "", "aria-label": "Type name" });
-    const save = () => {
-      let body; try { body = JSON.parse(ta.value); } catch (e) { toast("The definition is not valid JSON: " + e.message, true); return; }
-      act("POST", "/api/equipment/types/draft", { type_id: id.value, name: name.value, body, version: t && t.status === "DRAFT" ? t.version : null }, "draft saved");
-    };
-    const startedFrom = t ? (TE[t.type_id] = TE[t.type_id] || { version: t.version }) : null;
-    const moved = t && startedFrom.version !== t.version;
-    return h("div", { class: "row col" },
-      moved ? h("p", { class: "warn small", role: "status" }, `${t.name} changed to v${t.version} while you were editing v${startedFrom.version}. Your text is kept; check it against v${t.version} before saving.`) : null,
-      h("div", { class: "row" }, h("label", null, "Id ", id), h("label", null, "Name ", name)), ta,
-      h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit"), onclick: save }, t && t.status === "DRAFT" ? "Save draft" : "Save as new draft version"),
-        h("span", { class: "muted small" }, "Roles: direction OUTPUT/INPUT, signal DIGITAL/ANALOG, purpose COMMAND/RUNNING/FAULT/OPEN/CLOSED/STATE/MEASUREMENT. Switchable types need limits.max_runtime_s.")));
+  // UX-07: a guided form (what it is, how it looks, the relevant questions, a summary in words); never JSON
+  function typeEditor(E, t, key) {
+    return window.AqTypeForm ? window.AqTypeForm.editor(E, t, key) : h("p", { class: "bad small" }, "The type form did not load: reload the page.");
   }
-  const TE = S.typeEdits = S.typeEdits || {};       // type id -> the version its open editor started from (UX-06)
+  // closing an editor with unsaved entries asks first; closing discards them, so reopening starts from the saved type
+  function editorToggle(key, name) {
+    return ev => {
+      const d = ev.target;
+      if (d.open) return;
+      const dirty = (window.AqTypeForm && window.AqTypeForm.dirty(key)) || d.querySelector("[data-dirty]");
+      if (dirty && !confirm(`Close the editor of ${name}? Your unsaved changes are discarded.`)) { d.open = true; return; }
+      d.querySelectorAll("[data-dirty]").forEach(f => { delete f.dataset.dirty; });
+      if (window.AqTypeForm) window.AqTypeForm.forget(key);
+    };
+  }
   // UX-05: every built-in type and where it stands, with the permitted next step
   function availabilityCard(E) {
     const av = (E.availability || []).filter(a => a.built_in);
@@ -335,10 +332,9 @@
     const users = E.items.filter(i => i.type_id === t.type_id && i.status === "ACTIVE");
     return h("div", { class: "card" },
       h("div", { class: "row" }, icon(t.body.default_icon), h("h3", null, t.name), pill(`${t.status} v${t.version}`, STATUS_CLS[t.status]),
-        h("span", { class: "muted" }, `${t.body.category} · ${t.body.roles.length} roles · ${users.length} items`)),
+        h("span", { class: "muted" }, `${t.body.category ? t.body.category + " · " : ""}${t.body.roles.length ? t.body.roles.length + " connection(s) to the controller" : "no controller connection"} · ${users.length} item(s)`)),
       t.body.description ? h("p", { class: "small" }, t.body.description) : null,
-      h("p", { class: "small" }, "Roles: ", t.body.roles.map(r => `${r.label} (${r.direction === "OUTPUT" ? "out" : "in"} ${r.signal.toLowerCase()}${r.required ? "" : ", optional"})`).join(" · ")),
-      h("p", { class: "small" }, `Operations: ${(t.body.operations || []).join(", ") || "none"} · Twin behaviour: ${t.body.simulation.behavior}`),
+      h("p", { class: "small", "data-type-summary": t.type_id }, window.AqTypeForm ? window.AqTypeForm.summaryOf(t.body, t) : ""),
       h("div", { class: "row" },
         t.status === "DRAFT" ? h("button", { disabled: !can("equipment_activate"), onclick: () => {
           const msg = users.length ? `Activate ${t.name} v${t.version}? ${users.length} item(s) stay on their current version until each is upgraded.` : `Activate ${t.name} v${t.version}?`;
@@ -347,14 +343,8 @@
         t.status === "ACTIVE" && can("equipment_activate") ? h("button", { class: "ghost small", onclick: () => {
           const why = prompt(`Retire ${t.name}? Reason:`); if (why) act("POST", `/api/equipment/types/${t.type_id}/retire`, { reason: why }, "type retired");
         } }, "Retire") : null),
-      t.status === "ACTIVE" || t.status === "DRAFT" ? h("details", { "data-state-key": `type:${t.type_id}:${t.status === "DRAFT" ? "draft" : "next"}:edit`,
-        ontoggle: ev => {
-          const d = ev.target;
-          if (d.open) { TE[t.type_id] = TE[t.type_id] || { version: t.version }; return; }   // also when a refresh reopens it
-          if ([...d.querySelectorAll("[data-dirty]")].length && !confirm(`Close the editor of ${t.name}? Your unsaved changes are discarded.`)) { d.open = true; return; }
-          d.querySelectorAll("[data-dirty]").forEach(f => { delete f.dataset.dirty; });
-          delete TE[t.type_id];
-        } }, h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t)) : null);
+      t.status === "ACTIVE" || t.status === "DRAFT" ? (key => h("details", { "data-state-key": key, ontoggle: editorToggle(key, t.name) },
+        h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t, key)))(`type:${t.type_id}:${t.status === "DRAFT" ? "draft" : "next"}:edit`) : null);
   }
   VIEWS["equipment-types"] = async function () {
     const E = await api("GET", "/api/equipment");
@@ -370,11 +360,11 @@
     });
     mount("v-equipment-types",
       h("div", { class: "card" }, h("div", { class: "row" }, h("h2", null, "Equipment types"),
-        h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/types/seed", undefined, "templates added as drafts") }, "Add built-in templates"),
+        h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/types/seed", undefined, "built-in types added as drafts") }, "Add every built-in type as a draft"),
         h("label", { class: "small" }, "Import ", imp)),
-        h("p", { class: "muted" }, "A type defines the channels (roles) an item needs, its properties, limits, permitted operations and how the twin simulates it. Templates arrive as drafts you review and activate; activating a new version never changes existing items until each is upgraded.")),
+        h("p", { class: "muted" }, "A type describes a kind of equipment: what it is, how it is drawn, which connections to the controller it has, its details and limits. Each named item is then made from a type on Equipment. Built-in types arrive as drafts you review and activate; activating a new version never changes existing items until each is upgraded.")),
       availabilityCard(E),
       shown.map(t => typeCard(E, t)),
-      h("details", { class: "card", "data-state-key": "type:new:edit" }, h("summary", null, "New type"), typeEditor(E, null)));
+      h("details", { class: "card", "data-state-key": "type:new:edit", ontoggle: editorToggle("type:new:edit", "the new type") }, h("summary", null, "New type"), typeEditor(E, null, "type:new:edit")));
   };
 })();

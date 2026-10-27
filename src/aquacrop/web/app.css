@@ -451,3 +451,26 @@ fieldset.bad-field, .rule.bad-field { border-color: var(--bad); }
 .reconcile li { margin: .35rem 0; }
 .reconcile label.inline { display: inline-flex; align-items: center; gap: .25rem; margin: 0 0 0 .6rem; white-space: nowrap; }
 .reconcile input[type=radio] { min-height: 0; padding: 0; }
+
+/* UX-07: the guided equipment type form */
+.tf h4 { margin: 1rem 0 .4rem; }
+.tf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; }
+.tf-tile { display: flex; flex-direction: column; align-items: flex-start; gap: .25rem; text-align: left; padding: .6rem; min-height: 0; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.tf-tile:hover, .tf-tile:focus-visible { border-color: var(--accent); background: var(--field); }
+.tf-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: .35rem; margin-bottom: .5rem; }
+.tf-icon { display: flex; flex-direction: column; align-items: center; gap: .2rem; padding: .4rem; min-height: 0; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.tf-icon.sel { border: 2px solid var(--accent); background: var(--water-soft); }
+.tf-preview { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; padding: .6rem; border: 1px solid var(--line); background: var(--bg); }
+.tf-preview > div { max-width: 420px; }
+.tf-big svg { width: 64px; height: 64px; }
+.tf-row, .tf-q { padding: .4rem 0 .4rem .6rem; border-left: 3px solid var(--line); margin: .3rem 0; }
+.tf-feature { display: flex; gap: .5rem; align-items: flex-start; }
+.tf-feature > .tf-row { flex: 1; }
+.tf-add, .tf-summary, .tf-requests { margin-top: .8rem; padding: .6rem; border: 1px solid var(--line); background: var(--bg); }
+.tf label.inline { display: inline-flex; align-items: center; gap: .25rem; margin-right: .8rem; }
+.tf label.row { flex-direction: row; align-items: center; justify-content: flex-start; }
+.tf .tf-row label:has(> input[type=number]) { flex-direction: row; align-items: center; }
+.tf input[type=checkbox], .tf input[type=radio] { min-height: 0; padding: 0; }
+.tf input.wide { min-width: 28rem; max-width: 100%; }
+.hed-preview .hed-port { fill: var(--panel); stroke: var(--ink); }
+.hed-preview .hed-port-label { font-size: 11px; fill: var(--muted); }

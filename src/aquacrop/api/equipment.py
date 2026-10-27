@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..equipment.definitions import ICONS, TEMPLATES
+from ..topology.definitions import symbols_public
 from ..equipment.store import EquipmentRefused
 from ..security.auth import Perm, Principal
 
@@ -92,6 +93,9 @@ def register(app, require, store, samples, edges) -> None:
         items = store.items()
         return {"types": store.types(), "items": items, "icons": list(ICONS),
                 "templates": {k: v["name"] for k, v in TEMPLATES.items()},
+                # UX-07: the guided type form starts from these and previews the diagram symbols it will be drawn with
+                "template_bodies": {k: {"name": v["name"], "body": v["body"]} for k, v in TEMPLATES.items()},
+                "symbols": symbols_public(),
                 "availability": store.availability(),
                 "bindings": list(store.bindings().values()),
                 "readiness": {i["item_id"]: store.readiness(i["item_id"]) for i in items if i["status"] == "ACTIVE"}}
