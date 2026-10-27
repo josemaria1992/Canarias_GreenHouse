@@ -4,6 +4,8 @@ This is the shared repository location for Codex feedback and Claude's implement
 
 ## Current cycle
 
+**Additional owner feedback: [UX-07 — create and edit equipment types without code](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_NO_CODE_TYPES_20261027.md).** The current editor still requires JSON. The owner requires a simple operator experience; this note records a proposed guided form, existing-model boundaries and browser acceptance. Detailed screen choices are proposals, not invented owner approvals. C077 safety and Twin findings remain open.
+
 **Start here: [Codex review of 0.7.7 and latest owner feedback](2026-10-27-0.7.3/CODEX_REVIEW_0.7.7_20261027.md)** — implementation `de3088a`, summary `c32121f`, CI-only follow-up `cc93b37`. Earlier C075 fixes are present and focused checks pass, but C077-01..08 remain: restart after Stop all, simultaneous sectors, takeover OFF verification/accounting, unapproved one-hour abandonment, incomplete empty-design reset, meter grid placement and the unfinished legacy import journey. Includes concise instructions and reproducible fake-only evidence. Both Raspberry services independently report 0.7.7; final CI is successful. Signed-in real-bench and physical acceptance remain NOT RUN.
 
 **Owner clarification:** either pump can serve either sector; sectors never water simultaneously; no preemption when the healthy pump is busy. The owner explicitly rejected the one-hour waiting cutoff. **Empty design clears the Twin diagram only; keep everything else, with equipment available in the side palette.** See the appended corrections in [owner decisions](2026-10-27-0.7.3/OWNER_DECISIONS_20261027.md). The new review supersedes the status statements below; older records remain historical evidence.
