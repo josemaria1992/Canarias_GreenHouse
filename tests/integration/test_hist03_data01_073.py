@@ -1,5 +1,7 @@
 """0.7.3 HIST-03 and DATA-01: a run's view rebuilds the configuration it executed with from the versioned records,
 lists what changed since without applying it, and names the channels its chart draws (as bound then)."""
+import time
+
 from fastapi.testclient import TestClient
 
 from tests.integration.test_api_installation import ORIGIN, _app, icfg, login  # noqa: F401  (fixture)
@@ -18,6 +20,7 @@ def test_run_view_keeps_the_configuration_it_ran_with(tmp_path, icfg):
                    actor="oper1")
         hist.event("PROGRAM_OP_ENDED", {"op_id": "op_hist03", "result": "DONE"}, actor="system")
         hist.flush()
+        time.sleep(0.05)      # records are ordered by time: a Windows clock can give the edit the run's own instant
         # later edits: the pump moves to another channel
         r = c.post("/api/equipment/bind", json={"item_id": "pump-1", "role": "start", "point": "relay_B.DO6"}, headers=h)
         assert r.status_code == 200, r.text

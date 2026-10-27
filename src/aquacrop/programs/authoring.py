@@ -391,7 +391,9 @@ def summary(f: WateringForm, block_name: str, names: dict[str, str], tz: str, no
                    for t in s.times]
         nxt = [w.start_local for w in sc.upcoming("preview", entries, tz, now_utc, 30)
                if w.start_utc > now_utc][:3]
-    rule = lambda r: f"{names.get(r.item, r.item)} {r.role} {OPS[r.op]}{'' if r.value is None else f' {r.value:g} {r.unit or ""}'.rstrip()} for {r.persist_s:g} s"  # noqa: E731
+    def rule(r) -> str:                                  # no nested quotes in f-strings: Python 3.11 refuses them
+        value = "" if r.value is None else f" {r.value:g} {r.unit or ''}".rstrip()
+        return f"{names.get(r.item, r.item)} {r.role} {OPS[r.op]}{value} for {r.persist_s:g} s"
     return {"text": f"{block_name}: {what}, {when}; {guard}.", "next": nxt,
             "start_conditions": [rule(r) for r in f.permissives], "stop_conditions": [rule(r) for r in f.guards],
             # 0.7.3: the block's own conditions, applied with the program's

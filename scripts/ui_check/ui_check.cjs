@@ -945,17 +945,18 @@ async function hardware() {
   check("HW status line", /^Real equipment, read only/.test(hwPlain), hwPlain);
   await show(p, "overview");
   await shot(p, "hw-overview");
-  const ov = await p.evaluate(() => ({ hot: document.querySelectorAll("#v-overview svg.diagram g.hot").length, label: document.querySelector("#v-overview svg.diagram").getAttribute("aria-label") }));
-  check("HW overview diagram", ov.hot >= 40 && /read-only/.test(ov.label), `${ov.hot} parts; ${ov.label}`);
-  // 0.5.6: the real Overview draws the accepted layout (symbols by layout id), read-only, with a side panel
-  await p.locator('#v-overview svg.diagram g.hot[data-id="mp1"]').click();
-  const hwPanel = await until(p, async () => { const t = await p.locator("#v-overview .side-panel").innerText(); return /Main pump 1/.test(t) && t; }, 5000);
-  const hwBtns = await p.$$eval("#v-overview .side-panel button", bs => bs.map(x => x.textContent));
-  await p.locator('#v-overview svg.diagram g.hot[data-id="tank-main"]').click();
-  const hwTank = await until(p, async () => { const t = await p.locator("#v-overview .side-panel").innerText(); return /Main tank/.test(t) && t; }, 5000);
-  const hwHead = await p.locator("#overview-layout h2").first().innerText();
-  check("HW click-through", !!hwPanel && !!hwTank && hwBtns.length === 0 && /read-only/.test(hwHead),
-    "selecting a main pump or the main tank shows its state in the side panel, with no action: the installation is read-only");
+  // 0.7.3: until a graph is exported from the twin, the real Overview draws the earlier drawing with the shared editor,
+  // view only, as a reference: every symbol kept (linked ones with their state, the rest marked NOT MAPPED), nothing
+  // to place, connect or save. (The 0.5.6 side panel with click-through is not part of this reference view.)
+  const ov = await until(p, () => p.evaluate(() => {
+    const c = document.querySelector('#v-overview #overview-diagram[data-overview]');
+    if (!c) return null;
+    const m = c.textContent.match(/(\d+) symbol\(s\) linked to equipment, (\d+) marked NOT MAPPED/);
+    return { kind: c.dataset.overview, drawn: c.querySelectorAll(".hed-sym").length + c.querySelectorAll(".hed-ph").length,
+      kept: m ? +m[1] + +m[2] : null, acts: [...c.querySelectorAll("button")].map(b => b.textContent).filter(t => /Save|Place|Connect|Delete|Export/.test(t)) };
+  }), 10000);
+  check("HW overview diagram", !!ov && ov.kind === "legacy" && ov.drawn > 0 && ov.drawn === ov.kept && ov.acts.length === 0,
+    ov ? `${ov.kind}: ${ov.drawn} symbols drawn, ${ov.kept} reported kept, editing buttons ${JSON.stringify(ov.acts)}` : "no Overview drawing card");
   for (const v of ["nutrients", "main-tank", "main-pumps", "sector-S1", "sector-S2", "drainage"]) {
     await show(p, v);
     const t = await visibleText(p);
