@@ -990,7 +990,14 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             roles = [r for r in (tb.roles if tb else [])]
             channels[it["item_id"]] = {"roles": len(roles), "required": [r.role for r in roles if r.required],
                                        "bound": sorted(bound.get(it["item_id"], []))}
+        legacy_view = None
+        if not explicit:                             # 0.7.3: the earlier drawing through the same converter as the twin's
+            from ..topology.migrate import propose     # import, so Overview and Twin draw it identically
+            its = blocks.items()
+            pr = propose(lay, {k: v.get("kind") for k, v in its.items()}, {k: v.get("name") for k, v in its.items()})
+            legacy_view = {"topology": pr["topology"], "diagram": pr["diagram"], "kept": pr["kept"]}
         return {"explicit": explicit, "topology": {"rev": t["rev"], "digest": t["digest"], "graph": t["graph"]},
+                "legacy_view": legacy_view,
                 "channels": channels,
                 "diagram": {"rev": d["rev"], "diagram": d["diagram"]}, "symbols": td.symbols_public(),
                 "items": blocks.items(), "readings": live_readings(),

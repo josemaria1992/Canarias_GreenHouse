@@ -17,18 +17,24 @@ def _parts(live, hl):
     assert live.post("/api/twin-link/publish", headers=hl).status_code == 200
 
 
-def test_dt01_import_from_overview_without_a_graph_proposes_the_earlier_drawing_and_saves_nothing(live_and_twin):
+def test_dt01_import_from_overview_without_a_graph_keeps_the_earlier_drawing_as_the_twins_design(live_and_twin):
+    """0.7.3: the earlier drawing becomes the twin's saved design as drawn: placeholders for what is not mapped,
+    nothing connected by guesswork; the Overview draws the same conversion."""
     app, live, twin_app, twin, bus, hl = live_and_twin
     _parts(live, hl)
     H = _twin_h(twin, "bench1")
-    before = twin.get("/api/topology").json()
     r = twin.post("/api/twin/design/import", json={}, headers=H)
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["source"] == "legacy" and "proposal" in d and "ambiguous" in d["proposal"] and "unresolved" in d["proposal"]
-    assert twin.get("/api/topology").json()["rev"] == before["rev"]          # a proposal, never saved by looking
+    assert d["source"] == "legacy" and "ambiguous" in d["proposal"] and d["proposal"]["kept"]
+    dia = twin.get("/api/diagram/installation").json()["diagram"]
     ov = live.get("/api/overview/diagram", headers=hl).json()
     assert ov["explicit"] is False and "Import from Overview" in ov["migration"]   # the Overview says how, no blank
+    same = lambda d: {k: d.get(k) for k in ("symbols", "placeholders", "texts", "shapes", "sketches")}   # noqa: E731
+    from aquacrop import diagram as dg
+    assert same(dg.canonical(dg.parse(dia))) == same(dg.canonical(dg.parse(ov["legacy_view"]["diagram"])))
+    ref = twin.get("/api/twin/design/reference").json()
+    assert ref["source"] == "legacy" and ref["kept"] == ov["legacy_view"]["kept"]
 
 
 def test_dt02_dt06_dt07_new_design_exported_applied_and_drawn_on_the_overview(live_and_twin):
@@ -38,8 +44,9 @@ def test_dt02_dt06_dt07_new_design_exported_applied_and_drawn_on_the_overview(li
     H = _twin_h(twin, "bench1")
     assert twin.post("/api/twin/design/import", json={}, headers=H).status_code == 200      # equipment arrives
     g = graph()
-    r = twin.post("/api/drawing/installation", json={"graph": g, "diagram": drawing(g), "expected_topology_rev": 0,
-                                                     "expected_diagram_rev": 0, "note": "new design"}, headers=H)
+    t0, d0 = twin.get("/api/topology").json(), twin.get("/api/diagram/installation").json()
+    r = twin.post("/api/drawing/installation", json={"graph": g, "diagram": drawing(g), "expected_topology_rev": t0["rev"],
+                                                     "expected_diagram_rev": d0["rev"], "note": "new design"}, headers=H)
     assert r.status_code == 200, r.text
     pv = twin.get("/api/twin/changes").json()["preview"]
     assert pv["hydraulics"]["graph_changed"] and not pv["missing"]

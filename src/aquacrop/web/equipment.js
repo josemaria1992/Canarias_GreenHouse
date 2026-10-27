@@ -81,6 +81,7 @@
         " ", h("button", { class: "small", disabled: !can("equipment_edit"), onclick: () => upgrade(it, latest.version) }, "Preview upgrade")) : null,
       upgradeBox(it),
       props.length ? h("p", { class: "small" }, props.map(p => `${p.label}: ${it.body.properties[p.key] ?? p.default ?? "—"}${p.unit ? " " + p.unit : ""}`).join(" · ")) : null,
+      tankPreview(it),
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Role", "Signal", "Channel", "State", "Check"].map(x => h("th", null, x)))),
         h("tbody", null, roles.map(role => roleRow(E, it, role, board)))),
       h("p", { class: "muted small" }, "Commanded state, coil readback and independent feedback are shown separately on the twin and bench pages; a missing feedback is UNKNOWN, never OFF."),
@@ -96,6 +97,17 @@
       } }, `Retire ${it.name}`)), h("p", { class: "muted small" }, "Retiring keeps the item's history and records; programs that use it must be changed first."));
   }
 
+  // 0.7.3: a tank with a capacity shows the size it gets in the drawing (the editor's rule, schematic only)
+  function tankPreview(it) {
+    const cap = Number(((it.body || {}).properties || {}).capacity_l);
+    if (!(cap > 0) || !window.AqHydraulicEditor || !window.AqHydraulicEditor.tankSize) return null;
+    const z = window.AqHydraulicEditor.tankSize(cap), k = 0.3, NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg"), r = document.createElementNS(NS, "rect");
+    svg.setAttribute("width", z.w * k + 2); svg.setAttribute("height", z.h * k + 2); svg.setAttribute("aria-hidden", "true");
+    Object.entries({ x: 1, y: 1, width: z.w * k, height: z.h * k, rx: 3, fill: "none", stroke: "currentColor" }).forEach(([a, b]) => r.setAttribute(a, b));
+    svg.appendChild(r);
+    return h("p", { class: "small muted", "data-tank-size": `${z.w}x${z.h}` }, svg, ` Drawn ${z.w} × ${z.h} in the installation drawing for ${cap} L (schematic, not the tank's real dimensions).`);
+  }
   // 0.7.0: the item's details as typed fields (no JSON): properties of its type, the scaling and alarm limits of
   // each measurement. Values the user typed survive the page's refresh; problems come back beside the button.
   const ED = {};

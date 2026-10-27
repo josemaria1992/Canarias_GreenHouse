@@ -33,7 +33,7 @@ def hydraulic_items(equipment) -> dict[str, dict]:
         tb = types.get((it["type_id"], it["type_version"]))
         kind, src = water_kind(tb, it["type_id"]) if tb else (None, None)
         out[it["item_id"]] = {"kind": kind, "kind_from": src, "name": it["name"],
-                              "public_id": it.get("public_id", it["item_id"])}
+                              "public_id": it.get("public_id", it["item_id"])} | _presentation(tb, it["body"], it["type_id"])
     return out
 
 
@@ -68,5 +68,15 @@ def views_hydraulic(views: dict[str, ItemView]) -> dict[str, dict]:
     out = {}
     for iid, v in views.items():
         kind, src = water_kind(v.type)
-        out[iid] = {"kind": kind, "kind_from": src, "name": v.name}
+        out[iid] = {"kind": kind, "kind_from": src, "name": v.name} | _presentation(v.type, v.body.model_dump(mode="json"))
     return out
+
+
+def _presentation(tb, body: dict, type_id: str | None = None) -> dict:
+    """0.7.3: what the drawing needs beyond the kind: a tank's capacity (its schematic size) and whether a sensor
+    measures a level (it can be dropped on a tank)."""
+    props = (body or {}).get("properties") or {}
+    cap = props.get("capacity_l")
+    level = bool(tb) and (type_id == "level" or (tb.category or "") == "Level sensors"
+                          or any(r.role == "level" for r in tb.roles))
+    return {"capacity_L": cap if isinstance(cap, (int, float)) else None, "level": level}

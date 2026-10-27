@@ -659,13 +659,42 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             hist.event("TWIN_DESIGN_IMPORTED", {"source": "overview graph", "replaced": bool(own and differs)},
                        actor=p.username)
             return {"source": "graph", "topology_rev": svc.blocks.topology()["rev"], "replaced": bool(own and differs)}
+        # 0.7.3: the earlier drawing, kept as drawn, becomes the twin's saved design (the same guard against replacing
+        # a design that was not exported); its placeholders and sketches stay visible until they are resolved
+        prop = legacy_proposal()
+        own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+        has = bool(cur_t["graph"].get("nodes")) or bool((cur_d.get("diagram") or {}).get("placeholders"))
+        if own and has and not body.replace:
+            raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                     "Import from Overview replaces them: press it again to replace them")
+        try:
+            svc.blocks.save_drawing(p.username, "installation", prop["topology"], prop["diagram"],
+                                    expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"],
+                                    note="imported from the Overview's earlier drawing")
+        except BlockRefused as e:
+            raise HTTPException(409, f"the Overview's drawing could not be loaded: {e}")
+        hist.event("TWIN_DESIGN_IMPORTED", {"source": "earlier drawing", "kept": prop["kept"],
+                                            "ambiguous": len(prop["ambiguous"]), "unresolved": len(prop["unresolved"])},
+                   actor=p.username)
+        return {"source": "legacy", "proposal": {k: prop[k] for k in ("ambiguous", "unresolved", "matched", "to_create",
+                                                                        "kept", "source", "meaning")},
+                "replaced": bool(own and has)}
+
+    def legacy_proposal() -> dict:
         from ..topology.migrate import propose
-        lay, where = live_layout()
+        lay, _ = live_layout()
         items = svc.blocks.items()
-        prop = propose(lay, {k: v.get("kind") for k, v in items.items()}, {k: v.get("name") for k, v in items.items()})
-        hist.event("TWIN_DESIGN_IMPORTED", {"source": "earlier drawing", "ambiguous": len(prop["ambiguous"]),
-                                            "unresolved": len(prop["unresolved"])}, actor=p.username)
-        return {"source": "legacy", "from": where, "proposal": prop}
+        return propose(lay, {k: v.get("kind") for k, v in items.items()}, {k: v.get("name") for k, v in items.items()})
+
+    @app.get("/api/twin/design/reference")
+    def design_reference(p: Principal = Depends(require(Perm.OPS_READ))):
+        """The Overview's current drawing, to show when the twin has no design yet (never a blank editor)."""
+        live = (svc.snap or {}).get("hydraulics") or {}
+        lt, ld = live.get("topology") or {}, live.get("diagram") or {}
+        if (lt.get("graph") or {}).get("nodes"):
+            return {"source": "graph", "graph": lt["graph"], "diagram": ld.get("diagram") or {}}
+        pr = legacy_proposal()
+        return {"source": "legacy", "graph": pr["topology"], "diagram": pr["diagram"], "kept": pr["kept"]}
 
     @app.post("/api/twin/layout/start-from")
     def start_from(body: LayoutStartIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

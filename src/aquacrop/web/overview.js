@@ -51,16 +51,27 @@
   async function card() {
     const D = await api("GET", "/api/overview/diagram").catch(() => null);
     if (!D) return null;
-    if (!D.explicit) {
-      // the earlier drawing stays the Overview until an export from the twin is applied: say so, never show a blank
-      const legacy = window.AqPlant && window.AqPlant.hwDiagram ? await window.AqPlant.hwDiagram().catch(() => null) : null;
-      return h("div", { "data-overview": "legacy" },
-        legacy, h("p", { class: "muted small", "data-migration": "" }, D.migration));
-    }
+    // 0.7.3: the earlier drawing is drawn by the same editor and the same conversion as the twin's Import from
+    // Overview (everything kept: unmapped symbols as marked placeholders, unconnected pipes as sketches)
+    const L = D.explicit ? null : D.legacy_view;
+    if (!D.explicit && !L) return h("p", { class: "muted small", "data-migration": "" }, D.migration);
+    const graph = L ? L.topology : D.topology.graph, diagram = L ? L.diagram : D.diagram.diagram;
     const host = h("div", { class: "hed-host hed-view" });
     const states = {};
-    for (const n of D.topology.graph.nodes) { const s = stateOf(D, n); if (s) states[n.id] = s; }
-    const ed = window.AqHydraulicEditor.create(host, { symbols: D.symbols, items: D.items, graph: D.topology.graph, diagram: D.diagram.diagram,
+    for (const n of graph.nodes) { const s = stateOf(D, n); if (s) states[n.id] = s; }
+    for (const p of diagram.placeholders || []) {               // a placeholder shows the reading of the item it was drawn with
+      const s = p.item ? stateOf(D, { id: p.id, kind: p.kind, item: p.item }) : null;
+      if (s) states["ph:" + p.id] = s;
+    }
+    if (L) {
+      const k = L.kept || {};
+      return h("div", { class: "card", id: "overview-diagram", "data-overview": "legacy" },
+        h("div", { class: "row" }, h("h2", null, "Installation"), h("span", { class: "muted small" }, "the earlier drawing, as drawn")),
+        h("div", { class: "diagram-wrap" }, (() => { const ed = window.AqHydraulicEditor.create(host, { symbols: D.symbols, items: D.items, graph, diagram, readOnly: true, viewOnly: true }); ed.setOverlay({ states }); return host; })()),
+        h("p", { class: "muted small" }, `${k.symbols || 0} symbol(s) linked to equipment, ${k.placeholders || 0} marked NOT MAPPED, ${k.sketches || 0} pipe(s) kept as drawn (not connections), ${k.texts || 0} label(s).`),
+        h("p", { class: "muted small", "data-migration": "" }, D.migration));
+    }
+    const ed = window.AqHydraulicEditor.create(host, { symbols: D.symbols, items: D.items, graph, diagram,
       readOnly: true, viewOnly: true, highlight: O.sel ? [O.sel] : [], onSelect: id => { O.sel = O.sel === id ? null : id; U.refresh(); } });
     ed.setOverlay({ states });
     const planned = Object.values(states).filter(s => s.cls === "planned").length;

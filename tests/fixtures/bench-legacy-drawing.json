@@ -1,0 +1,1474 @@
+{
+ "expected_kept": {
+  "placeholders": 8,
+  "routes_corrected": 0,
+  "routes_kept": 4,
+  "shapes": 1,
+  "sketches": 15,
+  "symbols": 33,
+  "texts": 5
+ },
+ "items": {
+  "ec": {
+   "kind": "sensor",
+   "name": "Main tank EC"
+  },
+  "flow-fill-main": {
+   "kind": "meter",
+   "name": "Main tank fill flow"
+  },
+  "flow-return": {
+   "kind": "meter",
+   "name": "Return flow"
+  },
+  "flow-s1": {
+   "kind": "meter",
+   "name": "Sector 1 flow"
+  },
+  "flow-s2": {
+   "kind": "meter",
+   "name": "Sector 2 flow"
+  },
+  "flow-tp-a": {
+   "kind": "meter",
+   "name": "TP A flow"
+  },
+  "flow-tp-acid": {
+   "kind": "meter",
+   "name": "TP acid flow"
+  },
+  "flow-tp-b": {
+   "kind": "meter",
+   "name": "TP B flow"
+  },
+  "lvl-a": {
+   "kind": "sensor",
+   "name": "Fertiliser A level"
+  },
+  "lvl-acid": {
+   "kind": "sensor",
+   "name": "Acid level"
+  },
+  "lvl-b": {
+   "kind": "sensor",
+   "name": "Fertiliser B level"
+  },
+  "lvl-main": {
+   "kind": "sensor",
+   "name": "Main tank level"
+  },
+  "lvl-sump": {
+   "kind": "sensor",
+   "name": "Drainage tank level"
+  },
+  "mp1": {
+   "kind": "pump",
+   "name": "Main pump 1"
+  },
+  "mp2": {
+   "kind": "pump",
+   "name": "Main pump 2"
+  },
+  "ph": {
+   "kind": "sensor",
+   "name": "Main tank pH"
+  },
+  "pres-s1": {
+   "kind": "sensor",
+   "name": "Sector 1 pressure"
+  },
+  "pres-s2": {
+   "kind": "sensor",
+   "name": "Sector 2 pressure"
+  },
+  "rp1": {
+   "kind": "pump",
+   "name": "Return pump 1"
+  },
+  "rp2": {
+   "kind": "pump",
+   "name": "Return pump 2"
+  },
+  "temp": {
+   "kind": "sensor",
+   "name": "Main tank temperature"
+  },
+  "tp-a": {
+   "kind": "pump",
+   "name": "TP A"
+  },
+  "tp-acid": {
+   "kind": "pump",
+   "name": "TP acid"
+  },
+  "tp-b": {
+   "kind": "pump",
+   "name": "TP B"
+  },
+  "v-fill-a": {
+   "kind": "valve",
+   "name": "Fertiliser A water in"
+  },
+  "v-fill-acid": {
+   "kind": "valve",
+   "name": "Acid water in"
+  },
+  "v-fill-b": {
+   "kind": "valve",
+   "name": "Fertiliser B water in"
+  },
+  "v-fill-main": {
+   "kind": "valve",
+   "name": "Main tank water in"
+  },
+  "v-out-a": {
+   "kind": "valve",
+   "name": "Fertiliser A outlet"
+  },
+  "v-out-acid": {
+   "kind": "valve",
+   "name": "Acid outlet"
+  },
+  "v-out-b": {
+   "kind": "valve",
+   "name": "Fertiliser B outlet"
+  },
+  "v-s1": {
+   "kind": "valve",
+   "name": "Sector 1 valve"
+  },
+  "v-s2": {
+   "kind": "valve",
+   "name": "Sector 2 valve"
+  }
+ },
+ "layout": {
+  "height": 700.0,
+  "kind": "AQUACROP_LAYOUT",
+  "nodes": [
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "t-mains",
+    "item": null,
+    "kind": "label",
+    "label": "Mains water",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 20.0,
+    "y": 26.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-fill-a",
+    "item": "v-fill-a",
+    "kind": "valve",
+    "label": "water in",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 105.0,
+    "y": 80.0
+   },
+   {
+    "capacity_L": 5000.0,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 100.0,
+    "id": "tank-a",
+    "item": "lvl-a",
+    "kind": "tank",
+    "label": "Fertiliser A",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": 90.0,
+    "x": 60.0,
+    "y": 125.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "lvl-a",
+    "item": "lvl-a",
+    "kind": "sensor",
+    "label": "Fertiliser A level",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "L",
+    "vertical": false,
+    "w": null,
+    "x": 138.0,
+    "y": 137.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-out-a",
+    "item": "v-out-a",
+    "kind": "valve",
+    "label": "outlet",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 105.0,
+    "y": 290.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "down",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "tp-a",
+    "item": "tp-a",
+    "kind": "pump",
+    "label": "TP A",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 105.0,
+    "y": 352.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-tp-a",
+    "item": "flow-tp-a",
+    "kind": "sensor",
+    "label": "TP A flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 127.0,
+    "y": 416.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-fill-b",
+    "item": "v-fill-b",
+    "kind": "valve",
+    "label": "water in",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 245.0,
+    "y": 80.0
+   },
+   {
+    "capacity_L": 5000.0,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 100.0,
+    "id": "tank-b",
+    "item": "lvl-b",
+    "kind": "tank",
+    "label": "Fertiliser B",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": 90.0,
+    "x": 200.0,
+    "y": 125.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "lvl-b",
+    "item": "lvl-b",
+    "kind": "sensor",
+    "label": "Fertiliser B level",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "L",
+    "vertical": false,
+    "w": null,
+    "x": 278.0,
+    "y": 137.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-out-b",
+    "item": "v-out-b",
+    "kind": "valve",
+    "label": "outlet",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 245.0,
+    "y": 290.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "down",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "tp-b",
+    "item": "tp-b",
+    "kind": "pump",
+    "label": "TP B",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 245.0,
+    "y": 352.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-tp-b",
+    "item": "flow-tp-b",
+    "kind": "sensor",
+    "label": "TP B flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 267.0,
+    "y": 416.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-fill-acid",
+    "item": "v-fill-acid",
+    "kind": "valve",
+    "label": "water in",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 385.0,
+    "y": 80.0
+   },
+   {
+    "capacity_L": 5000.0,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 100.0,
+    "id": "tank-acid",
+    "item": "lvl-acid",
+    "kind": "tank",
+    "label": "Acid",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": 90.0,
+    "x": 340.0,
+    "y": 125.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "lvl-acid",
+    "item": "lvl-acid",
+    "kind": "sensor",
+    "label": "Acid level",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "L",
+    "vertical": false,
+    "w": null,
+    "x": 418.0,
+    "y": 137.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-out-acid",
+    "item": "v-out-acid",
+    "kind": "valve",
+    "label": "outlet",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 385.0,
+    "y": 290.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "down",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "tp-acid",
+    "item": "tp-acid",
+    "kind": "pump",
+    "label": "TP acid",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 385.0,
+    "y": 352.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-tp-acid",
+    "item": "flow-tp-acid",
+    "kind": "sensor",
+    "label": "TP acid flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 407.0,
+    "y": 416.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "t-mixing",
+    "item": null,
+    "kind": "label",
+    "label": "No stirrer or air pump: mixing is not checked.",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 20.0,
+    "y": 470.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-fill-main",
+    "item": "v-fill-main",
+    "kind": "valve",
+    "label": "water in",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": true,
+    "w": null,
+    "x": 620.0,
+    "y": 128.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-fill-main",
+    "item": "flow-fill-main",
+    "kind": "sensor",
+    "label": "Main tank fill flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 642.0,
+    "y": 180.0
+   },
+   {
+    "capacity_L": 20000.0,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 240.0,
+    "id": "tank-main",
+    "item": "lvl-main",
+    "kind": "tank",
+    "label": "Main tank",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": 160.0,
+    "x": 500.0,
+    "y": 210.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "lvl-main",
+    "item": "lvl-main",
+    "kind": "sensor",
+    "label": "Main tank level",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "L",
+    "vertical": false,
+    "w": null,
+    "x": 508.0,
+    "y": 232.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "ph",
+    "item": "ph",
+    "kind": "sensor",
+    "label": "pH",
+    "planned": false,
+    "role": "ph",
+    "sub": "",
+    "tag": "pH",
+    "vertical": false,
+    "w": null,
+    "x": 530.0,
+    "y": 515.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "ec",
+    "item": "ec",
+    "kind": "sensor",
+    "label": "EC",
+    "planned": false,
+    "role": "ec",
+    "sub": "",
+    "tag": "EC",
+    "vertical": false,
+    "w": null,
+    "x": 580.0,
+    "y": 515.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "temp",
+    "item": "temp",
+    "kind": "sensor",
+    "label": "Temperature",
+    "planned": false,
+    "role": "temperature",
+    "sub": "",
+    "tag": "T",
+    "vertical": false,
+    "w": null,
+    "x": 630.0,
+    "y": 515.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "t-probe",
+    "item": null,
+    "kind": "label",
+    "label": "probe position proposed, not installed",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 505.0,
+    "y": 560.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "mp1",
+    "item": "mp1",
+    "kind": "pump",
+    "label": "Main pump 1",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 760.0,
+    "y": 290.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "mp2",
+    "item": "mp2",
+    "kind": "pump",
+    "label": "Main pump 2",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 760.0,
+    "y": 410.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 50.0,
+    "id": "drive",
+    "item": null,
+    "kind": "box",
+    "label": "Pump drive (shared)",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": 140.0,
+    "x": 690.0,
+    "y": 478.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-s1",
+    "item": "v-s1",
+    "kind": "valve",
+    "label": "valve S1",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 880.0,
+    "y": 200.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-s1",
+    "item": "flow-s1",
+    "kind": "sensor",
+    "label": "Sector 1 flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 912.0,
+    "y": 178.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "pres-s1",
+    "item": "pres-s1",
+    "kind": "sensor",
+    "label": "Sector 1 pressure",
+    "planned": false,
+    "role": "pressure",
+    "sub": "",
+    "tag": "P",
+    "vertical": false,
+    "w": null,
+    "x": 912.0,
+    "y": 224.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 104.0,
+    "id": "sector-1",
+    "item": "v-s1",
+    "kind": "sector",
+    "label": "Sector 1",
+    "planned": false,
+    "role": null,
+    "sub": "channels 1\u20136 \u00b7 24 outlets",
+    "tag": "",
+    "vertical": false,
+    "w": 160.0,
+    "x": 930.0,
+    "y": 148.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "v-s2",
+    "item": "v-s2",
+    "kind": "valve",
+    "label": "valve S2",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 880.0,
+    "y": 440.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-s2",
+    "item": "flow-s2",
+    "kind": "sensor",
+    "label": "Sector 2 flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 912.0,
+    "y": 418.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "pres-s2",
+    "item": "pres-s2",
+    "kind": "sensor",
+    "label": "Sector 2 pressure",
+    "planned": false,
+    "role": "pressure",
+    "sub": "",
+    "tag": "P",
+    "vertical": false,
+    "w": null,
+    "x": 912.0,
+    "y": 464.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 104.0,
+    "id": "sector-2",
+    "item": "v-s2",
+    "kind": "sector",
+    "label": "Sector 2",
+    "planned": false,
+    "role": null,
+    "sub": "channels 7\u201313 \u00b7 28 outlets",
+    "tag": "",
+    "vertical": false,
+    "w": 160.0,
+    "x": 930.0,
+    "y": 388.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "t-gravity",
+    "item": null,
+    "kind": "label",
+    "label": "by gravity, not measured",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 975.0,
+    "y": 592.0
+   },
+   {
+    "capacity_L": 5000.0,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": 80.0,
+    "id": "tank-sump",
+    "item": "lvl-sump",
+    "kind": "tank",
+    "label": "Drainage tank",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": 100.0,
+    "x": 860.0,
+    "y": 560.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "lvl-sump",
+    "item": "lvl-sump",
+    "kind": "sensor",
+    "label": "Drainage tank level",
+    "planned": false,
+    "role": "level",
+    "sub": "",
+    "tag": "L",
+    "vertical": false,
+    "w": null,
+    "x": 946.0,
+    "y": 574.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "left",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "rp1",
+    "item": "rp1",
+    "kind": "pump",
+    "label": "Return pump 1",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 770.0,
+    "y": 620.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "left",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "rp2",
+    "item": "rp2",
+    "kind": "pump",
+    "label": "Return pump 2",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 670.0,
+    "y": 620.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "flow-return",
+    "item": "flow-return",
+    "kind": "sensor",
+    "label": "Return flow",
+    "planned": false,
+    "role": "flow",
+    "sub": "",
+    "tag": "F",
+    "vertical": false,
+    "w": null,
+    "x": 520.0,
+    "y": 640.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": null,
+    "full_at": null,
+    "h": null,
+    "id": "t-safety",
+    "item": null,
+    "kind": "label",
+    "label": "Safety circuit: not measured",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 20.0,
+    "y": 690.0
+   },
+   {
+    "capacity_L": null,
+    "dir": "right",
+    "flow_L_min": 60.0,
+    "full_at": null,
+    "h": null,
+    "id": "mains",
+    "item": null,
+    "kind": "source",
+    "label": "Mains",
+    "planned": false,
+    "role": null,
+    "sub": "",
+    "tag": "",
+    "vertical": false,
+    "w": null,
+    "x": 20.0,
+    "y": 40.0
+   }
+  ],
+  "pipes": [
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "mains",
+    "id": "mains",
+    "item": null,
+    "points": [
+     [
+      20.0,
+      40.0
+     ],
+     [
+      620.0,
+      40.0
+     ]
+    ],
+    "to_node": null
+   },
+   {
+    "flow_item": "flow-fill-main",
+    "flow_role": "flow",
+    "from_node": null,
+    "id": "fill-main",
+    "item": "v-fill-main",
+    "points": [
+     [
+      620.0,
+      40.0
+     ],
+     [
+      620.0,
+      210.0
+     ]
+    ],
+    "to_node": "tank-main"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": null,
+    "id": "fill-a",
+    "item": "v-fill-a",
+    "points": [
+     [
+      105.0,
+      40.0
+     ],
+     [
+      105.0,
+      125.0
+     ]
+    ],
+    "to_node": "tank-a"
+   },
+   {
+    "flow_item": "flow-tp-a",
+    "flow_role": "flow",
+    "from_node": "tank-a",
+    "id": "dose-a",
+    "item": "tp-a",
+    "points": [
+     [
+      105.0,
+      225.0
+     ],
+     [
+      105.0,
+      430.0
+     ],
+     [
+      500.0,
+      430.0
+     ]
+    ],
+    "to_node": "tank-main"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": null,
+    "id": "fill-b",
+    "item": "v-fill-b",
+    "points": [
+     [
+      245.0,
+      40.0
+     ],
+     [
+      245.0,
+      125.0
+     ]
+    ],
+    "to_node": "tank-b"
+   },
+   {
+    "flow_item": "flow-tp-b",
+    "flow_role": "flow",
+    "from_node": "tank-b",
+    "id": "dose-b",
+    "item": "tp-b",
+    "points": [
+     [
+      245.0,
+      225.0
+     ],
+     [
+      245.0,
+      430.0
+     ],
+     [
+      500.0,
+      430.0
+     ]
+    ],
+    "to_node": "tank-main"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": null,
+    "id": "fill-acid",
+    "item": "v-fill-acid",
+    "points": [
+     [
+      385.0,
+      40.0
+     ],
+     [
+      385.0,
+      125.0
+     ]
+    ],
+    "to_node": "tank-acid"
+   },
+   {
+    "flow_item": "flow-tp-acid",
+    "flow_role": "flow",
+    "from_node": "tank-acid",
+    "id": "dose-acid",
+    "item": "tp-acid",
+    "points": [
+     [
+      385.0,
+      225.0
+     ],
+     [
+      385.0,
+      430.0
+     ],
+     [
+      500.0,
+      430.0
+     ]
+    ],
+    "to_node": "tank-main"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "tank-main",
+    "id": "to-mp1",
+    "item": "mp1",
+    "points": [
+     [
+      660.0,
+      410.0
+     ],
+     [
+      700.0,
+      410.0
+     ],
+     [
+      700.0,
+      290.0
+     ],
+     [
+      744.0,
+      290.0
+     ]
+    ],
+    "to_node": "mp1"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "mp1",
+    "id": "mp1-s1",
+    "item": "mp1",
+    "points": [
+     [
+      776.0,
+      290.0
+     ],
+     [
+      830.0,
+      290.0
+     ],
+     [
+      830.0,
+      200.0
+     ],
+     [
+      867.0,
+      200.0
+     ]
+    ],
+    "to_node": "v-s1"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "mp1",
+    "id": "mp1-s2",
+    "item": "mp1",
+    "points": [
+     [
+      776.0,
+      290.0
+     ],
+     [
+      830.0,
+      290.0
+     ],
+     [
+      830.0,
+      440.0
+     ],
+     [
+      867.0,
+      440.0
+     ]
+    ],
+    "to_node": "v-s2"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "tank-main",
+    "id": "to-mp2",
+    "item": "mp2",
+    "points": [
+     [
+      660.0,
+      410.0
+     ],
+     [
+      700.0,
+      410.0
+     ],
+     [
+      700.0,
+      410.0
+     ],
+     [
+      744.0,
+      410.0
+     ]
+    ],
+    "to_node": "mp2"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "mp2",
+    "id": "mp2-s1",
+    "item": "mp2",
+    "points": [
+     [
+      776.0,
+      410.0
+     ],
+     [
+      830.0,
+      410.0
+     ],
+     [
+      830.0,
+      200.0
+     ],
+     [
+      867.0,
+      200.0
+     ]
+    ],
+    "to_node": "v-s1"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "mp2",
+    "id": "mp2-s2",
+    "item": "mp2",
+    "points": [
+     [
+      776.0,
+      410.0
+     ],
+     [
+      830.0,
+      410.0
+     ],
+     [
+      830.0,
+      440.0
+     ],
+     [
+      867.0,
+      440.0
+     ]
+    ],
+    "to_node": "v-s2"
+   },
+   {
+    "flow_item": "flow-s1",
+    "flow_role": "flow",
+    "from_node": "v-s1",
+    "id": "s1",
+    "item": "v-s1",
+    "points": [
+     [
+      893.0,
+      200.0
+     ],
+     [
+      930.0,
+      200.0
+     ]
+    ],
+    "to_node": "sector-1"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "sector-1",
+    "id": "drain-s1",
+    "item": null,
+    "points": [
+     [
+      1090.0,
+      230.0
+     ],
+     [
+      1097.0,
+      230.0
+     ],
+     [
+      1097.0,
+      600.0
+     ],
+     [
+      960.0,
+      600.0
+     ]
+    ],
+    "to_node": "tank-sump"
+   },
+   {
+    "flow_item": "flow-s2",
+    "flow_role": "flow",
+    "from_node": "v-s2",
+    "id": "s2",
+    "item": "v-s2",
+    "points": [
+     [
+      893.0,
+      440.0
+     ],
+     [
+      930.0,
+      440.0
+     ]
+    ],
+    "to_node": "sector-2"
+   },
+   {
+    "flow_item": null,
+    "flow_role": null,
+    "from_node": "sector-2",
+    "id": "drain-s2",
+    "item": null,
+    "points": [
+     [
+      1090.0,
+      470.0
+     ],
+     [
+      1097.0,
+      470.0
+     ],
+     [
+      1097.0,
+      600.0
+     ],
+     [
+      960.0,
+      600.0
+     ]
+    ],
+    "to_node": "tank-sump"
+   },
+   {
+    "flow_item": "flow-return",
+    "flow_role": "flow",
+    "from_node": "tank-sump",
+    "id": "return",
+    "item": "rp1",
+    "points": [
+     [
+      860.0,
+      620.0
+     ],
+     [
+      478.0,
+      620.0
+     ],
+     [
+      478.0,
+      440.0
+     ],
+     [
+      500.0,
+      440.0
+     ]
+    ],
+    "to_node": "tank-main"
+   }
+  ],
+  "title": "Installation",
+  "width": 1100.0
+ }
+}

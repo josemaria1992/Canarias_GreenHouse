@@ -9,6 +9,12 @@ digest of a diagram's presentation is kept apart from the graph's digest.
 Routing is done by the browser editor (`web/router.js`); here routes are checked and made canonical. A route
 without points is "not routed yet" (a draft the editor routes when it opens); a diagonal, a detached end, a
 non-finite number or a reference to something that does not exist is refused.
+
+0.7.3 (owner corrections): one drawing for Overview, Twin and Blocks, able to carry everything an earlier drawing had.
+A symbol may have its own size (`w`, `h`: kept from the earlier drawing, or a tank's size from its capacity,
+`tank_size`). `shapes` are drawn boxes, `placeholders` are earlier symbols not mapped to equipment yet (drawn and
+marked, never part of the graph), and `sketches` are earlier pipes kept as they were drawn (a reference, never a
+connection; diagonal allowed because they are not routes). Empty additions leave a drawing's digest unchanged.
 """
 from __future__ import annotations
 
@@ -44,6 +50,8 @@ class Symbol(_B):
     rot: Literal[0, 90, 180, 270] = 0
     label: str = Field(default="", max_length=80)
     ports: dict[str, PortPos] = Field(default_factory=dict)     # moved port anchors, in unrotated terms
+    w: float | None = Field(default=None, gt=0, le=2000)        # its own size (unrotated); None: the kind's size
+    h: float | None = Field(default=None, gt=0, le=2000)
 
 
 class Pin(_B):
@@ -66,6 +74,38 @@ class Text(_B):
     text: str = Field(max_length=120)
 
 
+class Shape(_B):
+    """A drawn box with a caption (an area, a cabinet): presentation only."""
+    id: str = Field(pattern=ID)
+    x: float = Field(ge=-100, le=10000)
+    y: float = Field(ge=-100, le=10000)
+    w: float = Field(gt=0, le=5000)
+    h: float = Field(gt=0, le=5000)
+    label: str = Field(default="", max_length=80)
+
+
+class Placeholder(_B):
+    """A symbol of an earlier drawing that is not mapped to an equipment item of the graph yet: kept where it was,
+    drawn and marked, never a node. `item` is the item the earlier drawing showed with it (for its reading)."""
+    id: str = Field(pattern=ID)
+    kind: str = Field(max_length=16)
+    x: float = Field(ge=-100, le=10000)
+    y: float = Field(ge=-100, le=10000)
+    w: float = Field(gt=0, le=5000)
+    h: float = Field(gt=0, le=5000)
+    label: str = Field(default="", max_length=80)
+    item: str | None = Field(default=None, max_length=48)
+    why: str = Field(default="", max_length=240)
+
+
+class Sketch(_B):
+    """A pipe of an earlier drawing kept exactly as drawn: a reference, never a connection."""
+    id: str = Field(pattern=ID)
+    points: list[tuple[float, float]] = Field(min_length=2, max_length=MAX_POINTS)
+    why: str = Field(default="", max_length=240)
+    edge: str | None = Field(default=None, pattern=ID)      # the edge it became, when its route had to be corrected
+
+
 class Diagram(_B):
     kind: Literal["AQUACROP_DIAGRAM"] = "AQUACROP_DIAGRAM"
     format: Literal[1] = 1
@@ -77,6 +117,9 @@ class Diagram(_B):
     symbols: list[Symbol] = Field(default_factory=list, max_length=400)
     routes: list[Route] = Field(default_factory=list, max_length=600)
     texts: list[Text] = Field(default_factory=list, max_length=200)
+    shapes: list[Shape] = Field(default_factory=list, max_length=200)
+    placeholders: list[Placeholder] = Field(default_factory=list, max_length=400)
+    sketches: list[Sketch] = Field(default_factory=list, max_length=600)
 
     @model_validator(mode="after")
     def _unique(self):
@@ -95,8 +138,19 @@ def parse(doc: dict) -> Diagram:
 # ---------------------------------------------------------------------- geometry shared with the editor
 def box(kind: str, s: Symbol) -> tuple[float, float, float, float]:
     """(x, y, w, h) of the symbol as drawn: a quarter turn swaps width and height around the same top-left."""
-    w, h = SYMBOLS[kind]["w"], SYMBOLS[kind]["h"]
+    w, h = (s.w or SYMBOLS[kind]["w"]), (s.h or SYMBOLS[kind]["h"])
+    if kind == "junction":
+        w, h = 0, 0
     return (s.x, s.y, h, w) if s.rot in (90, 270) else (s.x, s.y, w, h)
+
+
+def tank_size(capacity_L: float | None) -> tuple[float, float]:
+    """A tank's schematic size from its capacity (shared with web/hydraulic-editor.js): the area grows with the
+    volume, so 20 000 L is visibly bigger than 5 000 L. Schematic only: not the tank's physical dimensions."""
+    if not capacity_L or capacity_L <= 0:
+        return SYMBOLS["tank"]["w"], SYMBOLS["tank"]["h"]
+    k = min(2.0, max(0.6, (capacity_L / 5000.0) ** 0.5))
+    return round(100 * k / 10) * 10, round(120 * k / 10) * 10
 
 
 def anchor(kind: str, s: Symbol, port: str) -> tuple[tuple[float, float], str]:
@@ -259,6 +313,15 @@ def canonical(d: Diagram) -> dict:
     out["symbols"] = sorted(out["symbols"], key=lambda s: s["node"])
     out["routes"] = sorted(out["routes"], key=lambda r: r["edge"])
     out["texts"] = sorted(out["texts"], key=lambda x: x["id"])
+    for s in out["symbols"]:                     # 0.7.3 additions leave earlier drawings' digests as they were
+        for k in ("w", "h"):
+            if s.get(k) is None:
+                s.pop(k, None)
+    for k in ("shapes", "placeholders", "sketches"):
+        if out.get(k):
+            out[k] = sorted(out[k], key=lambda x: x["id"])
+        else:
+            out.pop(k, None)
     return out
 
 

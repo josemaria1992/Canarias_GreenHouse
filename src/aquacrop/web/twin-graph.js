@@ -72,10 +72,11 @@
     }
     await load();
     if (r.source === "legacy") {
-      const p = r.proposal;
-      G.migration = p; G.editing = true; G.draft = "the earlier Overview drawing, converted";
-      build(v, p.topology, Object.assign({}, G.loaded.dia.diagram, p.diagram));
-      G.msg.flow = { text: `The Overview still has the earlier drawing: it is loaded here as a design to review (not saved). ${p.ambiguous.length} ambiguous and ${p.unresolved.length} unlinked part(s) are listed below for you to decide; nothing is connected by guesswork.` };
+      // 0.7.3: saved in the twin as drawn; placeholders and reference sketches stay until they are resolved
+      const p = r.proposal, k = p.kept || {};
+      G.migration = p; G.editing = false; G.draft = null;
+      build(v);
+      G.msg.flow = { text: `The earlier Overview drawing is now the twin's saved design, as drawn: ${k.symbols || 0} linked symbol(s), ${k.placeholders || 0} placeholder(s), ${k.sketches || 0} pipe sketch(es). ${p.ambiguous.length} ambiguous and ${p.unresolved.length} unlinked part(s) are listed below; nothing is connected by guesswork.` };
     } else {
       G.migration = null; G.editing = false; G.draft = null;
       G.msg.flow = { text: r.replaced ? "Imported from the Overview: the twin's earlier design was replaced." : "Imported from the Overview: the twin's design is the approved drawing." };
@@ -174,6 +175,20 @@
   function build(v, graph, diagram) {
     if (!G.loaded) return;
     const { topo, dia } = G.loaded;
+    const none = !graph && !topo.graph.nodes.length && !((dia.diagram || {}).placeholders || []).length;
+    if (none && !G.editing) {                             // no design yet: the Overview's drawing as the reference, read-only
+      G.ed = null; G.rev = { t: topo.rev, d: dia.rev };
+      if (G.refFor === revs(G.loaded) && G.host.childNodes.length) return;   // already shown for these revisions
+      G.built = G.refFor = revs(G.loaded);
+      api("GET", "api/twin/design/reference").then(R => {
+        if (G.ed || G.editing) return;
+        const box = h("div", { class: "hed-host hed-view" });
+        window.AqHydraulicEditor.create(box, { symbols: topo.symbols, items: topo.items, graph: R.graph, diagram: R.diagram, readOnly: true, viewOnly: true });
+        put(G.host, [h("p", { class: "small", "data-reference": "" }, h("span", { class: "pill warn" }, "REFERENCE"), " The twin has no design yet. This is the Overview's current drawing",
+          R.source === "legacy" ? " (the earlier drawing, as Import from Overview would load it)" : "", ". Press Import from Overview to make it the twin's design, or New design to start empty."), box]);
+      }).catch(() => put(G.host, h("p", { class: "muted small" }, "The twin has no design yet; the Overview's drawing could not be loaded as a reference.")));
+      return;
+    }
     G.ed = window.AqHydraulicEditor.create(G.host, { symbols: topo.symbols, items: topo.items, graph: graph || topo.graph, diagram: diagram || dia.diagram,
       readOnly: !G.editing, serverIssues: topo.issues });
     G.rev = { t: topo.rev, d: dia.rev };

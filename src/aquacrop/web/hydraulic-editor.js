@@ -10,6 +10,12 @@
    Gestures work with mouse, touch and keyboard: tap to select, drag a symbol or a segment handle, arrow keys move
    the selection by one grid step (Shift: five), Delete removes it, Escape cancels, Ctrl+Z / Ctrl+Y undo and redo.
 
+   0.7.3 (owner corrections): the earlier drawing is drawn as it was: labels, boxes, symbols at their size, placeholders
+   (earlier symbols not mapped to equipment yet, marked, never part of the graph) and sketches (earlier pipes kept as
+   drawn: a reference, never a connection). An item is placed onto its placeholder from the placeholder's panel. A tank
+   is sized from its capacity when placed or on request. Dropping a level sensor on one tank associates it with that
+   tank (no pipe); the tank then carries it when moved. Undo covers all of it.
+
    0.7.1 (owner decisions): connection heights align. A dragged symbol snaps so that a connected port sits exactly at
    the height (or position) of the port at the pipe's other end when it is within a few pixels, and to other ports'
    guides otherwise, so aligned equipment gets a straight pipe instead of a tiny step; a deliberate offset beyond the
@@ -42,7 +48,10 @@
 
   /** Box (x, y, w, h) as drawn, and port anchors: the same rules as aquacrop/diagram.py. */
   function geometry(symbols) {
-    function box(kind, s) { const d = symbols[kind]; return s.rot === 90 || s.rot === 270 ? { x: s.x, y: s.y, w: d.h, h: d.w } : { x: s.x, y: s.y, w: d.w, h: d.h }; }
+    function box(kind, s) {
+      const d = symbols[kind], w = kind === "junction" ? 0 : (s.w || d.w), h = kind === "junction" ? 0 : (s.h || d.h);
+      return s.rot === 90 || s.rot === 270 ? { x: s.x, y: s.y, w: h, h: w } : { x: s.x, y: s.y, w, h };
+    }
     function anchor(kind, s, port) {
       const p = symbols[kind].ports.find(q => q.id === port);
       if (!p) return null;
@@ -189,16 +198,27 @@
     function pipeName(e) { return `pipe ${nameOf(e.src.node)} → ${nameOf(e.dst.node)}`; }
 
     // ---------------------------------------------------------------- operations
-    function placeItem(itemId) {
+    function placeItem(itemId, onto) {
       const it = opt.items[itemId];
       if (!it || !it.kind) return say("This equipment has no water kind: it is not part of the graph.", true);
       if (st.graph.nodes.some(n => n.item === itemId)) return say(`${it.name} is already in the graph: one item is one symbol.`, true);
       checkpoint();
       st.graph.nodes.push({ id: itemId, kind: it.kind, item: itemId });
-      const spot = freeSpot(it.kind);
-      st.diagram.symbols.push({ node: itemId, x: spot.x, y: spot.y, rot: 0, label: "", ports: {} });
+      const ph = onto ? (st.diagram.placeholders || []).find(x => x.id === onto) : null;
+      const size = it.kind === "tank" ? tankSize(it.capacity_L) : null;
+      const spot = ph ? { x: ph.x, y: ph.y } : freeSpot(it.kind);
+      const sym0 = { node: itemId, x: spot.x, y: spot.y, rot: 0, label: ph ? ph.label : "", ports: {} };
+      if (ph && (it.kind === "tank" || it.kind === "sector")) { sym0.w = ph.w; sym0.h = ph.h; }   // the earlier size stays
+      else if (size) { sym0.w = size.w; sym0.h = size.h; }
+      st.diagram.symbols.push(sym0);
+      if (ph) {
+        st.diagram.placeholders = st.diagram.placeholders.filter(x => x.id !== ph.id);
+        // the earlier drawing showed this tank with its level sensor: that sensor measures it (an association, no pipe)
+        if (it.kind === "tank" && ph.item && node(ph.item) && node(ph.item).kind === "sensor" && !(st.graph.measures || []).some(m => m.sensor === ph.item))
+          st.graph.measures = (st.graph.measures || []).concat([{ sensor: ph.item, node: itemId, mode: "TAP" }]);
+      }
       st.sel = { type: "symbol", id: itemId };
-      changed(); say(`${it.name} placed. Drag it where it belongs, then connect its ports.`);
+      changed(); say(ph ? `${it.name} placed on the earlier ${ph.label}; connect its ports where the drawn pipes show.` : `${it.name} placed. Drag it where it belongs, then connect its ports.`);
     }
     function freeSpot(kind) {
       const d = SYM[kind];
@@ -287,8 +307,36 @@
       }
       st.sel = null; changed(); say("Removed. Undo puts it back.");
     }
+    /** Level sensors associated with this tank and drawn on it (they move with it). */
+    function carried(id) {
+      const n = node(id); if (!n || n.kind !== "tank") return [];
+      const b = G.box("tank", sym(id));
+      return (st.graph.measures || []).filter(m => m.node === id).map(m => sym(m.sensor)).filter(Boolean).filter(ss => {
+        const c = G.box(node(ss.node).kind, ss), cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+        return cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+      });
+    }
+    /** The tanks under a symbol's centre, for a level sensor being dropped. */
+    function tanksUnder(id) {
+      const n = node(id), it = n && opt.items[n.item];
+      if (!n || n.kind !== "sensor" || !it || !it.level) return null;
+      const c = G.box("sensor", sym(id)), cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+      return st.graph.nodes.filter(t => t.kind === "tank" && sym(t.id)).filter(t => {
+        const b = G.box("tank", sym(t.id)); return cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+      }).map(t => t.id);
+    }
+    function dropSensor(id) {
+      const under = tanksUnder(id);
+      if (!under || !under.length) return;
+      if (under.length > 1) return say(`${nameOf(id)} is over ${under.map(nameOf).join(" and ")}: choose the tank it measures in its panel.`, true);
+      const cur = (st.graph.measures || []).find(m => m.sensor === id);
+      if (cur && cur.node === under[0]) return;
+      st.graph.measures = (st.graph.measures || []).filter(m => m.sensor !== id).concat([{ sensor: id, node: under[0], mode: "TAP" }]);
+      say(`${nameOf(id)} now measures the level of ${nameOf(under[0])} (an association: no pipe). Change it in its panel.`);
+    }
     function moveSymbol(id, x, y, commit) {
       const s = sym(id), old = { x: s.x, y: s.y };
+      for (const c of carried(id)) { c.x += x - s.x; c.y += y - s.y; }
       s.x = x; s.y = y;
       const r = reroute(edgesOf(id));
       if (!r.ok) { s.x = old.x; s.y = old.y; reroute(edgesOf(id)); say(`Not moved there: ${r.reason}`, true); return false; }
@@ -393,6 +441,22 @@
       const kids = [svg("defs", null, svg("pattern", { id: "hed-grid", width: grid(), height: grid(), patternUnits: "userSpaceOnUse" },
         svg("path", { d: `M ${grid()} 0 L 0 0 0 ${grid()}`, class: "hed-gridline" }))),
         svg("rect", { x: -40, y: -40, width: W + 80, height: H + 80, fill: "url(#hed-grid)", class: "hed-bg", "data-bg": "1" })];
+      for (const sh of st.diagram.shapes || []) kids.push(svg("g", { class: "hed-shape" }, svg("rect", { x: sh.x, y: sh.y, width: sh.w, height: sh.h, rx: 4 }),
+        sh.label ? svg("text", { x: sh.x + 6, y: sh.y + 16, class: "hed-label" }, sh.label) : null));
+      for (const k of st.diagram.sketches || []) kids.push(svg("polyline", { points: k.points.map(q => q.join(",")).join(" "), class: "hed-sketch" + (k.edge ? " corrected" : ""),
+        "data-sketch": k.id, role: "img", "aria-label": `Drawn pipe, not connected: ${k.why}` }, svg("title", null, `Earlier drawing, not a connection: ${k.why}`)));
+      for (const ph of st.diagram.placeholders || []) {
+        const sel = st.sel && st.sel.type === "placeholder" && st.sel.id === ph.id;
+        const live = st.overlay && st.overlay.states ? st.overlay.states["ph:" + ph.id] : null;
+        kids.push(svg("g", { class: "hed-ph" + (sel ? " sel" : ""), "data-placeholder": ph.id, tabindex: "0", role: "button",
+          "aria-label": `${ph.label}: from the earlier drawing, not mapped to equipment yet`, onpointerdown: ev => { grab(ev); st.sel = { type: "placeholder", id: ph.id }; draw(); } },
+          svg("rect", { x: ph.x, y: ph.y, width: ph.w, height: ph.h, rx: ph.kind === "tank" ? 4 : 8 }),
+          iconAt(KIND_ICON[ph.kind] || null, { x: ph.x, y: ph.y, w: ph.w, h: ph.h }),
+          svg("text", { x: ph.x + ph.w / 2, y: ph.y + ph.h + 14, class: "hed-label", "text-anchor": "middle" }, ph.label),
+          svg("text", { x: ph.x + ph.w / 2, y: ph.y + ph.h + 28, class: "hed-state st-planned", "text-anchor": "middle" }, live ? live.word : "NOT MAPPED"),
+          svg("title", null, `Not mapped yet: ${ph.why}`)));
+      }
+      for (const t of st.diagram.texts || []) kids.push(svg("text", { x: t.x, y: t.y, class: "hed-text" }, t.text));
       const routes = {};
       for (const r of st.diagram.routes) if (r.points && r.points.length >= 2) routes[r.edge] = r.points;
       const gaps = R.gaps(routes);
@@ -425,11 +489,13 @@
         } else {
           const b = G.box(n.kind, s);
           const label = s.label || nameOf(n.id);
-          const lit = (opt.highlight || []).includes(n.id);
+          const lit = (opt.highlight || []).includes(n.id) || (st.dropTarget && st.dropTarget === n.id);
           const g = svg("g", { class: "hed-sym" + (selected ? " sel" : "") + (lit ? " lit" : ""), "data-node": s.node, tabindex: "0", role: "button",
             "aria-label": `${KIND_WORD[n.kind]} ${label}`, onpointerdown: ev => symDown(ev, s.node) },
             svg("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: n.kind === "tank" ? 4 : 8, class: "hed-box k-" + n.kind }),
-            iconAt(KIND_ICON[n.kind], b), svg("text", { x: b.x + b.w / 2, y: b.y + b.h + 14, class: "hed-label", "text-anchor": "middle" }, label));
+            iconAt(KIND_ICON[n.kind], b), svg("text", { x: b.x + b.w / 2, y: b.y + b.h + 14, class: "hed-label", "text-anchor": "middle" }, label),
+            n.kind === "tank" && (opt.items[n.item] || {}).capacity_L ? svg("text", { x: b.x + b.w / 2, y: b.y + b.h - 6, class: "hed-cap", "text-anchor": "middle" },
+              `${Number(opt.items[n.item].capacity_L).toLocaleString()} L`) : null);
           if (st.overlay && st.overlay.tanks && st.overlay.tanks[n.id]) {
             const tk = st.overlay.tanks[n.id];
             if (tk.pct != null) {
@@ -491,12 +557,26 @@
       const placed = new Set(st.graph.nodes.map(n => n.item).filter(Boolean));
       const free = Object.entries(opt.items).filter(([id, it]) => it.kind && !placed.has(id));
       const kinds = ["source", "tank", "pump", "valve", "meter", "sector", "sensor"];
-      parts.push(el("h3", null, "Equipment to place"), free.length ? kinds.filter(k => free.some(([, it]) => it.kind === k)).map(k =>
+      const of = k => Object.values(opt.items).filter(it => it.kind === k).length;
+      parts.push(el("h3", null, "Equipment to place"), el("p", { class: "muted small", "data-kinds": "" },
+        kinds.filter(k => k !== "sensor").map(k => `${KIND_WORD[k]}s: ${!of(k) ? "none on Equipment" : free.some(([, it]) => it.kind === k) ? `${free.filter(([, it]) => it.kind === k).length} to place` : "all placed"}`).join(" · ")),
+        free.length ? kinds.filter(k => free.some(([, it]) => it.kind === k)).map(k =>
         el("details", { class: "hed-palette-group", open: true }, el("summary", null, `${KIND_WORD[k]}s`),
           el("ul", { class: "hed-palette" }, free.filter(([, it]) => it.kind === k).map(([id, it]) =>
             el("li", null, el("span", null, it.name), it.public_id ? el("span", { class: "mono small muted" }, ` ${it.public_id}`) : null, " ",
               opt.readOnly ? null : el("button", { class: "small", "aria-label": `Place ${it.name}`, onclick: () => placeItem(id) }, "Place"))))))
         : el("p", { class: "muted small" }, "Every water item is in the drawing. Create more on the Equipment page, then import again."));
+      if (st.sel && st.sel.type === "placeholder") {
+        const ph = (st.diagram.placeholders || []).find(x => x.id === st.sel.id);
+        if (ph) {
+          const want = ph.kind === "sensor" ? ["sensor", "meter"] : [ph.kind];
+          const cands = free.filter(([, it]) => want.includes(it.kind)).sort(([, a], [, b]) => (b.name === ph.label) - (a.name === ph.label));
+          parts.push(el("h3", null, ph.label), el("p", { class: "small" }, `From the earlier drawing, not mapped yet: ${ph.why}.`),
+            cands.length ? el("ul", { class: "hed-palette" }, cands.map(([id, it]) => el("li", null, `${it.name} `, opt.readOnly ? null
+              : el("button", { class: "small", "aria-label": `Place ${it.name} here`, onclick: () => placeItem(id, ph.id) }, "Place here"))))
+              : el("p", { class: "muted small" }, `No ${KIND_WORD[ph.kind] ? KIND_WORD[ph.kind].toLowerCase() : ph.kind} item is free to place here: create it on the Equipment page (main dashboard), then press Import from Overview… or reload: new equipment appears in the list without re-importing.`));
+        }
+      }
       if (st.sel && st.sel.type === "symbol") {
         const n = node(st.sel.id), s = sym(st.sel.id);
         const conns = st.graph.edges.filter(e => e.src.node === n.id || e.dst.node === n.id);
@@ -512,6 +592,16 @@
                 onchange: ev => setAnchor(n.id, p.id, cur.side, Number(ev.target.value)) }));
             return el("li", null, `${p.label}: `, c.length ? c.map(e => pipeName(e)).join("; ") : el("span", { class: "muted" }, "not connected"), edit);
           })));
+        if (n.kind === "tank" && !opt.readOnly) {
+          const it = opt.items[n.item] || {}, sz = tankSize(it.capacity_L);
+          parts.push(el("p", { class: "small" }, it.capacity_L ? `Capacity ${Number(it.capacity_L).toLocaleString()} L (set on Equipment). ` : "No capacity on Equipment yet. ",
+            el("button", { class: "small", disabled: !it.capacity_L || (s.w === sz.w && s.h === sz.h), onclick: () => {
+              checkpoint(); const old = { w: s.w, h: s.h }; s.w = sz.w; s.h = sz.h;
+              const r = reroute(edgesOf(n.id));
+              if (!r.ok) { Object.assign(s, old); Object.assign(st, st.undo.pop()); draw(); return say(`Not resized: ${r.reason}`, true); }
+              changed(); say(`${nameOf(n.id)} drawn for ${Number(it.capacity_L).toLocaleString()} L (a schematic size, not its real dimensions).`);
+            } }, "Size from capacity")));
+        }
         if (n.kind === "sensor") {
           const cur = (st.graph.measures || []).find(m => m.sensor === n.id);
           const sel = el("select", { "aria-label": `What ${nameOf(n.id)} measures`, disabled: opt.readOnly ? true : null, onchange: ev => setMeasure(n.id, ev.target.value) },
@@ -626,6 +716,8 @@
           const s = sym(d.id), sh = alignShift(d.id, x, y);
           x = R.snap(x + sh.dx); y = R.snap(y + sh.dy);
           st.guides = sh.guides;
+          const under = tanksUnder(d.id);
+          st.dropTarget = under && under.length === 1 ? under[0] : null;
           if (x === s.x && y === s.y) return draw();
           if (moveSymbol(d.id, x, y, false)) { d.moved = true; say(sh.guides.length ? "Level with the port it connects to." : null); }
           draw();
@@ -651,6 +743,8 @@
       const d = st.drag; if (!d) return;
       st.drag = null; st.guides = [];
       if (cancel) { Object.assign(st, d.snap); draw(); return say("Cancelled."); }
+      if (d.moved && d.kind === "symbol") dropSensor(d.id);
+      st.dropTarget = null;
       if (d.moved) { st.undo.push(d.snap); st.redo = []; changed(); }
     }
     canvas.addEventListener("pointerup", () => endDrag(false));
@@ -706,8 +800,15 @@
       say, select(id) { st.sel = node(id) ? { type: "symbol", id } : edge(id) ? { type: "route", id } : null; draw(); },
       issues, placeItem, connect, joinHere, moveSymbol, rotate, removeSelection, reroute, rerouteSelected, undo, redo,
       straighten, alignShift, setAnchor,
+      drop: dropSensor,
       state: st,
     };
   }
-  window.AqHydraulicEditor = { create, geometry };
+  /** A tank's schematic size from its capacity: the same rule as aquacrop/diagram.py `tank_size`. */
+  function tankSize(cap) {
+    if (!cap || cap <= 0) return { w: 100, h: 120 };
+    const k = Math.min(2, Math.max(0.6, Math.sqrt(cap / 5000)));
+    return { w: Math.round(100 * k / 10) * 10, h: Math.round(120 * k / 10) * 10 };
+  }
+  window.AqHydraulicEditor = { create, geometry, tankSize };
 })();
