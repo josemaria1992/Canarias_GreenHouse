@@ -50,7 +50,7 @@ from typing import Callable, Protocol
 
 from ..control.process_base import Arbiter
 from ..domain.model import Outcome, PointId, PointKind, Priority, Quality, new_id
-from ..equipment.definitions import ItemBody, Purpose, TypeBody
+from ..equipment.definitions import ItemBody, Purpose, TypeBody, flow_factor
 from . import schedule as sc
 from .definitions import ProgramBody, actuators
 
@@ -863,6 +863,13 @@ class Engine:
         if not limit or limit <= 0:
             self.arbiter.release(f"op:{pid}")
             raise Refused("no bounded runtime")
+        for m, role in self._litre_meters(body):     # R402-02: litres are counted only from a flow rate unit
+            it = self._items.get(m)
+            sc_ = it.body.scaling.get(role) if it else None
+            if sc_ is not None and flow_factor(sc_.unit) is None:
+                self.arbiter.release(f"op:{pid}")
+                raise Refused(f"{m}: its reading is in {sc_.unit}, which is not a flow rate litres can be counted from "
+                              "(L/min, L/h, m³/h or L/s)")
         asked = getattr(a, "target_L", None)
         if a.type == "SEQUENCE" and any(s_.do == "DELIVER" for s_ in a.steps):
             asked = sum(s_.target_L for s_ in a.steps if s_.do == "DELIVER")       # each operation its own target
@@ -1656,6 +1663,15 @@ class Engine:
                     f"({op.measured_L:.2f} L measured); {other} was not started", "DONE")
         return None
 
+    @staticmethod
+    def _litre_meters(body: ProgramBody) -> list[tuple[str, str]]:
+        a = body.action
+        if a.type == "DELIVER_VOLUME":
+            return [(a.meter, a.meter_role)]
+        if a.type == "SEQUENCE":
+            return [(s.meter, s.meter_role) for s in a.steps if s.do == "DELIVER"]
+        return []
+
     def _account(self, op: Op, meter: str, role: str) -> tuple[bool, float | None]:
         """Count the litres between the last reading and this one. (False, None) when the operation was failed for
         unmeasured volume; (True, None) when no new reading is usable yet; (True, rate) otherwise."""
@@ -1663,6 +1679,13 @@ class Engine:
         p = it.points.get(role) if it else None
         s = self.io.sample(p) if p else None
         rate = self._analog(it, role) if it else None
+        if rate is not None:                         # R402-02: the meter's own unit, as litres per minute
+            unit = it.body.scaling[role].unit
+            factor = flow_factor(unit)
+            if factor is None:
+                self._fail(op, f"{meter}: its reading is in {unit}, which is not a flow rate litres can be counted from")
+                return False, None
+            rate *= factor
         if rate is None or s is None:
             if op.last_rate is not None:
                 gap = (self.clock.utc() - op.last_rate[0]).total_seconds()

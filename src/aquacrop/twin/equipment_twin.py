@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from ..config.catalog import CATALOG, Capability
 from ..domain.model import (AcquisitionResult, DeviceHealth, Origin, Outcome, OutputCommand, PointId, PointKind,
                             Quality, Sample, WriteResult)
-from ..equipment.definitions import Purpose, SimBehavior
+from ..equipment.definitions import Purpose, SimBehavior, flow_factor
 
 FAULTS = ("NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW", "MODULE_OFFLINE", "TRIP")
 
@@ -201,10 +201,10 @@ class EquipmentTwin:
                         continue
                     beh = (it.body.simulation or it.type.simulation).behavior
                     if iid in self.external and beh in (SimBehavior.MANUAL_ANALOG, SimBehavior.NOT_MODELLED):
-                        values[p] = self._to_raw(it, r.role, self.external[iid])      # the twin's water
+                        values[p] = self._to_raw(it, r.role, self.external[iid], l_min=True)      # the twin's water
                         self.not_modelled.pop(p, None)
                     elif iid in flows and beh in (SimBehavior.MANUAL_ANALOG, SimBehavior.NOT_MODELLED):
-                        values[p] = self._to_raw(it, r.role, flows[iid])
+                        values[p] = self._to_raw(it, r.role, flows[iid], l_min=True)
                         self.not_modelled.pop(p, None)
                     elif beh == SimBehavior.MANUAL_ANALOG and isinstance(values.get(p), (int, float)):
                         values[p] = self._to_raw(it, r.role, float(values[p]))
@@ -246,10 +246,12 @@ class EquipmentTwin:
                                                     None, offline or raw is None)
             self._samples = out
 
-    def _to_raw(self, it, role: str, eng: float) -> float | None:
+    def _to_raw(self, it, role: str, eng: float, *, l_min: bool = False) -> float | None:
         sc = it.body.scaling.get(role)
         if sc is None:
             return None
+        if l_min and (f := flow_factor(sc.unit)) is not None:
+            eng = eng / f                            # R402-02: the twin's water is in L/min; the meter reads its own unit
         raw = sc.raw_min + (eng - sc.eng_min) * (sc.raw_max - sc.raw_min) / (sc.eng_max - sc.eng_min)
         return raw * 1000.0                          # the module reports µA (mA scaling) or mV (V scaling)
 

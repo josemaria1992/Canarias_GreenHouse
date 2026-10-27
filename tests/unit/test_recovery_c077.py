@@ -424,3 +424,55 @@ def test_r402_03_a_met_target_with_more_watering_after_it_still_brings_in_the_pa
     _with_run_after(r, op, 11)
     r.run(60)
     assert any(t == PB and d for t, d in _targets(r)) and "PROGRAM_PUMP_REPLACED" in r.kinds()
+
+
+# ------------------------------------------------------------------ R402-02: litres are counted in the meter's own unit
+def _unit_rig(unit, eng_max, target=5.0):
+    """A meter whose type and scaling read in `unit`; 13.6 mA (60 % of 4-20 mA) while the pump runs."""
+    from aquacrop.equipment.definitions import TEMPLATES
+    body = _sector("valve-1").model_dump(mode="json")
+    body["action"]["steps"][2] = {"do": "DELIVER", "meter": "fm", "target_L": target, "no_flow_timeout_s": 120}
+    items = _items()
+    roles = [dict(x, unit=unit) for x in TEMPLATES["flow"]["body"]["roles"]]
+    scaling = {"flow": {"raw_min": 4, "raw_max": 20, "raw_unit": "mA", "eng_min": 0, "eng_max": eng_max, "unit": unit,
+                        "provenance": "DEMO"}}
+    items["fm"] = view("fm", "flow", {"flow": "analog_A.AI1"}, {"scaling": scaling}, roles=roles)
+    r = Rig(items, {"p": (1, parse(body))})
+    base = r.e.io.sample
+
+    def sample(point):
+        s = base(point)
+        if point != "analog_A.AI1":
+            return s
+        on = r.twin.s.coils.get(PA) or r.twin.s.coils.get(PB)
+        return replace(s, acquired_utc=r.clock.utc(), raw_value=13600 if on else 4000, raw_unit="uA", quality=Quality.GOOD, reason=None)
+    r.e.io.sample = sample
+    for p in ("digital_A.DI1", "digital_A.DI4"):
+        r.twin.set_input(p, False)
+    r.run(1)
+    r.e.approve_recovery("t", "MANUAL")
+    return r
+
+
+@pytest.mark.parametrize("unit,eng_max", [("L/min", 1000 / 60), ("L/h", 1000), ("m³/h", 1.0), ("m3/h", 1.0), ("L/s", 1000 / 3600)])
+def test_r402_02_a_litre_target_counts_the_same_water_whatever_the_flow_unit(unit, eng_max):
+    # every scaling is the same physical meter: 60 % of range = 10 L/min, so 5 L take about 30 s of pumping
+    r = _unit_rig(unit, eng_max)
+    r.e.run_now("t", "p")
+    actual = 0.0
+    for _ in range(240):
+        if r.twin.s.coils.get(PA) or r.twin.s.coils.get(PB):
+            actual += 10.0 * 0.5 / 60.0
+        r.run(0.5)
+        if r.e.finished:
+            break
+    f = r.e.finished[-1]
+    assert f["result"] == "DONE", f
+    assert 4.9 <= f["measured_L"] <= 5.5 and abs(actual - f["measured_L"]) <= 0.6, (unit, actual, f["measured_L"])
+
+
+def test_r402_02_a_meter_reading_another_quantity_is_refused_for_a_litre_target():
+    r = _unit_rig("bar", 10)
+    with pytest.raises(Refused, match="not a flow rate"):
+        r.e.run_now("t", "p")
+    assert r.on_frames() == []

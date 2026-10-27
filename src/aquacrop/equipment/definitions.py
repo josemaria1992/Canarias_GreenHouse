@@ -21,6 +21,16 @@ ID_RE = r"^[a-z0-9][a-z0-9_\-]{0,47}$"
 _ID = re.compile(ID_RE)
 
 # Built-in icon names. The UI draws each one from an inline SVG it ships; nothing is uploaded.
+# R402-02: the flow units a litre count understands, as the factor to litres per minute. A reading in any other unit is
+# never counted as litres: a program refuses to start on it, and a litre step fails if one appears.
+FLOW_TO_L_MIN = {"L/min": 1.0, "L/h": 1.0 / 60.0, "m³/h": 1000.0 / 60.0, "m3/h": 1000.0 / 60.0, "L/s": 60.0}
+
+
+def flow_factor(unit: str | None) -> float | None:
+    """Litres per minute for one engineering unit of a flow reading, or None when the unit is not a flow rate."""
+    return FLOW_TO_L_MIN.get((unit or "").strip())
+
+
 ICONS = ("pump", "valve", "tank", "level", "flow", "pressure", "temperature", "button", "lamp", "fan",
          "heater", "motor", "sensor", "switch", "drop", "gauge", "plug", "generic")
 
