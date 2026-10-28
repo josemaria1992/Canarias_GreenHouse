@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.10 (2026-10-28): review R913, program retirement, messages that say what to do
+
+- A litre target met during a pump changeover stops in the program's own order, each OFF verified (the valve never
+  closes before the failed pump is proven OFF); water measured while the pumps stop counts in the cycle, and a
+  reading lost meanwhile is reported as uncertain volume (R913-01/02).
+- Equipment types: any number of readings of one quantity keep what they measure (R913-03); every request waiting
+  for review stays reachable (R913-04).
+- Programs can be retired by an administrator (history kept; an active program is deactivated first). Litre meters
+  validate in every supported flow unit.
+- Alarm and error messages name the cause and the next step; the restart checklist shows what to do per check.
+  Safety rules are unchanged.
+
 ## 0.7.9 (2026-10-28): owner decisions on equipment type requests and access
 
 - A need the equipment type form cannot meet is sent to the operators, who review it and approve or reject it (a
