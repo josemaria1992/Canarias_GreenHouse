@@ -46,3 +46,23 @@ def test_a_request_goes_to_the_operators_who_approve_or_reject_it_and_nothing_el
         after = ca.get("/api/equipment", headers=ha).json()
         assert after["types"] == before["types"] and after["items"] == before["items"]
         assert co.post("/api/equipment/types/activate", json={"type_id": "pump", "version": 1}, headers=ho).status_code == 403
+
+
+def test_r913_04_an_old_open_request_stays_reachable_behind_many_reviewed_ones(tmp_path, icfg):
+    """Codex R913-04: an open request is never pushed out by newer reviewed requests, past 50 or past 200."""
+    app = _app(tmp_path, icfg)
+    with TestClient(app, base_url=ORIGIN) as c:
+        h = login(c, "oper1")
+        old = c.post("/api/equipment/type-requests", json={"need": "the oldest need"}, headers=h).json()["request_id"]
+        for i in range(205):
+            rid = c.post("/api/equipment/type-requests", json={"need": f"need {i}"}, headers=h).json()["request_id"]
+            assert c.post("/api/equipment/type-requests/review", json={"request_id": rid, "decision": "APPROVED"},
+                          headers=h).status_code == 200
+        v = c.get("/api/equipment/type-requests", headers=h).json()
+        assert [r["request_id"] for r in v["open"]] == [old]               # always listed, with its review buttons
+        assert len(v["reviewed"]) == 50 and v["reviewed_total"] == 205
+        last = c.get("/api/equipment/type-requests?limit=50&offset=200", headers=h).json()
+        assert len(last["reviewed"]) == 5 and [r["request_id"] for r in last["open"]] == [old]
+        assert c.post("/api/equipment/type-requests/review", json={"request_id": old, "decision": "REJECTED",
+                                                                     "note": "not needed"}, headers=h).status_code == 200
+        assert c.get("/api/equipment/type-requests", headers=h).json()["open"] == []

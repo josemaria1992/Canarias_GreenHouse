@@ -159,8 +159,16 @@ def register(app, require, store, samples, edges) -> None:
         return sorted(out.values(), key=lambda x: x["request_id"], reverse=True)
 
     @app.get("/api/equipment/type-requests")
-    def type_requests_view(p: Principal = Depends(require(Perm.OPS_READ))):
-        return {"requests": type_requests()[:200], "can_review": p.can(Perm.EQUIPMENT_EDIT), "meaning": REQUEST_MEANING}
+    def type_requests_view(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
+                           p: Principal = Depends(require(Perm.OPS_READ))):
+        """R913-04: every request waiting for review, always (never cut off by newer ones); the reviewed history newest
+        first, a page at a time."""
+        allr = type_requests()
+        waiting = [r for r in allr if r["status"] == "OPEN"]
+        done = [r for r in allr if r["status"] != "OPEN"]
+        page = done[offset:offset + limit]
+        return {"open": waiting, "reviewed": page, "reviewed_total": len(done), "offset": offset, "limit": limit,
+                "requests": waiting + page, "can_review": p.can(Perm.EQUIPMENT_EDIT), "meaning": REQUEST_MEANING}
 
     @app.post("/api/equipment/type-requests")
     def type_request(body: TypeRequestIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):

@@ -348,8 +348,9 @@
   }
   // owner, 28 Oct 2026: requests for features the software cannot do yet go to the operators, who approve or reject them
   function requestsCard(R) {
-    const rs = (R && R.requests) || [];
-    const open = rs.filter(r => r.status === "OPEN");
+    // R913-04: every request waiting for review is listed, however many newer ones were reviewed; history pages on
+    const open = (R && R.open) || [], done = (R && R.reviewed) || [];
+    const rs = open.concat(done);
     const cls = { OPEN: "warn", APPROVED: "ok", REJECTED: "" };
     const word = { OPEN: "waiting for review", APPROVED: "approved", REJECTED: "rejected" };
     const decide = (r, decision) => () => {
@@ -360,15 +361,17 @@
     return h("div", { class: "card", "data-type-requests": String(open.length) },
       h("div", { class: "row" }, h("h3", null, "Requests"), pill(open.length ? `${open.length} waiting for review` : "none waiting", open.length ? "warn" : "ok")),
       h("p", { class: "muted small" }, R ? R.meaning : ""),
-      rs.length ? h("table", { class: "compact small" }, h("tbody", null, rs.slice(0, 50).map(r => h("tr", { "data-request": String(r.request_id) },
+      rs.length ? h("table", { class: "compact small" }, h("tbody", null, rs.map(r => h("tr", { "data-request": String(r.request_id) },
         h("td", null, `#${r.request_id}`), h("td", null, `${r.type_name ? r.type_name + ": " : ""}${r.need}`, h("div", { class: "muted" }, `by ${r.by}, ${fmtTime(r.utc)}`)),
         h("td", null, pill(word[r.status] || r.status, cls[r.status] || ""), r.reviewer ? h("div", { class: "muted" }, `by ${r.reviewer}${r.note ? ": " + r.note : ""}`) : null),
         h("td", null, r.status === "OPEN" && R.can_review ? [h("button", { class: "small", onclick: decide(r, "APPROVED") }, "Approve"), " ",
           h("button", { class: "ghost small", onclick: decide(r, "REJECTED") }, "Reject")] : null)))))
-        : h("p", { class: "muted small" }, "No requests yet. They come from Add a feature in the type form, when the software cannot do what is needed."));
+        : h("p", { class: "muted small" }, "No requests yet. They come from Add a feature in the type form, when the software cannot do what is needed."),
+      R && R.reviewed_total > done.length ? h("div", { class: "row small" }, h("span", { class: "muted" }, `Showing ${done.length} of ${R.reviewed_total} reviewed requests.`),
+        h("button", { class: "small ghost", onclick: () => { S.reqLimit = (S.reqLimit || 50) + 50; U.refresh(); } }, "Show older")) : null);
   }
   VIEWS["equipment-types"] = async function () {
-    const [E, R] = await Promise.all([api("GET", "/api/equipment"), api("GET", "/api/equipment/type-requests").catch(() => null)]);
+    const [E, R] = await Promise.all([api("GET", "/api/equipment"), api("GET", `/api/equipment/type-requests?limit=${S.reqLimit || 50}`).catch(() => null)]);
     const current = {};
     for (const t of E.types) if (t.status !== "SUPERSEDED") current[t.type_id + ":" + t.status] = t;
     const shown = Object.values(current).sort((a, b) => a.name.localeCompare(b.name));
