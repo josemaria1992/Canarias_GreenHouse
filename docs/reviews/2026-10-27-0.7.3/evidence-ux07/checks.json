@@ -40,9 +40,9 @@
   "detail": "Enter the name of the detail. / This type already has a detail called “Rated flow”: choose another name."
  },
  {
-  "id": "UX07-5 a second control output is explained as unsupported and the need is kept, not sent",
+  "id": "UX07-5 a second control output is explained as unsupported and the need is sent to the operators for review",
   "ok": true,
-  "detail": "A second output to reverse the pump for back-flushing the filter. | "
+  "detail": "Request 80: A second output to reverse the pump for back-flushing the filter. | "
  },
  {
   "id": "UX07-5 the summary is in ordinary words",
@@ -110,9 +110,9 @@
   "detail": "preview 40x40, diagram 40x40; ports in,out"
  },
  {
-  "id": "UX07-11 an operator cannot activate: the types page needs an administrator and the server refuses",
+  "id": "UX07-11 an operator opens Equipment types (owner, 28 Oct) but cannot activate: the button is disabled and the server refuses",
   "ok": true,
-  "detail": "page: This page needs an administrator account.; activate: permission equipment_activate required"
+  "detail": "activate: permission equipment_activate required"
  },
  {
   "id": "UX07-11 the administrator activates it",

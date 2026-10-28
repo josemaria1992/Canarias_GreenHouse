@@ -241,7 +241,7 @@
   }
   const NEEDS = { blocks: "an operator or administrator account", twin: "an operator or administrator account",
     "hw-add": "an operator or administrator account", history: "an operator or administrator account",
-    equipment: "an operator or administrator account", "equipment-types": "an administrator account", hardware: "an administrator account",
+    equipment: "an operator or administrator account", "equipment-types": "an operator or administrator account", hardware: "an administrator account",
     settings: "an administrator account" };
   $("login-form").addEventListener("submit", async ev => {
     ev.preventDefault();

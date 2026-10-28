@@ -1,0 +1,27 @@
+[
+ {
+  "id": "an operator has Equipment types in the menu and opens the page",
+  "ok": true,
+  "detail": "menu visible: true"
+ },
+ {
+  "id": "the request is sent to the operators (never only kept on the page)",
+  "ok": true,
+  "detail": "Sent to the operators for review | Request 86: A second output to reverse the pump for back-flushing the filter. |  | Operators and administrators review these under Requests on this page and approve or reject them. Approving records the need for a software change; it does not change this type, any equipment or what it does."
+ },
+ {
+  "id": "an operator reviews and approves it, with the note and the reviewer shown",
+  "ok": true,
+  "detail": "#86 Irrigation pump: A second output to reverse the pump for back-flushing the filter. by oper28, 2026-10-28 07:11:02 approved by oper28: needed for back-flushing "
+ },
+ {
+  "id": "activation stays with administrators",
+  "ok": true,
+  "detail": "operator activate: permission equipment_activate required"
+ },
+ {
+  "id": "no page errors",
+  "ok": true,
+  "detail": ""
+ }
+]

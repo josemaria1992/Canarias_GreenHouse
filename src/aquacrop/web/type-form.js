@@ -463,11 +463,20 @@
   function unsupported(f, a, text, cancel) {
     return [h("p", { class: "small warn" }, text),
       h("textarea", { rows: 3, cols: 70, "aria-label": "Describe the missing need", value: a.need || "", oninput: ev => { a.need = ev.target.value; ev.target.dataset.dirty = "1"; } }, a.need || ""),
-      h("div", { class: "row" }, h("button", { type: "button", onclick: () => {
+      h("div", { class: "row" }, h("button", { type: "button", onclick: async () => {
         if (!String(a.need || "").trim()) { a.msg = "Describe the need first."; redraw(); return; }
         a.msg = null;
-        f.requests.push({ need: a.need.trim(), what: a.what, type: f.name || "(unnamed type)", at: new Date().toISOString() }); f.adding = null; f.dirty = true; redraw();
-      } }, "Keep this request"), cancel)];
+        // owner, 28 Oct 2026: the request goes to the operators, who review it and approve or reject it
+        const req = { need: a.need.trim(), what: a.what === "output" ? "output" : "other", type: f.name || "(unnamed type)" };
+        try {
+          const r = await api("POST", "/api/equipment/type-requests", { need: req.need, what: req.what, type_name: f.name || "", type_id: f.type_id || null });
+          f.requests.push(Object.assign(req, { id: r.request_id }));
+          f.adding = null;
+        } catch (e) {
+          a.msg = `Not sent: ${String(e.message || e)}. Your text is kept.`;
+        }
+        redraw();
+      } }, "Send to the operators for review"), cancel)];
   }
   function advanced(key, f) {
     const cmd = f.roles.find(r => r.purpose === "COMMAND");
@@ -488,11 +497,10 @@
   }
   function requests(f) {
     if (!f.requests.length) return null;
-    const text = f.requests.map(r => `Type “${r.type}” — ${r.need}`).join("\n");
-    return h("div", { class: "tf-requests", "data-requests": String(f.requests.length) }, h("h4", null, "Needs described for review"),
-      h("ul", { class: "small" }, f.requests.map(r => h("li", null, r.need))),
-      h("p", { class: "small warn" }, "Kept on this page only: not sent, and nobody has been notified. Where such requests should go, and who reviews them, is still to be decided by the owner. Copy the text to pass it on."),
-      h("button", { type: "button", class: "ghost small", onclick: () => { try { navigator.clipboard.writeText(text); U.toast("Copied"); } catch (e) { U.toast(text); } } }, "Copy the text"));
+    return h("div", { class: "tf-requests", "data-requests": String(f.requests.length) }, h("h4", null, "Sent to the operators for review"),
+      h("ul", { class: "small" }, f.requests.map(r => h("li", null, `Request ${r.id}: ${r.need}`))),
+      h("p", { class: "small" }, "Operators and administrators review these under Requests on this page and approve or reject them. "
+        + "Approving records the need for a software change; it does not change this type, any equipment or what it does."));
   }
 
   /** The editor for a type (t) or a new one (t null), keyed like UX-06 so it survives refreshes. */

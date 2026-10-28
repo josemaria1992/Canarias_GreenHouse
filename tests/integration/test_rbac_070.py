@@ -18,7 +18,9 @@ VIEWER_READS = {"/api/auth/session", "/api/status", "/api/layout", "/api/plant",
 
 
 def test_rbac01_navigation_is_exactly_the_specified_pages(tmp_path, icfg):
-    assert NAVIGATION["operator"] == ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms"]
+    # owner, 28 Oct 2026: operators open Equipment types too (drafting and requests); activation stays administrator
+    assert NAVIGATION["operator"] == ["overview", "equipment", "equipment-types", "blocks", "twin", "hw-add", "programs",
+                                      "history", "alarms"]
     assert NAVIGATION["viewer"] == ["overview", "programs", "alarms"]
     assert set(NAVIGATION["operator"]) < set(NAVIGATION["admin"])
     with TestClient(_app(tmp_path, icfg), base_url=ORIGIN) as c:

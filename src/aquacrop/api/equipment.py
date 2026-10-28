@@ -5,10 +5,16 @@ Who may do what (server-side, on every request):
 * save type drafts, create and edit items, preview upgrades: operators (EQUIPMENT_EDIT);
 * activate or retire a type, retire an item: administrators (EQUIPMENT_ACTIVATE);
 * choose and verify a channel for a role: commissioning users (IO_ASSIGN), as on the I/O board;
-* change an item's public ID (0.7.1, `aquacrop.ids`): operators (EQUIPMENT_EDIT), unique and under a revision check.
+* change an item's public ID (0.7.1, `aquacrop.ids`): operators (EQUIPMENT_EDIT), unique and under a revision check;
+* send and review requests for features the software cannot do yet (owner, 28 Oct 2026): operators and administrators
+  (EQUIPMENT_EDIT). A request is an audited record; approving it changes no type, item or behaviour.
 Nothing here sends anything to a module.
 """
 from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -79,6 +85,29 @@ class ImportIn(_B):
     doc: dict
 
 
+class TypeRequestIn(_B):
+    need: str = Field(min_length=3, max_length=2000)
+    what: Literal["output", "other"] = "other"
+    type_name: str = Field(default="", max_length=80)
+    type_id: str | None = Field(default=None, max_length=48)
+
+
+class TypeRequestReviewIn(_B):
+    request_id: int = Field(ge=1)
+    decision: Literal["APPROVED", "REJECTED"]
+    note: str = Field(default="", max_length=500)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+REQUEST_MEANING = ("Requests for features the software cannot do yet are recorded on this bench and shown here to "
+                   "operators and administrators, who review them and approve or reject them. Approving records that "
+                   "the need is accepted for a software change: it changes no equipment type, item, program or output. "
+                   "Nothing is emailed or sent elsewhere.")
+
+
 class TypeAvailIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type_id: str = Field(pattern=r"^[a-z0-9_]{1,48}$")
@@ -110,6 +139,64 @@ def register(app, require, store, samples, edges) -> None:
     @app.post("/api/equipment/types/seed")
     def type_seed(p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         return {"created": store.seed_templates(p.username)}
+
+    # owner, 28 Oct 2026: a need the type form cannot meet goes to the operators, who review and approve or reject it.
+    # Kept as audited events (no new table): the request and each decision.
+    def type_requests() -> list[dict]:
+        rows = store.h.query("SELECT id, utc, kind, actor, payload_json FROM events WHERE kind IN "
+                             "('EQUIPMENT_TYPE_REQUEST', 'EQUIPMENT_TYPE_REQUEST_REVIEWED') ORDER BY id")
+        out: dict[int, dict] = {}
+        for r in rows:
+            d = json.loads(r["payload_json"] or "{}")
+            if r["kind"] == "EQUIPMENT_TYPE_REQUEST":
+                out[r["id"]] = {"request_id": r["id"], "utc": r["utc"], "by": r["actor"], "need": d.get("need", ""),
+                                "what": d.get("what", "other"), "type_name": d.get("type_name", ""),
+                                "type_id": d.get("type_id"), "status": "OPEN", "reviewer": None, "review_utc": None,
+                                "note": ""}
+            elif d.get("request_id") in out and out[d["request_id"]]["status"] == "OPEN":
+                out[d["request_id"]] |= {"status": d.get("decision"), "reviewer": r["actor"], "review_utc": r["utc"],
+                                         "note": d.get("note", "")}
+        return sorted(out.values(), key=lambda x: x["request_id"], reverse=True)
+
+    @app.get("/api/equipment/type-requests")
+    def type_requests_view(p: Principal = Depends(require(Perm.OPS_READ))):
+        return {"requests": type_requests()[:200], "can_review": p.can(Perm.EQUIPMENT_EDIT), "meaning": REQUEST_MEANING}
+
+    @app.post("/api/equipment/type-requests")
+    def type_request(body: TypeRequestIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        row = body.model_dump()
+
+        def tx(c):
+            return c.execute("INSERT INTO events(utc,kind,actor,session_id,run_id,sim_s,payload_json) VALUES(?,?,?,?,?,?,?)",
+                             (_now(), "EQUIPMENT_TYPE_REQUEST", p.username, store.h.session_id, None, None,
+                              json.dumps(row))).lastrowid
+        rid = store.h.submit(tx, wait=True)
+        return {"ok": True, "request_id": rid, "status": "OPEN",
+                "next": f"Sent to the operators as request {rid}. They review it on Equipment types and approve or reject "
+                        "it; nothing about the equipment changes."}
+
+    @app.post("/api/equipment/type-requests/review")
+    def type_request_review(body: TypeRequestReviewIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        if body.decision == "REJECTED" and not body.note.strip():
+            raise HTTPException(422, "say why the request is rejected")
+
+        def tx(c):                                     # one decision per request, checked inside the write
+            req = c.execute("SELECT id FROM events WHERE id=? AND kind='EQUIPMENT_TYPE_REQUEST'", (body.request_id,)).fetchone()
+            if req is None:
+                return "missing"
+            for (pj,) in c.execute("SELECT payload_json FROM events WHERE kind='EQUIPMENT_TYPE_REQUEST_REVIEWED'"):
+                if json.loads(pj or "{}").get("request_id") == body.request_id:
+                    return "decided"
+            c.execute("INSERT INTO events(utc,kind,actor,session_id,run_id,sim_s,payload_json) VALUES(?,?,?,?,?,?,?)",
+                      (_now(), "EQUIPMENT_TYPE_REQUEST_REVIEWED", p.username, store.h.session_id, None, None,
+                       json.dumps(body.model_dump())))
+            return "ok"
+        res = store.h.submit(tx, wait=True)
+        if res == "missing":
+            raise HTTPException(404, "no such request")
+        if res == "decided":
+            raise HTTPException(409, f"request {body.request_id} was already reviewed")
+        return {"ok": True, "request_id": body.request_id, "status": body.decision}
 
     @app.post("/api/equipment/types/make-available")
     def type_make_available(body: TypeAvailIn, p: Principal = Depends(require(Perm.EQUIPMENT_ACTIVATE))):

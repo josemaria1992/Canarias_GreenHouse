@@ -77,7 +77,7 @@ COMMISSIONING_PERMS = (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP)
 # Navigation per role (exactly the specified pages; the web shell and the tests read this).
 NAVIGATION = {
     "viewer": ["overview", "programs", "alarms"],
-    "operator": ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms"],
+    "operator": ["overview", "equipment", "equipment-types", "blocks", "twin", "hw-add", "programs", "history", "alarms"],
     "admin": ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms",
               "equipment-types", "hardware", "settings"],
 }
@@ -95,6 +95,8 @@ ROLE_TEXT = {
                          "Switch the installation between AUTO and MANUAL, approve the restart checklist, choose "
                          "between conflicting programs, run or stop a program by hand",
                          "Create and edit equipment, blocks and program drafts, and validate them",
+                         "Open Equipment types: draft types with the guided form, send and review requests for "
+                         "features the software cannot do yet (activation stays with administrators)",
                          "Use the digital twin: run it, inject faults, accept a twin result",
                          "Send a module request and follow it; export operational history",
                          "With Commissioning: prepare a new module with the address wizard, verify wiring, arm bench tests"],

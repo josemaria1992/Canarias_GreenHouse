@@ -294,7 +294,7 @@
       h("div", { class: "card" }, h("div", { class: "row" }, h("h2", null, "Equipment"),
         h("span", { class: "muted" }, `${live.length} items · ${E.bindings.filter(b => b.status === "VERIFIED").length} verified channels`),
         h("a", { href: "/api/equipment/export", download: "aquacrop-equipment.json" }, "Export"),
-        can("equipment_activate") ? h("a", { href: "#equipment-types" }, "Equipment types") : null),
+        can("equipment_edit") ? h("a", { href: "#equipment-types" }, "Equipment types") : null),
         h("p", { class: "muted" }, "Each item is made from an equipment type. Choose the channel of each role, then verify it with the device connected. A verified channel is still not an output permission: physical switching also needs the bench-test profile and an armed test session.")),
       newItemCard(E), importedCard(E, props), live.map(it => itemCard(E, it, pts)),
       retired.length ? h("details", { class: "card" }, h("summary", null, `Retired (${retired.length})`), retired.map(it => h("p", null, `${it.name} · retired ${fmtTime(it.updated_utc)}`))) : null);
@@ -346,8 +346,29 @@
       t.status === "ACTIVE" || t.status === "DRAFT" ? (key => h("details", { "data-state-key": key, ontoggle: editorToggle(key, t.name) },
         h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t, key)))(`type:${t.type_id}:${t.status === "DRAFT" ? "draft" : "next"}:edit`) : null);
   }
+  // owner, 28 Oct 2026: requests for features the software cannot do yet go to the operators, who approve or reject them
+  function requestsCard(R) {
+    const rs = (R && R.requests) || [];
+    const open = rs.filter(r => r.status === "OPEN");
+    const cls = { OPEN: "warn", APPROVED: "ok", REJECTED: "" };
+    const word = { OPEN: "waiting for review", APPROVED: "approved", REJECTED: "rejected" };
+    const decide = (r, decision) => () => {
+      const note = decision === "REJECTED" ? prompt(`Reject request ${r.request_id}? Why:`) : prompt(`Approve request ${r.request_id}? A note (optional):`, "");
+      if (note === null || (decision === "REJECTED" && !note.trim())) return;
+      act("POST", "/api/equipment/type-requests/review", { request_id: r.request_id, decision, note }, `request ${r.request_id} ${word[decision]}`);
+    };
+    return h("div", { class: "card", "data-type-requests": String(open.length) },
+      h("div", { class: "row" }, h("h3", null, "Requests"), pill(open.length ? `${open.length} waiting for review` : "none waiting", open.length ? "warn" : "ok")),
+      h("p", { class: "muted small" }, R ? R.meaning : ""),
+      rs.length ? h("table", { class: "compact small" }, h("tbody", null, rs.slice(0, 50).map(r => h("tr", { "data-request": String(r.request_id) },
+        h("td", null, `#${r.request_id}`), h("td", null, `${r.type_name ? r.type_name + ": " : ""}${r.need}`, h("div", { class: "muted" }, `by ${r.by}, ${fmtTime(r.utc)}`)),
+        h("td", null, pill(word[r.status] || r.status, cls[r.status] || ""), r.reviewer ? h("div", { class: "muted" }, `by ${r.reviewer}${r.note ? ": " + r.note : ""}`) : null),
+        h("td", null, r.status === "OPEN" && R.can_review ? [h("button", { class: "small", onclick: decide(r, "APPROVED") }, "Approve"), " ",
+          h("button", { class: "ghost small", onclick: decide(r, "REJECTED") }, "Reject")] : null)))))
+        : h("p", { class: "muted small" }, "No requests yet. They come from Add a feature in the type form, when the software cannot do what is needed."));
+  }
   VIEWS["equipment-types"] = async function () {
-    const E = await api("GET", "/api/equipment");
+    const [E, R] = await Promise.all([api("GET", "/api/equipment"), api("GET", "/api/equipment/type-requests").catch(() => null)]);
     const current = {};
     for (const t of E.types) if (t.status !== "SUPERSEDED") current[t.type_id + ":" + t.status] = t;
     const shown = Object.values(current).sort((a, b) => a.name.localeCompare(b.name));
@@ -364,6 +385,7 @@
         h("label", { class: "small" }, "Import ", imp)),
         h("p", { class: "muted" }, "A type describes a kind of equipment: what it is, how it is drawn, which connections to the controller it has, its details and limits. Each named item is then made from a type on Equipment. Built-in types arrive as drafts you review and activate; activating a new version never changes existing items until each is upgraded.")),
       availabilityCard(E),
+      requestsCard(R),
       shown.map(t => typeCard(E, t)),
       h("details", { class: "card", "data-state-key": "type:new:edit", ontoggle: editorToggle("type:new:edit", "the new type") }, h("summary", null, "New type"), typeEditor(E, null, "type:new:edit")));
   };

@@ -105,9 +105,9 @@ async function save(p, d) {
   await d.getByText("A control output", { exact: true }).click(); await settle(p);
   const unsup = await d.locator(".tf-add").innerText();
   await d.getByLabel("Describe the missing need").fill("A second output to reverse the pump for back-flushing the filter.");
-  await d.getByRole("button", { name: "Keep this request" }).click(); await settle(p);
+  await d.getByRole("button", { name: "Send to the operators for review" }).click(); await settle(p);
   const req = await d.locator("[data-requests]").innerText();
-  check("UX07-5 a second control output is explained as unsupported and the need is kept, not sent", /not supported/.test(unsup) && /not sent, and nobody has been notified/.test(req)
+  check("UX07-5 a second control output is explained as unsupported and the need is sent to the operators for review", /not supported/.test(unsup) && /Sent to the operators for review/.test(req) && /Request \d+:/.test(req)
     && (await d.locator('[data-role]').count()) === 3, req.split("\n").slice(1, 3).join(" | "));
   const summary = await d.locator("[data-summary]").innerText();
   check("UX07-5 the summary is in ordinary words", /^Irrigation pump — .*control output.*Running signal.*Fault signal.*maximum running time 30 min.*Rated flow \(L\/min\), Motor power \(kW\)/.test(summary), summary);
@@ -225,8 +225,9 @@ async function save(p, d) {
   await p2.goto(BASE + "/#equipment-types"); await p2.waitForTimeout(2500);
   const opText = await p2.locator("main").innerText();
   const opAct = await p2.evaluate(() => window.AqUI.api("POST", "/api/equipment/types/activate", { type_id: "irrigation_pump", version: 1 }).then(() => "accepted", e => String(e.message || e)));
-  check("UX07-11 an operator cannot activate: the types page needs an administrator and the server refuses", /administrator account/.test(opText) && opAct !== "accepted",
-    `page: ${(opText.match(/.*administrator account.*/) || [""])[0]}; activate: ${opAct}`);
+  const opBtn = p2.locator(".card", { has: p2.locator("h3", { hasText: /^Irrigation pump$/ }) }).getByRole("button", { name: "Activate" });
+  check("UX07-11 an operator opens Equipment types (owner, 28 Oct) but cannot activate: the button is disabled and the server refuses", !/administrator account/.test(opText) && (await opBtn.count()) === 1 && await opBtn.isDisabled() && opAct !== "accepted",
+    `activate: ${opAct}`);
   const adCard = p.locator(".card", { has: p.locator("h3", { hasText: /^Irrigation pump$/ }) });
   await types(p);
   await adCard.getByRole("button", { name: "Activate" }).click(); await settle(p); await p.waitForTimeout(1200);
