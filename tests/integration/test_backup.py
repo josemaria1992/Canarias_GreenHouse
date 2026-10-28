@@ -170,12 +170,14 @@ def test_concurrent_backups_restore_to_their_own_snapshot(live, tmp_path, cfg24)
     try:
         mans = []
         for _ in range(2):
-            # at least one more write before each backup, so the two snapshots must differ
-            # (a fast runner could otherwise take both before the writer thread gets scheduled)
-            n, deadline = writes[0], time.monotonic() + 30
-            while writes[0] == n and time.monotonic() < deadline:
-                time.sleep(0.005)
-            h.flush()                     # the writer only queues: persist that write before the snapshot reads
+            # at least one more write persisted before each backup, so the two snapshots must differ. The writer
+            # only queues its event (the historian persists it later), and a flush could wait behind its whole
+            # backlog: wait for the stored count to grow instead
+            def burst():
+                return h.query("SELECT count(*) AS n FROM events WHERE kind='BURST'")[0]["n"]
+            have, deadline = burst(), time.monotonic() + 30
+            while burst() == have and time.monotonic() < deadline:
+                time.sleep(0.01)
             mans.append(create_backup(h.db_path, tmp_path / "bk"))
     finally:
         stop.set()

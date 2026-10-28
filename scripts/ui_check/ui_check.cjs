@@ -544,8 +544,13 @@ async function o34run(b, ctx0) {
   await p.emulateMedia({ colorScheme: "dark" });
   await show(p, "overview");
   const link = p.locator("section.view:not(.hidden) a", { hasText: "All alarms and events" }).first();
-  await link.hover();
-  const hov = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).backgroundColor]);
+  // the page redraws every second: a link replaced between hover and read gives empty colours, so read again
+  let hov = ["", ""];
+  for (let i = 0; i < 5 && !hov[0]; i++) {
+    await link.hover();
+    hov = await link.evaluate(a => a.isConnected && a.matches(":hover") ? [getComputedStyle(a).color, getComputedStyle(a).backgroundColor] : ["", ""]).catch(() => ["", ""]);
+    if (!hov[0]) await p.waitForTimeout(200);
+  }
   await link.focus(); await p.keyboard.press("Shift+Tab"); await p.keyboard.press("Tab");
   const foc = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).outlineColor, getComputedStyle(a).outlineStyle]);
   // the Carbon look (owner, 2026-10-24) puts white link text on IBM Blue; O-01 asks for no blue *text* and a
