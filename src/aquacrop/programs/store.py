@@ -235,10 +235,11 @@ class ProgramStore:
             if version is not None:
                 hit = [v for v in have if v["version"] == version]
                 if not hit or hit[0]["status"] != "DRAFT":
-                    raise ProgramRefused(f"{program_id} v{version} is not a draft: edits make a new version")
+                    raise ProgramRefused(f"{program_id} v{version} is validated and cannot change: use Change (new version) to "
+                                         "edit a copy")
             else:
                 if any(v["status"] == "DRAFT" for v in have):
-                    raise ProgramRefused(f"{program_id} already has a draft; edit that one")
+                    raise ProgramRefused(f"{program_id} already has a draft: open Edit on that draft instead of starting another")
                 version = (have[-1]["version"] + 1) if have else 1
             now = _now()
             row = (program_id, version, "DRAFT", name, digest(canon), now, actor, now, json.dumps(canon, sort_keys=True))
@@ -262,7 +263,8 @@ class ProgramStore:
         with self._lock:
             v = self.get(program_id, version)
             if v["status"] not in ("DRAFT", "VALIDATED", "INVALID"):
-                raise ProgramRefused(f"{program_id} v{version} is {v['status']}")
+                raise ProgramRefused(f"{program_id} v{version} is {v['status'].lower()} and cannot be validated: make a "
+                                     "new version")
             doc = {"utc": _now(), "actor": actor, "issues": issues, "context": context, "digest": v["digest"]}
             status = "VALIDATED" if not issues else ("DRAFT" if v["status"] == "DRAFT" else "INVALID")
             self.h.submit(lambda c: c.execute("UPDATE programs SET status=?, validation_json=?, updated_utc=? WHERE "
@@ -312,7 +314,7 @@ class ProgramStore:
     def record_simulation(self, program_id: str, version: int, evidence: dict) -> dict:
         v = self.get(program_id, version)
         if evidence.get("digest") != v["digest"]:
-            raise ProgramRefused("the twin ran a different version of this program")
+            raise ProgramRefused("the twin ran a different version of this program: run the twin test again on this version")
         self.h.submit(lambda c: c.execute("UPDATE programs SET simulation_json=? WHERE program_id=? AND version=?",
                                           (json.dumps(evidence), program_id, version)), wait=True)
         self.h.event("PROGRAM_SIMULATION_RECORDED", {"program": f"{program_id}@{version}",
@@ -342,7 +344,8 @@ class ProgramStore:
         with self._lock:
             v = self.get(program_id, version)
             if v["status"] != "VALIDATED":
-                raise ProgramRefused(f"{program_id} v{version} is not validated")
+                raise ProgramRefused(f"{program_id} v{version} is not validated: validate it on Programs and test it in the "
+                                     "Digital Twin before activating it")
             if require_simulation and (why := refusal(v["simulation"], v["digest"], context)) is not None:
                 raise ProgramRefused(why)
             if overlaps and not overlaps_accepted:
@@ -358,7 +361,7 @@ class ProgramStore:
     def deactivate(self, actor: str, runtime_id: str, program_id: str) -> None:
         act = self.active(runtime_id)
         if program_id not in act:
-            raise ProgramRefused(f"{program_id} is not active")
+            raise ProgramRefused(f"{program_id} is not active, so there is nothing to deactivate")
         row = (runtime_id, program_id, act[program_id][0], "DEACTIVATED", actor, _now(), "{}")
         self.h.submit(lambda c: c.execute("INSERT INTO program_activations(runtime_id, program_id, version, action, "
                                           "actor, utc, json) VALUES(?,?,?,?,?,?,?)", row), wait=True)

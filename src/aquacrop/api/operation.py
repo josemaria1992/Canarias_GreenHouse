@@ -58,7 +58,7 @@ def register(app, require, host, programs, equipment, cfg, *, proof_context=None
         if host is None:
             raise HTTPException(409, why_not)
         if request.headers.get("x-runtime-id") != host.runtime_id:
-            raise HTTPException(409, "this page belongs to another runtime or an earlier start; reload it")
+            raise HTTPException(409, "the controller restarted since this page was opened: reload the page and try again")
         return host
 
     async def call(fn, *a, **kw):
@@ -132,7 +132,7 @@ def register(app, require, host, programs, equipment, cfg, *, proof_context=None
             if (why := superseded_safety(v["body"], blocks)) is not None:
                 problems.append(why)
         if problems:
-            raise HTTPException(409, "not ready for a physical test: " + "; ".join(problems))
+            raise HTTPException(409, "not ready for a physical test. Fix these first: " + "; ".join(problems))
         return await call(programs.activate, p.username, STORE_ID, body.program_id, body.version,
                           require_simulation=True, overlaps_accepted=body.accept_overlaps,
                           overlaps=(v["validation"] or {}).get("context", {}).get("overlaps", []),

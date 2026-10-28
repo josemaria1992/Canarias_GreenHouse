@@ -107,10 +107,11 @@ class EquipmentStore:
                 if not hit:
                     raise EquipmentRefused(f"type {type_id} v{version} does not exist")
                 if hit[0]["status"] != "DRAFT":
-                    raise EquipmentRefused(f"type {type_id} v{version} is {hit[0]['status']}: edits make a new version")
+                    raise EquipmentRefused(f"type {type_id} v{version} is {hit[0]['status'].lower()} and cannot change: "
+                                           "use Edit (it creates the next draft version)")
             else:
                 if any(r["status"] == "DRAFT" for r in existing):
-                    raise EquipmentRefused(f"type {type_id} already has a draft; edit that one")
+                    raise EquipmentRefused(f"type {type_id} already has a draft: open Edit draft on it instead")
                 version = (existing[-1]["version"] + 1) if existing else 1
             now = _now()
             row = (type_id, version, "DRAFT", name, digest(canon), now, actor, now, json.dumps(canon, sort_keys=True))
@@ -126,7 +127,7 @@ class EquipmentStore:
         with self._lock:
             t = self.type_version(type_id, version)
             if t["status"] != "DRAFT":
-                raise EquipmentRefused(f"type {type_id} v{version} is {t['status']}; only a draft is activated")
+                raise EquipmentRefused(f"type {type_id} v{version} is {t['status'].lower()}: only a draft can be activated")
             TypeBody.model_validate(t["body"])
             prev = self._active_type(type_id)
             now = _now()
@@ -147,7 +148,8 @@ class EquipmentStore:
         with self._lock:
             users = [i["item_id"] for i in self.items() if i["type_id"] == type_id and i["status"] == "ACTIVE"]
             if users:
-                raise EquipmentRefused(f"type {type_id} is used by {', '.join(users)}: retire or move them first")
+                raise EquipmentRefused(f"type {type_id} is still used by {', '.join(users)}: retire those items, or upgrade "
+                                       "them to another type, then retire it")
             now = _now()
             self.h.submit(lambda c: c.execute("UPDATE equipment_types SET status='RETIRED', updated_utc=? WHERE "
                                               "type_id=? AND status IN ('ACTIVE','DRAFT')", (now, type_id)), wait=True)
@@ -277,11 +279,13 @@ class EquipmentStore:
             if type_version is None:
                 act = self._active_type(type_id)
                 if act is None:
-                    raise EquipmentRefused(f"type {type_id} has no active version; activate it first")
+                    raise EquipmentRefused(f"type {type_id} has no active version: an administrator activates it on "
+                                           "Equipment types first")
                 type_version = act["version"]
             t = self.type_version(type_id, type_version)
             if t["status"] not in ("ACTIVE", "SUPERSEDED"):
-                raise EquipmentRefused(f"type {type_id} v{type_version} is {t['status']}: items use activated types")
+                raise EquipmentRefused(f"type {type_id} v{type_version} is {t['status'].lower()}: items use activated types "
+                                       "only; an administrator activates it on Equipment types")
             tb = TypeBody.model_validate(t["body"])
             try:
                 ib = ItemBody.model_validate(body)
@@ -301,7 +305,7 @@ class EquipmentStore:
                 raise EquipmentRefused(f"equipment {item_id} changed meanwhile (now v{cur}); reload and edit again"
                                        if cur else f"equipment {item_id} does not exist yet")
             if cur is not None and self.item(item_id)["status"] == "RETIRED" and not reactivate:
-                raise EquipmentRefused(f"equipment {item_id} is retired")
+                raise EquipmentRefused(f"equipment {item_id} is retired and cannot be changed: create a new item instead")
             version = (cur or 0) + 1
             canon = ib.model_dump(mode="json")
             now = _now()
@@ -325,7 +329,8 @@ class EquipmentStore:
         it = self.item(item_id)
         act = self._active_type(it["type_id"]) if to_version is None else self.type_version(it["type_id"], to_version)
         if act is None:
-            raise EquipmentRefused(f"type {it['type_id']} has no active version")
+            raise EquipmentRefused(f"type {it['type_id']} has no active version to upgrade to: an administrator "
+                                   "activates it on Equipment types first")
         old = self._type_body(it["type_id"], it["type_version"])
         new = TypeBody.model_validate(act["body"])
         o, n = {r.role: r for r in old.roles}, {r.role: r for r in new.roles}
@@ -393,11 +398,11 @@ class EquipmentStore:
     def _role(self, item_id: str, role: str) -> tuple[dict, TypeBody, RoleDef]:
         it = self.item(item_id)
         if it["status"] == "RETIRED":
-            raise EquipmentRefused(f"{it['name']} is retired")
+            raise EquipmentRefused(f"{it['name']} is retired: its channels cannot change")
         tb = self._type_body(it["type_id"], it["type_version"])
         r = next((x for x in tb.roles if x.role == role), None)
         if r is None:
-            raise EquipmentRefused(f"{it['name']} has no role {role}")
+            raise EquipmentRefused(f"{it['name']} has no connection called {role}: its equipment type does not define it")
         return it, tb, r
 
     def bind(self, actor: str, item_id: str, role: str, point: str | None, note: str | None = None) -> dict:
@@ -414,7 +419,8 @@ class EquipmentStore:
                 raise EquipmentRefused("; ".join(issues))
             other = self.by_point().get(point)
             if other and (other["item_id"], other["role"]) != (item_id, role):
-                raise EquipmentRefused(f"{point} already carries {other['item_id']}.{other['role']}: clear it there first")
+                raise EquipmentRefused(f"{point} is already used by {other['item_id']} ({other['role']}): clear that channel "
+                                       "on that item first, or choose another channel")
             if cur and cur["point"] == point:
                 raise EquipmentRefused(f"{it['name']} {r.label} is already on {point}")
             return self._bind_write(actor, item_id, role, point, "PROPOSED", note, {})
@@ -435,7 +441,8 @@ class EquipmentStore:
             if cite_assignment:
                 a = self.assignments.current().get(point)
                 if not a or a["status"] != "VERIFIED":
-                    raise EquipmentRefused(f"{point} has no VERIFIED I/O assignment to cite")
+                    raise EquipmentRefused(f"{point} has no verified I/O assignment yet: verify it on the I/O board first, "
+                                           "then cite it here")
                 evidence = {"check": "CITED_IO_ASSIGNMENT", "assignment_utc": a["utc"], "assignment_by": a["actor"],
                             "assignment_signal": a["signal"], "assignment_evidence": a["evidence"]}
             else:

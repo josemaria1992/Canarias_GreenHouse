@@ -108,7 +108,7 @@ def test_create_item_bind_and_verify_an_output_with_readback(sim):
     c.post("/api/auth/logout", headers=h)
     h = login(c, "bench1")
     r = c.post("/api/equipment/bind", json={"item_id": "led-2", "role": "on", "point": "digital_A.DO1"}, headers=h)
-    assert r.status_code == 409 and "already carries led-1.on" in r.text
+    assert r.status_code == 409 and "is already used by led-1 (on)" in r.text
 
 
 def test_new_type_version_changes_no_item_until_upgraded(sim):

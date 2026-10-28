@@ -34,7 +34,7 @@ from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
 from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
-from ..security.auth import NAVIGATION, Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
+from ..security.auth import NAVIGATION, Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret, needs_text
 from ..twin.clock import SPEEDS
 from . import pages
 from .service import SimulationService
@@ -458,7 +458,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             except AuthError as e:
                 return deny(e.status, str(e), p.username)
             if not limiter.hit(f"mut:{p.session_hash}", sec.mutation_rate_per_minute):
-                return deny(429, "rate limit", p.username)
+                return deny(429, "too many requests in a short time: wait a moment, then try again", p.username)
         request.state.principal = p
         if not is_sim and (path in SIM_ONLY_EXACT or any(path == x or path.startswith(x + "/") for x in SIM_ONLY)):
             return JSONResponse({"detail": f"simulation-only endpoint; this installation is {cfg.profile.value}"},
@@ -475,7 +475,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         def dep(request: Request) -> Principal:
             p: Principal = request.state.principal
             if not p.can(perm):
-                why = "password change required" if p.must_change_password else f"permission {perm.value} required"
+                why = "password change required" if p.must_change_password else needs_text(perm)
                 _reject(request, 403, why, p.username)
             return p
         return dep
@@ -509,11 +509,12 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             _reject(request, 403, "origin not allowed")
         if not limiter.hit(f"login:{client}", sec.login_rate_per_minute) or \
                 not limiter.hit(f"login-user:{body.username}", sec.login_rate_per_minute):
-            _reject(request, 429, "too many login attempts", body.username)
+            _reject(request, 429, "too many sign-in attempts: wait a minute, then try again", body.username)
         try:
             token, p = accounts.login(body.username, body.password, client)
         except AuthError as e:
-            _reject(request, e.status, "login failed", body.username)
+            _reject(request, e.status, "sign-in failed: check the user name and password (an administrator can "
+                                       "reset a forgotten password or re-enable a disabled account)", body.username)
         secure = request.url.scheme == "https" or not loopback_http_ok
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=secure, path="/",
                             max_age=sec.session_absolute_hours * 3600)

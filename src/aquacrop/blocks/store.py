@@ -277,7 +277,8 @@ class BlockStore:
         with self._lock:
             b = self.get(block_id, version)
             if b["status"] != "DRAFT":
-                raise BlockRefused(f"{block_id} v{version} is {b['status']}: a change makes the next version")
+                raise BlockRefused(f"{block_id} v{version} is {b['status'].lower()} and cannot change: edit it to make the "
+                                   "next version")
             found = self.check(block_id, version)
             errs = [i for i in found if i["severity"] == "ERROR"]
             if errs:
@@ -298,7 +299,7 @@ class BlockStore:
         with self._lock:
             last = self.latest().get(block_id)
             if last is None:
-                raise BlockRefused(f"no block {block_id}")
+                raise BlockRefused(f"block {block_id} does not exist")
             self.h.submit(lambda c: c.execute("UPDATE blocks SET status='RETIRED', updated_utc=? WHERE block_id=? AND "
                                               "version=?", (_now(), block_id, last["version"])), wait=True)
             self.h.event("BLOCK_RETIRED", {"block": f"{block_id}@{last['version']}"}, actor=actor)

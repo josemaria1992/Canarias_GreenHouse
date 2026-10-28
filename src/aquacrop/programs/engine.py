@@ -235,29 +235,45 @@ class Engine:
         for m in modules:
             online = self.io.module_online(m)
             out.append({"check": f"module {m} answers", "ok": online is True,
-                        "detail": "answering" if online else "not answering" if online is False else "unknown"})
+                        "detail": "answering" if online else "not answering" if online is False else "unknown",
+                        "fix": f"module {m} does not answer: check its power and its RS485 cable (Hardware shows it)"})
         for iid, it in sorted(self._items.items()):
             cp = it.command_point
             if cp:
                 coil = self._digital(cp)
                 out.append({"check": f"{it.name}: output reads OFF", "ok": coil is False,
-                            "detail": "UNKNOWN" if coil is None else ("ON" if coil else "OFF")})
+                            "detail": "UNKNOWN" if coil is None else ("ON" if coil else "OFF"),
+                            "fix": (f"{it.name}'s output {cp} cannot be read: check that its module answers (Hardware)"
+                                    if coil is None else f"{it.name}'s output {cp} is ON: switch it OFF, or find what "
+                                    "switched it on, before the controller takes over")})
             fb = it.feedback_role
             if fb:
                 v = self._role_value(it, fb.role)
                 out.append({"check": f"{it.name}: {fb.label} reads OFF", "ok": v is False,
-                            "detail": "UNKNOWN" if v is None else ("ON" if v else "OFF")})
+                            "detail": "UNKNOWN" if v is None else ("ON" if v else "OFF"),
+                            "fix": (self._unread(it, fb.role) if v is None else
+                                    f"{it.name} still reports {fb.label}: check it is really stopped, and its "
+                                    "feedback wiring")})
             for label, v in self._fault_state(it):
+                role = next((r.role for r in it.type.roles if r.label == label and r.purpose == Purpose.FAULT), label)
                 out.append({"check": f"{it.name}: {label} reads no fault", "ok": v is False,
-                            "detail": "UNKNOWN" if v is None else ("FAULT" if v else "no fault")})
+                            "detail": "UNKNOWN" if v is None else ("FAULT" if v else "no fault"),
+                            "fix": (self._unread(it, role) if v is None else
+                                    f"{it.name} reports {label}: find and clear the fault at the equipment")})
             for r in it.type.roles:
                 if r.purpose == Purpose.MEASUREMENT and r.role in it.points:
                     v = self._analog(it, r.role)
-                    out.append({"check": f"{it.name}: {r.label} is fresh", "ok": v is not None,
-                                "detail": "fresh" if v is not None else "missing, stale or unscaled"})
+                    out.append({"check": f"{it.name}: {r.label} has a usable reading", "ok": v is not None,
+                                "detail": "usable" if v is not None else "no usable reading",
+                                "fix": None if v is not None else self._unread(it, r.role)})
         unver = [o.op_id for o in self.ops.values() if o.state == "STOP_UNVERIFIED"]
-        out.append({"check": "no stop is unverified", "ok": not unver, "detail": ", ".join(unver) or "none"})
+        out.append({"check": "no stop is unverified", "ok": not unver, "detail": ", ".join(unver) or "none",
+                    "fix": "an operation's stop is not verified: see Operation, check that equipment really stopped"})
         return out
+
+    @staticmethod
+    def _todo(bad: list[dict]) -> str:
+        return "; ".join(c.get("fix") or f"{c['check']} ({c['detail']})" for c in bad)
 
     def view(self) -> dict:
         now = self.clock.mono()
@@ -291,6 +307,36 @@ class Engine:
             return None
         return (not v) if r.inverted else v
 
+    def _unread(self, it: ItemView, role: str) -> str:
+        """Why this role gives no usable value, and what to do about it, in the operator's words."""
+        r = next((x for x in it.type.roles if x.role == role), None)
+        label = r.label if r else role
+        p = it.points.get(role)
+        if p is None:
+            return (f"{it.name} {label} has no verified channel: assign its channel on Equipment and verify it with "
+                    "the device connected")
+        analog = r is not None and r.signal.value == "ANALOG"
+        sc_ = it.body.scaling.get(role) if analog else None
+        if analog and sc_ is None:
+            return (f"{it.name} {label} has no measuring range: on Equipment, enter its scaling (for example "
+                    "4-20 mA = 0 to the transmitter's full scale, from its datasheet), or clear its channel until the "
+                    "sensor is connected")
+        s = self.io.sample(p)
+        if s is None or s.acquired_utc is None:
+            return (f"{it.name} {label}: no reading from {p} yet: check that the sensor is connected and powered and "
+                    "that its module answers (Hardware)")
+        if s.quality not in USABLE:
+            return (f"{it.name} {label}: the module reports the reading from {p} as {s.quality.value.lower()}"
+                    f"{' (' + s.reason + ')' if s.reason else ''}: check the sensor and its wiring")
+        age = (self.clock.utc() - s.acquired_utc).total_seconds()
+        if age > it.body.stale_after_s:
+            return (f"{it.name} {label}: the last reading from {p} is {age:.0f} s old: check that its module "
+                    "answers and its cable (Hardware)")
+        if analog and (s.raw_unit == "uA") != (sc_.raw_unit == "mA"):
+            return (f"{it.name} {label}: the channel {p} measures {'current' if s.raw_unit == 'uA' else 'voltage'} "
+                    f"but its scaling is in {sc_.raw_unit}: correct the scaling on Equipment")
+        return f"{it.name} {label}: the reading from {p} cannot be used: check the sensor and its scaling on Equipment"
+
     def _analog(self, it: ItemView, role: str) -> float | None:
         """The engineering value from the module's own measurement (mA or V) through the item's scaling."""
         p = it.points.get(role)
@@ -310,9 +356,9 @@ class Engine:
     def request_mode(self, actor: str, target: str, reason: str = "") -> dict:
         with self._lock:
             if target not in ("AUTO", "MANUAL"):
-                raise Refused("the mode is AUTO or MANUAL")
+                raise Refused("choose AUTO or MANUAL")
             if self.mode == "RECOVERY":
-                raise Refused("approve the restart checklist first")
+                raise Refused("after a restart the controller waits for approval: approve the restart checklist on Operation first")
             if target == self.mode:
                 return self.view()
             if target == "MANUAL":
@@ -330,14 +376,14 @@ class Engine:
                 return self.view()
             # MANUAL -> AUTO
             if self.mode == "STOPPING":
-                raise Refused("automatic operations are still stopping; wait until MANUAL")
+                raise Refused("automatic operations are still stopping: wait until the mode shows MANUAL, then try again")
             busy = [o.program_id for o in self.ops.values()]
             if busy:
                 raise Refused(f"manual operations are running ({', '.join(busy)}): stop them before AUTO; "
                               "AUTO never takes over running equipment")
             bad = [c for c in self.checklist() if not c["ok"]]
             if bad:
-                raise Refused("not ready for AUTO: " + "; ".join(f"{c['check']} ({c['detail']})" for c in bad))
+                raise Refused("not ready for AUTO. Fix first: " + self._todo(bad))
             self._enter_auto(actor, reason or "MANUAL to AUTO")
             return self.view()
 
@@ -363,13 +409,13 @@ class Engine:
         """The authorized user's re-arm after a restart. Refused while any check fails."""
         with self._lock:
             if self.mode != "RECOVERY":
-                raise Refused("there is no restart to approve")
+                raise Refused("there is no restart to approve: the controller is not waiting after a restart")
             if target not in ("AUTO", "MANUAL"):
-                raise Refused("re-arm into AUTO or MANUAL")
+                raise Refused("approve the restart into AUTO or MANUAL")
             checks = self.checklist()
             bad = [c for c in checks if not c["ok"]]
             if bad:
-                raise Refused("cannot re-arm: " + "; ".join(f"{c['check']} ({c['detail']})" for c in bad))
+                raise Refused("the restart cannot be approved yet. Fix first: " + self._todo(bad))
             consequences = self.approval_consequences(target)
             self.store.recovery_save("APPROVED", actor, {"target": target, "checks": checks, "consequences": consequences})
             self.alarm("RECOVERY_APPROVAL_REQUIRED", self.runtime_id, False, {})
@@ -409,13 +455,13 @@ class Engine:
     def run_now(self, actor: str, program_id: str, *, duration_s: float | None = None) -> dict:
         with self._lock:
             if self.mode != "MANUAL":
-                raise Refused(f"run now needs MANUAL (the installation is {self.mode})")
+                raise Refused(f"Run now works in MANUAL only (the installation is {self.mode}): switch to MANUAL on Operation first")
             progs = self.programs()
             if program_id not in progs:
-                raise Refused(f"{program_id} is not an active program of this runtime")
+                raise Refused(f"{program_id} is not active here: an administrator activates it on Operation first")
             ver, body = progs[program_id]
             if body.action.type == "KEEP_BETWEEN":
-                raise Refused("a keep-between program runs only in AUTO")
+                raise Refused("a keep-between program runs only in AUTO: switch to AUTO, it then starts by itself when needed")
             op = self._start(program_id, ver, body, origin="MANUAL", actor=actor, key=None, window_end=None,
                              duration_s=duration_s)
             return op.public(self.clock.mono())
@@ -425,7 +471,7 @@ class Engine:
             o = self.ops.get(op_id)
             waiting = next((pid for pid, r in self._resume.items() if r["from_op"] == op_id), None)
             if o is None and waiting is None:
-                raise Refused("no such running operation")
+                raise Refused("that operation is no longer running (it may have just finished): refresh the page")
             # a user stop of an operation also cancels the rest of its cycle waiting for a pump (C077-01)
             self._cancel_resumes(actor, reason, program=o.program_id if o is not None else waiting)
             if o is None:
@@ -495,7 +541,7 @@ class Engine:
         with self._lock:
             c = self.conflicts.get(conflict_id)
             if c is None:
-                raise Refused("no such open conflict")
+                raise Refused("that conflict is already resolved or ended: refresh the page")
             if choice == "KEEP_FIRST":
                 self.store.occurrence_update(c["waiting"]["key"], "CANCELLED", outcome="conflict: kept the first program")
                 self._close_conflict(conflict_id, "KEEP_FIRST", actor)
@@ -508,7 +554,7 @@ class Engine:
                 c["state"] = "SWITCHING"
                 self.event("PROGRAM_CONFLICT_SWITCHING", {"conflict_id": conflict_id}, actor)
             else:
-                raise Refused("choose KEEP_FIRST or SWITCH")
+                raise Refused("choose Keep the first program or Switch to the waiting one")
             return self.view()
 
     def _open_conflict(self, pid: str, ver: int, key: str, window_end: datetime | None, holder: Op, item: str) -> None:
@@ -805,7 +851,9 @@ class Engine:
     def _start(self, pid, ver, body: ProgramBody, *, origin, actor, key, window_end, duration_s=None,
                claimed=False) -> Op:
         if self.mode in ("RECOVERY", "STOPPING"):
-            raise Refused(f"nothing starts while the installation is {self.mode}")
+            raise Refused("nothing starts while the controller waits for the restart approval: approve the restart "
+                          "checklist on Operation first" if self.mode == "RECOVERY" else
+                          "nothing starts while automatic operations are stopping: wait until the mode shows MANUAL")
         if (why := getattr(self.io, "start_refusal", lambda: None)()) is not None:
             if key:
                 self.store.occurrence_update(key, "FAILED", outcome=why)
@@ -829,7 +877,8 @@ class Engine:
         for iid in need:
             it = self._items.get(iid)
             if it is None or it.command_point is None:
-                why = f"{iid} has no command channel"
+                why = (f"{it.name if it else iid} has no verified output channel: assign its output on Equipment "
+                       "and verify it with the device connected")
                 if key:
                     self.store.occurrence_update(key, "FAILED", outcome=why)
                 raise Refused(why)
@@ -863,14 +912,15 @@ class Engine:
             limit = min([limit] + caps) if limit else min(caps)
         if not limit or limit <= 0:
             self.arbiter.release(f"op:{pid}")
-            raise Refused("no bounded runtime")
+            raise Refused(f"{pid} has no maximum running time: set one in the program, or in Limits of its "
+                          "equipment type")
         for m, role in self._litre_meters(body):     # R402-02: litres are counted only from a flow rate unit
             it = self._items.get(m)
             sc_ = it.body.scaling.get(role) if it else None
             if sc_ is not None and flow_factor(sc_.unit) is None:
                 self.arbiter.release(f"op:{pid}")
-                raise Refused(f"{m}: its reading is in {sc_.unit}, which is not a flow rate litres can be counted from "
-                              "(L/min, L/h, m³/h or L/s)")
+                raise Refused(f"{it.name}: its reading is in {sc_.unit}, not a flow rate, so litres cannot be counted: "
+                              "choose a flow meter in the program, or set its unit on Equipment to L/min, L/h, m³/h or L/s")
         asked = getattr(a, "target_L", None)
         if a.type == "SEQUENCE" and any(s_.do == "DELIVER" for s_ in a.steps):
             asked = sum(s_.target_L for s_ in a.steps if s_.do == "DELIVER")       # each operation its own target
@@ -1049,9 +1099,10 @@ class Engine:
     def _fault_refusal(self, it: ItemView) -> str | None:
         for label, v in self._fault_state(it):
             if v is True:
-                return f"{it.name}: {label} reports a fault"
+                return f"{it.name}: {label} reports a fault: find and clear the fault at the equipment, then try again"
             if v is None:
-                return f"{it.name}: {label} is UNKNOWN (missing, stale or not connected), so it cannot show the item is healthy"
+                role = next((r.role for r in it.type.roles if r.label == label and r.purpose == Purpose.FAULT), label)
+                return f"{it.name}: {label} cannot be read, so it cannot show the equipment is healthy. " + self._unread(it, role)
         return None
 
     def _faults_tick(self) -> None:
@@ -1081,7 +1132,8 @@ class Engine:
         asked = (a.target_L if a.type == "DELIVER_VOLUME" else
                  sum(s.target_L for s in a.steps if s.do == "DELIVER") if a.type == "SEQUENCE" else 0.0)
         if cap is not None and asked > cap:
-            return f"{asked:g} L is above the equipment's maximum volume {cap:g} L"
+            return (f"{asked:g} L is above the equipment's maximum volume of {cap:g} L per run: lower the litres "
+                    "in the program, or raise the limit in the equipment type")
         return None
 
     # ------------------------------------------------------------------ start and stop conditions
@@ -1107,7 +1159,8 @@ class Engine:
             v = self._cond_holds(c) if it is not None else None
             name = f"{it.name if it else c.item} {c.role}"
             if v is None:
-                return f"start condition {i + 1}: {name} is UNKNOWN (missing, stale or bad): not started"
+                return (f"start condition {i + 1}: {name} cannot be read, so the program did not start. "
+                        + (self._unread(it, c.role) if it else f"{c.item} is not on Equipment"))
             if v is False:
                 return f"start condition {i + 1} does not hold: {name} {c.op.lower().replace('_', ' ')}" \
                        f"{'' if c.value is None else ' ' + format(c.value, 'g')} is not true"
@@ -1125,7 +1178,8 @@ class Engine:
             name = f"{it.name if it else g.item} {g.role}"
             if v is None:
                 self.alarm("PROGRAM_GUARD", op.program_id, True, {"op_id": op.op_id, "why": f"{name} UNKNOWN"})
-                self._fail(op, f"stop condition {i + 1}: {name} is UNKNOWN (missing, stale or bad)")
+                self._fail(op, f"stop condition {i + 1}: {name} cannot be read, so the program stopped for "
+                               "safety. " + (self._unread(it, g.role) if it else f"{g.item} is not on Equipment"))
                 return True
             if v is False:
                 op.guard_since.pop(i, None)
@@ -1470,7 +1524,8 @@ class Engine:
             it = self._items.get(a.sensor)
             v = self._analog(it, a.sensor_role) if it else None
             if v is None:
-                self._fail(op, f"{a.sensor}: reading missing or stale")
+                self._fail(op, f"the sensor it keeps between limits cannot be read, so it stopped. "
+                               + (self._unread(it, a.sensor_role) if it else f"{a.sensor} is not on Equipment"))
             elif (a.direction == "RAISE" and v >= a.high) or (a.direction == "LOWER" and v <= a.low):
                 self._begin_stop(op, f"{a.sensor} reached {v:.2f}", result="DONE")
         elif a.type == "SEQUENCE":
@@ -1733,7 +1788,8 @@ class Engine:
             unit = it.body.scaling[role].unit
             factor = flow_factor(unit)
             if factor is None:
-                self._fail(op, f"{meter}: its reading is in {unit}, which is not a flow rate litres can be counted from")
+                self._fail(op, f"{it.name}: its reading is in {unit}, not a flow rate, so litres cannot be counted: "
+                               "set its unit on Equipment to L/min, L/h, m³/h or L/s")
                 return False, None
             rate *= factor
         if rate is None or s is None:
@@ -1741,7 +1797,8 @@ class Engine:
                 gap = (self.clock.utc() - op.last_rate[0]).total_seconds()
                 if gap > (it.body.stale_after_s if it else 5.0):
                     op.uncertain_L += max(0.0, op.last_rate[1]) * gap / 60.0
-                    self._fail(op, f"{meter}: flow reading lost; {op.uncertain_L:.2f} L not measured")
+                    self._fail(op, f"{it.name if it else meter}: flow reading lost, so it stopped ({op.uncertain_L:.2f} L "
+                               "not measured). " + (self._unread(it, role) if it else ""))
                     return False, None
             return True, None
         t = s.acquired_utc
@@ -1750,7 +1807,8 @@ class Engine:
             litres = max(0.0, (op.last_rate[1] + rate) / 2.0) * dt / 60.0
             if dt > it.body.stale_after_s:           # readings missed in between: that volume was not measured
                 op.uncertain_L += litres
-                self._fail(op, f"{meter}: {dt:.0f} s between flow readings; {op.uncertain_L:.2f} L not measured")
+                self._fail(op, f"{it.name}: {dt:.0f} s between flow readings, so it stopped ({op.uncertain_L:.2f} L "
+                               "not measured): check the meter's module and cable (Hardware)")
                 return False, None
             op.measured_L += litres
         if op.last_rate is None or t > op.last_rate[0]:
@@ -1764,13 +1822,17 @@ class Engine:
             return False
         if rate is None:
             if op.last_rate is None and mono - op.step_since > no_flow_s:
-                self._fail(op, f"{meter}: no flow reading")
+                it_ = self._items.get(meter)
+                self._fail(op, f"{getattr(it_, 'name', meter)}: no flow reading, so it stopped. "
+                               + (self._unread(it_, role) if it_ else f"{meter} is not on Equipment"))
                 return False
             return True
         if rate >= min_flow:
             op.last_flow_ok_mono = mono
         if mono - (op.last_flow_ok_mono or op.step_since) > no_flow_s:
-            self._fail(op, f"{meter}: no flow for {no_flow_s:g} s")
+            self._fail(op, f"{getattr(self._items.get(meter), 'name', meter)}: no flow for {no_flow_s:g} s, so it "
+                           "stopped: check that the valves on the path are open, the pump runs and is primed, and the "
+                           "meter reads")
             return False
         if op.measured_L - op.step_base_L >= target:
             finish()
@@ -1796,8 +1858,10 @@ class Engine:
                     v = self._role_value(self._items[s.item], s.verify_role)
                     if v is not True:
                         if mono - op.step_since > s.timeout_s:
-                            self._fail(op, f"step {op.step + 1}: {s.item}.{s.verify_role} did not report ON "
-                                           f"within {s.timeout_s:g} s ({'UNKNOWN' if v is None else 'OFF'})")
+                            self._fail(op, f"step {op.step + 1}: {self._items[s.item].name if s.item in self._items else s.item} "
+                                           f"did not report {s.verify_role} ON within {s.timeout_s:g} s "
+                                           f"({'no reading' if v is None else 'it reads OFF'}), so it stopped: check "
+                                           "the equipment and its feedback wiring, or allow the step more time")
                         return
             elif s.do == "OFF":
                 it = self._held(op, s.item)
@@ -1810,7 +1874,8 @@ class Engine:
                 fbv = self._role_value(it, s.verify_role) if (it and s.verify_role) else False
                 if coil is not False or fbv is not False:
                     if mono - op.step_since > s.timeout_s:
-                        self._fail(op, f"step {op.step + 1}: {getattr(it, 'name', s.item)} not verified OFF")
+                        self._fail(op, f"step {op.step + 1}: {getattr(it, 'name', s.item)} was not verified OFF: check "
+                                       "that it really stopped (its output and feedback on the I/O board)")
                     return
                 if s.item in op.on:
                     op.on.remove(s.item)

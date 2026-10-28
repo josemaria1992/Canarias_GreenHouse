@@ -85,11 +85,11 @@ def prog(trigger, action, **kw):
 def test_nothing_runs_before_restart_approval_and_approval_needs_a_clean_checklist():
     r = Rig({"led1": lamp()}, {"p": (1, prog({"type": "MANUAL"}, {"type": "RUN_FOR", "item": "led1", "duration_s": 5}))})
     assert r.e.mode == "RECOVERY"
-    with pytest.raises(Refused, match="needs MANUAL"):
+    with pytest.raises(Refused, match="works in MANUAL only"):
         r.e.run_now("bench", "p")
     r.twin.s.coils["digital_A.DO1"] = True                    # an output found ON after the restart
     r.run(1)
-    with pytest.raises(Refused, match="output reads OFF"):
+    with pytest.raises(Refused, match="output digital_A.DO1 is ON: switch it OFF"):
         r.e.approve_recovery("vicente", "MANUAL")
     r.twin.s.coils["digital_A.DO1"] = False
     r.run(1)
@@ -281,7 +281,7 @@ def test_sequence_verifies_each_step_and_stops_in_reverse_on_failure():
     r.run(20)
     new = [(i.command.target, i.command.desired) for i in r.audit.intents[n:]]
     assert ("digital_A.DO2", True) not in new and new[-1] == ("digital_A.DO3", False)
-    assert "is_open did not report ON" in r.e.finished[-1]["reason"]
+    assert "did not report is_open ON" in r.e.finished[-1]["reason"]
 
 
 def test_conflict_holds_the_second_program_until_a_choice_and_expires_with_its_window():
@@ -407,7 +407,7 @@ def test_equipment_limits_are_enforced_across_runs():
     r = Rig(items, {"p": (1, prog({"type": "MANUAL"}, {"type": "DELIVER_VOLUME", "item": "pump", "meter": "fm",
                                                          "target_L": 5, "max_runtime_s": 120}))})
     r.e.approve_recovery("vicente", "MANUAL")
-    with pytest.raises(Refused, match="maximum volume 3 L"):
+    with pytest.raises(Refused, match="maximum volume of 3 L"):
         r.e.run_now("bench", "p")
 
 
@@ -467,3 +467,21 @@ def test_after_the_lease_ends_a_program_off_goes_out_as_a_safe_state_command():
     host = LiveEngineHost(svc, NS(event=lambda *a, **k: None), None, NS(active=lambda rt: {}), "s1")
     host.engine.io.command("digital_A.DO1", False, actor="program", reason="stop", priority=Priority.STOP)
     assert sent == [("safe", CommandOrigin.SAFE_STATE, False)]
+
+
+def test_a_restart_refusal_says_which_sensor_and_what_to_do():
+    """Owner, 28 Oct 2026 (bench): Main tank EC and Drainage tank level had channels but no measuring range; the
+    restart was refused with "EC is fresh (missing, stale or unscaled)". The rule stays; the message now says why
+    and what to do."""
+    items = {"led1": lamp(), "ec": view("ec", "ec", {"ec": "analog_A.AI4"})}          # a channel, no scaling
+    r = Rig(items, {})
+    r.run(1)
+    with pytest.raises(Refused) as e:
+        r.e.approve_recovery("vicente", "MANUAL")
+    msg = str(e.value)
+    assert msg.startswith("the restart cannot be approved yet. Fix first: ")
+    assert "ec EC has no measuring range: on Equipment, enter its scaling" in msg
+    assert "or clear its channel until the sensor is connected" in msg
+    assert "fresh" not in msg and "unscaled" not in msg
+    checks = {c["check"]: c for c in r.e.checklist()}
+    assert checks["ec: EC has a usable reading"]["ok"] is False and "measuring range" in checks["ec: EC has a usable reading"]["fix"]

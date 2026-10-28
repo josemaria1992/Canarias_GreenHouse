@@ -255,7 +255,7 @@ def register(app, require, wizard, svc) -> None:
     @app.post("/api/discovery/sweep")
     def discovery_sweep(body: SweepIn, p: Principal = Depends(require(Perm.MODULE_REGISTER))):
         if svc is None or not hasattr(svc, "discovery"):
-            raise HTTPException(409, "discovery reads real buses only")
+            raise HTTPException(409, "Discovery works on the real RS485 buses only, not in the simulation")
         try:
             svc.discovery.request_full(body.bus_id, p.username)
         except KeyError:

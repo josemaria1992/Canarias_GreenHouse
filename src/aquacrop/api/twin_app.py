@@ -33,7 +33,7 @@ from ..historian.writer import Historian
 from ..programs.engine import Refused
 from ..programs.schedule import upcoming
 from ..programs.store import ProgramRefused
-from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret
+from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret, needs_text
 from ..twin import feed
 from . import pages
 from ..equipment.definitions import TypeBody, channel_issues
@@ -274,7 +274,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 except AuthError as e:
                     return deny(e.status, str(e), p.username)
                 if not limiter.hit(f"mut:{p.session_hash}", sec.mutation_rate_per_minute):
-                    return deny(429, "rate limit", p.username)
+                    return deny(429, "too many requests in a short time: wait a moment, then try again", p.username)
                 if path != "/api/auth/logout" and request.headers.get("x-runtime-id") != svc.runtime_id:
                     return deny(409, "this page belongs to another runtime or an earlier twin run; reload it",
                                 p.username)
@@ -294,7 +294,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         def dep(request: Request) -> Principal:
             p: Principal = request.state.principal
             if not p.can(perm):
-                raise HTTPException(403, f"permission {perm.value} required")
+                raise HTTPException(403, needs_text(perm))
             return p
         return dep
 
@@ -319,11 +319,12 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         if not origin_ok(request):
             raise HTTPException(403, "origin not allowed")
         if not limiter.hit(f"login:{request.client.host if request.client else '-'}", sec.login_rate_per_minute):
-            raise HTTPException(429, "rate limit")
+            raise HTTPException(429, "too many sign-in attempts: wait a minute, then try again")
         try:
             token, p = accounts.login(body.username, body.password, request.client.host if request.client else "-")
         except AuthError:
-            raise HTTPException(401, "login failed")
+            raise HTTPException(401, "sign-in failed: check the user name and password (an administrator can "
+                                     "reset a forgotten password or re-enable a disabled account)")
         if not p.can(Perm.OPS_READ):                 # 0.7.0 role matrix: no twin for viewers (ADR-0023)
             accounts.revoke(p.session_hash, "viewer: no digital twin")
             raise HTTPException(403, "the digital twin is for operators and administrators; a viewer account sees the Overview, Programs and Alarms of the real system")
@@ -340,7 +341,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         if not origin_ok(request):
             raise HTTPException(403, "origin not allowed")
         if not limiter.hit(f"login:{request.client.host if request.client else '-'}", sec.login_rate_per_minute):
-            raise HTTPException(429, "rate limit")
+            raise HTTPException(429, "too many sign-in attempts: wait a minute, then try again")
         try:
             user = tickets.username(body.ticket)
         except (ValueError, KeyError):
@@ -585,7 +586,8 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         with svc.lock:
             g = svc.graph()
             if g is None:
-                raise HTTPException(409, "this twin has no installation graph yet")
+                raise HTTPException(409, "this twin has no installation design yet: press Import from Overview, "
+                                         "or start a New design, first")
             try:
                 svc.gwater.set_level(body.node, body.litres, params_from(g, svc.items.views()), f"set by {p.username}")
             except ValueError as e:
@@ -844,7 +846,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     # ------------------------------------------------------------------ changes for the real system (0.6.0)
     def changed(fn, *a):
         if svc.snap is None:
-            raise HTTPException(409, "no snapshot from the real system yet")
+            raise HTTPException(409, "the twin has not received the real system's data yet: wait a minute; if it stays like this, check that the main dashboard is running")
         with svc.lock:
             if any(o["state"] == "RUNNING" for o in svc.engine.view()["ops"]):
                 raise HTTPException(409, "a program is running in the twin: stop it before changing equipment")
@@ -953,7 +955,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         from ..equipment.definitions import TEMPLATES
         from ..twin import starter as st
         if svc.snap is None:
-            raise HTTPException(409, "no snapshot from the real system yet")
+            raise HTTPException(409, "the twin has not received the real system's data yet: wait a minute; if it stays like this, check that the main dashboard is running")
         missing = st.missing_types(svc.snap)
         if missing:
             names = ", ".join(TEMPLATES[t]["name"] for t in missing)
@@ -1015,7 +1017,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     @app.post("/api/twin/export")
     def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         if svc.snap is None:
-            raise HTTPException(409, "no snapshot from the real system yet")
+            raise HTTPException(409, "the twin has not received the real system's data yet: wait a minute; if it stays like this, check that the main dashboard is running")
         pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof,
                              virtual.uids(), svc.blocks.export())
         try:

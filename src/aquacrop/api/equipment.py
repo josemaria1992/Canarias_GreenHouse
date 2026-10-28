@@ -278,7 +278,8 @@ def register(app, require, store, samples, edges) -> None:
         # replacing or clearing a VERIFIED channel is wiring work and needs commissioning
         cur = store.bindings(body.item_id).get(body.role)
         if not p.can(Perm.IO_ASSIGN) and cur is not None and cur["status"] == "VERIFIED":
-            raise HTTPException(403, "this channel is verified at the bench: changing it needs commissioning")
+            raise HTTPException(403, "this channel is verified at the bench: changing it needs Commissioning on your "
+                                    "account (an administrator ticks it under Settings, Users)")
         try:
             return store.bind(p.username, body.item_id, body.role, body.point or None, body.note)
         except EquipmentRefused as e:

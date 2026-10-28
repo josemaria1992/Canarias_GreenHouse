@@ -80,7 +80,7 @@ def test_f03_fault_before_start_inhibits_with_cause_and_alarm():
     r = Rig({"pump": _pump()}, {"run": (1, p)})
     r.twin.set_fault("pump", "TRIP")
     r.run(1)
-    with pytest.raises(Refused, match="Fault reads no fault"):
+    with pytest.raises(Refused, match="pump reports Fault: find and clear the fault"):
         r.e.approve_recovery("review", "MANUAL")        # the restart checklist shows the fault
     assert r.alarms[("EQUIPMENT_FAULT", "pump")] is True
     r.twin.set_fault("pump", None)
@@ -137,7 +137,7 @@ def test_f03_required_fault_input_without_a_channel_is_unknown_and_inhibits():
     p = prog({"type": "MANUAL"}, {"type": "RUN_FOR", "item": "pump", "duration_s": 5})
     r = Rig({"pump": item}, {"run": (1, p)})
     r.run(1)
-    with pytest.raises(Refused, match="UNKNOWN"):
+    with pytest.raises(Refused, match="pump Fault has no verified channel: assign its channel on Equipment"):
         r.e.approve_recovery("review", "MANUAL")
 
 
@@ -195,7 +195,8 @@ def test_f04_same_scenario_gives_the_same_result_at_every_batch_size():
         assert len(res) == 1 and res[0]["result"] == "DONE", (b, res)
     vols = [res[0]["measured_L"] for res in out.values()]
     assert max(vols) - min(vols) <= 1e-6                  # identical steps: identical integration
-    assert 1.0 <= vols[0] <= 1.0 + 20.0 * 0.5 / 60.0 + 1e-6   # target plus at most one step of 20 L/min
+    # target plus the water measured while the pump stops (R913-02), at 20 L/min
+    assert 1.0 <= vols[0] <= 1.0 + 20.0 * 2.0 / 60.0 + 1e-6
 
 
 def test_f04_readings_published_each_step_carry_that_steps_value():

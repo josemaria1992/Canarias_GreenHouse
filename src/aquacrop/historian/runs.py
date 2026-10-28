@@ -156,7 +156,37 @@ def configuration(hist, at_utc: str, body: dict, held: dict | None = None) -> di
                        "never applied to this view"}
 
 
+# owner, 28 Oct 2026: every program alarm in the operator's words, with what to do
+PROGRAM_ALARM_WORDS = {
+    "PROGRAM_STOP_UNVERIFIED": ("a stop is not verified{detail}", "the controller keeps sending OFF; check at the "
+                                "equipment that it really stopped, and switch it off at the panel if it stays on"),
+    "PROGRAM_OP_FAILED": ("the program stopped or could not start{detail}", "fix the cause named here, then run it again"),
+    "PROGRAM_RUNTIME_GUARD": ("the program stopped at its safety limit (maximum running time or volume)",
+                              "check that water flows as expected and that the limit fits the program"),
+    "PROGRAM_GUARD": ("a stop condition could not be read, so the program stopped for safety{detail}",
+                      "check that sensor (Equipment shows its reading)"),
+    "PROGRAM_PUMP_FAILED": ("a pump failed{detail}", "the other pump of the pair takes over; check the failed pump"),
+    "PROGRAM_CONFLICT": ("two programs need the same equipment", "choose on Operation which one continues"),
+    "EQUIPMENT_FAULT": ("equipment reports a fault{detail}", "find and clear the fault at the equipment; nothing starts "
+                        "on it until it clears"),
+    "RECOVERY_APPROVAL_REQUIRED": ("the controller restarted", "nothing runs until the restart checklist is approved on "
+                                   "Operation"),
+}
+
+
+def _alarm_words(p: dict, active: bool) -> str:
+    rule = p.get("rule") or p.get("rule_id") or ""
+    what, fix = PROGRAM_ALARM_WORDS.get(rule, (rule.replace("_", " ").lower() or "an alarm", "see the details"))
+    d = p.get("why") or p.get("message") or p.get("item") or ""
+    if isinstance(p.get("items"), list) and p["items"]:
+        d = "; ".join(map(str, p["items"]))
+    what = what.format(detail=f": {d}" if d else "")
+    return f"{what}. What to do: {fix}." if active else f"cleared: {what.split(':')[0]}"
+
+
 def _words(kind: str, p: dict) -> str:
+    if kind in ("PROGRAM_ALARM_RAISED", "PROGRAM_ALARM_CLEARED"):
+        return _alarm_words(p, kind.endswith("RAISED"))
     if kind == "PROGRAM_OP_STARTED":
         return f"started ({p.get('origin', '').lower()}), limit {p.get('limit_s')} s"
     if kind == "PROGRAM_STEP":

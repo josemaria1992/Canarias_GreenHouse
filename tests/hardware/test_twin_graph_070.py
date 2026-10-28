@@ -71,7 +71,8 @@ def test_twin08_program_runs_over_the_graph_and_proof_follows_connections_not_dr
     twin.post("/api/twin/control", json={"action": "step", "steps": 200}, headers=H)
     v = twin.get("/api/twin").json()
     res = v["results"][-1]
-    assert res["result"] == "DONE" and 10 <= res["measured_L"] <= 10 + 20 * 0.5 / 60 + 1e-6, res
+    # R913-02: the record also counts the water measured while the pump stops (here about one tick at 20 L/min)
+    assert res["result"] == "DONE" and 10 <= res["measured_L"] <= 10 + 20 * 2.0 / 60 + 1e-6, res
     gw = v["graph_water"]
     assert gw["model"] == "graph-water-2" and abs(gw["ledger"]["residual_L"]) < 1e-6
     assert gw["sectors"]["sector-1"]["delivered_L"] >= 10 and gw["tanks"]["tank-1"]["L"] < 100

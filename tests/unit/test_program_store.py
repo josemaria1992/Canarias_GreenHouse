@@ -24,7 +24,7 @@ def test_a_validated_version_that_fails_revalidation_is_invalid_not_editable_and
     v = store.mark_validated("vicente", "p", 1, ["led1 has no command channel"], {})
     assert v["status"] == "INVALID"
     assert "p" not in store.active("TWIN")
-    with pytest.raises(ProgramRefused, match="not a draft"):
+    with pytest.raises(ProgramRefused, match="is validated and cannot change: use Change"):
         store.save_draft("vicente", "p", "Lamp", BODY | {"action": BODY["action"] | {"duration_s": 50}}, version=1)
     assert store.save_draft("vicente", "p", "Lamp", BODY)["version"] == 2    # the fix is the next version
     with pytest.raises(ProgramRefused, match="not validated"):

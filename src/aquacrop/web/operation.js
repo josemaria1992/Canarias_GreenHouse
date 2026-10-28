@@ -38,7 +38,8 @@
           : pill("NO TEST SESSION: programs cannot switch outputs (arm one on the I/O board)", "warn")),
       v.last_error ? h("p", { class: "bad small" }, "Engine error: " + v.last_error) : null);
     const rec = v.mode === "RECOVERY" ? h("div", { class: "card bad" }, h("h3", null, "Restart: check, then approve"),
-      h("ul", null, v.checklist.map(c => h("li", null, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`))),
+      h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`,
+        !c.ok && c.fix ? h("div", { class: "small" }, "What to do: " + c.fix) : null))),
       ["MANUAL", "AUTO"].map(t => h("div", null, h("strong", null, `Approve into ${t}`), h("ul", { class: "small" }, v.consequences[t].map(x => h("li", null, x))),
         h("button", { disabled: !pc || v.checklist.some(c => !c.ok), onclick: () => { if (confirm(`Approve the restart into ${t}?\n\n` + v.consequences[t].join("\n"))) send("/api/operation/recovery/approve", { target: t }, `approved into ${t}`); } }, `Approve into ${t}`))),
       h("p", { class: "muted small" }, "Approving does not clear a fault; every check must pass first. Interrupted operations never resume.")) : null;

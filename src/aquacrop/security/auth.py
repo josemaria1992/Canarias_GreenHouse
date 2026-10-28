@@ -74,6 +74,16 @@ PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.OPS_READ: Role.OPERATOR, Perm.ADMI
 # operator sends a module request instead.
 COMMISSIONING_PERMS = (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP)
 
+def needs_text(perm: "Perm") -> str:
+    """Who may do this, in the operator's words, for a refusal (owner, 28 Oct 2026: say what to do)."""
+    role = PERM_MIN_ROLE.get(perm, Role.ADMIN)
+    who = {Role.VIEWER: "any signed-in account", Role.OPERATOR: "an operator or administrator account",
+           Role.ADMIN: "an administrator account"}[role]
+    if perm in COMMISSIONING_PERMS:
+        who = "an administrator, or an operator with Commissioning ticked on their account"
+    return f"this needs {who} (right: {perm.value}); ask an administrator if your account should have it"
+
+
 # Navigation per role (exactly the specified pages; the web shell and the tests read this).
 NAVIGATION = {
     "viewer": ["overview", "programs", "alarms"],

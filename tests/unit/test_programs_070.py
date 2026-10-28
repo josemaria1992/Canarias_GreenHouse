@@ -95,7 +95,7 @@ def test_prog04_start_condition_unknown_or_false_prevents_the_start_and_true_all
     r.e.approve_recovery("t", "MANUAL")
     r.twin.set_input("analog_A.AI2", None)                        # the level reading is lost
     r.run(1)
-    with pytest.raises(Refused, match="UNKNOWN"):
+    with pytest.raises(Refused, match="cannot be read"):
         r.e.run_now("t", "p")
     r.twin.set_input("analog_A.AI2", 50.0)                        # 50 cm, below 100
     r.run(1)

@@ -125,7 +125,8 @@
     if (e.mode === "STOPPING") kids.push(h("p", { class: "warn" }, "Stopping every automatic operation; MANUAL is reached only when each stop is verified."));
     if (e.mode === "RECOVERY" && v.checklist) {
       kids.push(h("div", { class: "card" }, h("strong", null, "After a restart: check, then approve"),
-        h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`))),
+        h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`,
+          !c.ok && c.fix ? h("div", { class: "small" }, "What to do: " + c.fix) : null))),
         ["AUTO", "MANUAL"].map(t => h("div", null, h("strong", null, `Approve into ${t}:`),
           h("ul", { class: "small" }, v.consequences[t].map(x => h("li", null, x))),
           twice("approve-" + t, `Approve into ${t}`, `Press again to approve into ${t}`, "", !ok,
