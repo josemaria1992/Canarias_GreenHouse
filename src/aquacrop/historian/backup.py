@@ -104,6 +104,19 @@ def _fsync_dir(d: Path) -> None:
         os.close(fd)
 
 
+def _replace(tmp: Path, path: Path, attempts: int = 60) -> None:
+    """os.replace, retried for about three seconds when Windows refuses it because a reader (another thread, an
+    antivirus or a sync client) has the target open; anything else, or the last refusal, is raised."""
+    for i in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if os.name != "nt" or i == attempts - 1:
+                raise
+            time.sleep(0.05)
+
+
 def _write_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".partial")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -111,7 +124,7 @@ def _write_atomic(path: Path, text: str) -> None:
         f.flush()
         os.fsync(f.fileno())
     _private(tmp)
-    os.replace(tmp, path)
+    _replace(tmp, path)
     _fsync_dir(path.parent)
 
 

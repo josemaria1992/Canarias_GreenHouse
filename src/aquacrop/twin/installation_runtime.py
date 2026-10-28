@@ -311,11 +311,29 @@ class InstallationRuntime(SimulationRuntime):
         self._event("ACTUATOR_FAULT", {"kind": kind, "ident": ident, "fault": fault}, actor)
 
     # ------------------------------------------------------------------ external inputs (journaled)
-    def process_request(self, actor: str, pid: str, target: ControllerState) -> tuple[bool, str]:
+    def _changed_since_preview(self, actor: str, pid: str, expect: ControllerState | None) -> str | None:
+        """0.7.0 (R34-01): a request made from a preview carries the state that preview showed. If another session
+        changed it meanwhile, the consequences shown are no longer the ones that would happen: refuse, send nothing."""
+        if expect is None:
+            return None
+        cur = self.sup.process(pid).state
+        if cur == expect:
+            return None
+        msg = (f"{pid} changed from {expect.value} to {cur.value} since your preview; nothing was sent. "
+               "Look at the new situation and confirm again")
+        self._event("PROCESS_REQUEST_STALE_PREVIEW", {"process": pid, "expected": expect.value, "now": cur.value}, actor)
+        return msg
+
+    def process_request(self, actor: str, pid: str, target: ControllerState,
+                        expect: ControllerState | None = None) -> tuple[bool, str]:
+        if (msg := self._changed_since_preview(actor, pid, expect)) is not None:
+            return False, msg
         self._record("PROCESS_REQUEST", actor, {"process": pid, "target": target.value})
         return self.sup.request(pid, target, actor, self.make_ctx())
 
-    def process_manual(self, actor: str, pid: str, op: dict) -> tuple[bool, str]:
+    def process_manual(self, actor: str, pid: str, op: dict, expect: ControllerState | None = None) -> tuple[bool, str]:
+        if (msg := self._changed_since_preview(actor, pid, expect)) is not None:
+            return False, msg
         self._record("PROCESS_MANUAL", actor, {"process": pid, "op": dict(op)})
         return self.sup.manual(pid, dict(op), actor, self.make_ctx())
 

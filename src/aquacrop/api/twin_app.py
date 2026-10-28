@@ -16,6 +16,7 @@ import contextlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -25,16 +26,19 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from fastapi.exceptions import RequestValidationError
 
+from ..twin.nutrient_sim import Preparation, simulate as simulate_preparation
 from .. import __version__, layout
 from ..domain.model import new_id
 from ..historian.writer import Historian
 from ..programs.engine import Refused
 from ..programs.schedule import upcoming
 from ..programs.store import ProgramRefused
-from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret
+from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, load_or_create_secret, needs_text
 from ..twin import feed
 from . import pages
 from ..equipment.definitions import TypeBody, channel_issues
+from ..blocks.store import BlockRefused
+from ..build import identity as build_identity, publish as publish_identity
 from ..twin.changes import ChangeRefused, TwinChanges, preview as changes_preview, program_items, write_export
 from ..twin.equipment_service import EquipmentTwinService, twin_config
 from .app import safe_validation_response
@@ -55,6 +59,21 @@ class LoginIn(_B):
 
 class TicketIn(_B):
     ticket: str = Field(max_length=512)
+
+
+class ModuleIn(_B):
+    device_uid: str = Field(max_length=32)
+    model: str = Field(max_length=64)
+    label: str = Field(default="", max_length=80)
+
+
+class ModuleRefIn(_B):
+    device_uid: str = Field(max_length=32)
+
+
+class GraphLevelIn(_B):
+    node: str = Field(max_length=48)
+    litres: float = Field(ge=0, le=1e7)
 
 
 class LayoutIn(_B):
@@ -152,13 +171,33 @@ class AcceptIn(ProgramRefIn):
     note: str = Field(default="", max_length=500)
 
 
+class DesignImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replace: bool = False                 # replace a twin design that was not exported (the second press)
+
+
+class ReconcileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answers: dict[str, Literal["yes", "no", "parallel"]] = Field(max_length=2000)    # question id -> the owner's factual answer
+    replace: bool = False
+
+
+class ProposalIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str = Field(pattern=r"^drawing-[0-9a-f]{16}\.json$")
+    replace: bool = False
+
+
 def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_hosts: list[str],
                     allowed_origins: list[str], bind_host: str = "127.0.0.1", session_id: str | None = None) -> FastAPI:
     feed_dir, state_dir = Path(feed_dir), Path(state_dir)
+    publish_identity(feed_dir, "TWIN")
     snap = feed.read_snapshot(feed_dir)
     if snap is None:
         raise RuntimeError(f"no live snapshot in {feed_dir}: start the live service first")
-    cfg = twin_config(snap["config"], allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
+    from ..twin.virtual_modules import VirtualModules, VirtualRefused, WORDS as MODULE_WORDS
+    virtual = VirtualModules(state_dir / "virtual-modules.json")       # 0.7.0: modules that exist only in the twin
+    cfg = twin_config(snap["config"], allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, virtual=virtual)
     session_id = session_id or new_id("twin")
     hist = Historian(state_dir / cfg.historian.db_path, cfg, session_id)
     rows = hist.query("SELECT DISTINCT profile FROM process_sessions WHERE session_id != ?", (session_id,))
@@ -171,6 +210,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     limiter = RateLimiter()
     tickets = feed.TicketCheck(feed_dir)
     svc = EquipmentTwinService(cfg, hist, session_id, feed_dir)
+    svc.virtual = virtual
     svc.changes = TwinChanges(state_dir / "changes.json")
     svc.sync_users(accounts)
     loopback = sec.loopback_http_cookie_exemption and bind_host in ("127.0.0.1", "localhost", "::1")
@@ -234,14 +274,14 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 except AuthError as e:
                     return deny(e.status, str(e), p.username)
                 if not limiter.hit(f"mut:{p.session_hash}", sec.mutation_rate_per_minute):
-                    return deny(429, "rate limit", p.username)
+                    return deny(429, "too many requests in a short time: wait a moment, then try again", p.username)
                 if path != "/api/auth/logout" and request.headers.get("x-runtime-id") != svc.runtime_id:
                     return deny(409, "this page belongs to another runtime or an earlier twin run; reload it",
                                 p.username)
             request.state.principal = p
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers[pages.VERSION_HEADER] = __version__
+        resp.headers[pages.VERSION_HEADER] = build_identity()["build"]
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -254,7 +294,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         def dep(request: Request) -> Principal:
             p: Principal = request.state.principal
             if not p.can(perm):
-                raise HTTPException(403, f"permission {perm.value} required")
+                raise HTTPException(403, needs_text(perm))
             return p
         return dep
 
@@ -279,11 +319,15 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         if not origin_ok(request):
             raise HTTPException(403, "origin not allowed")
         if not limiter.hit(f"login:{request.client.host if request.client else '-'}", sec.login_rate_per_minute):
-            raise HTTPException(429, "rate limit")
+            raise HTTPException(429, "too many sign-in attempts: wait a minute, then try again")
         try:
             token, p = accounts.login(body.username, body.password, request.client.host if request.client else "-")
         except AuthError:
-            raise HTTPException(401, "login failed")
+            raise HTTPException(401, "sign-in failed: check the user name and password (an administrator can "
+                                     "reset a forgotten password or re-enable a disabled account)")
+        if not p.can(Perm.OPS_READ):                 # 0.7.0 role matrix: no twin for viewers (ADR-0023)
+            accounts.revoke(p.session_hash, "viewer: no digital twin")
+            raise HTTPException(403, "the digital twin is for operators and administrators; a viewer account sees the Overview, Programs and Alarms of the real system")
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
                             secure=request.url.scheme == "https" or not loopback, path="/",
                             max_age=sec.session_absolute_hours * 3600)
@@ -297,7 +341,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         if not origin_ok(request):
             raise HTTPException(403, "origin not allowed")
         if not limiter.hit(f"login:{request.client.host if request.client else '-'}", sec.login_rate_per_minute):
-            raise HTTPException(429, "rate limit")
+            raise HTTPException(429, "too many sign-in attempts: wait a minute, then try again")
         try:
             user = tickets.username(body.ticket)
         except (ValueError, KeyError):
@@ -306,6 +350,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             token, p = accounts.open_session(user, request.client.host if request.client else "-")
         except AuthError:
             raise HTTPException(401, "your login has not reached the twin yet; try again in 30 seconds")
+        if not p.can(Perm.OPS_READ):
+            accounts.revoke(p.session_hash, "viewer: no digital twin")
+            raise HTTPException(403, "the digital twin is for operators and administrators; a viewer account sees the Overview, Programs and Alarms of the real system")
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
                             secure=request.url.scheme == "https" or not loopback, path="/",
                             max_age=sec.session_absolute_hours * 3600)
@@ -328,16 +375,20 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         if svc.loop_error:
             return JSONResponse({"ok": False, "runtime": "TWIN", "error": "simulation loop failed; it is paused"},
                                 status_code=503)
-        return {"ok": True, "runtime": "TWIN"}
+        return {"ok": True, "runtime": "TWIN", "version": __version__, "build": build_identity()["build"]}
 
     # ------------------------------------------------------------------ the twin
     @app.get("/api/twin")
-    def twin_view(p: Principal = Depends(require(Perm.READ))):
+    def twin_view(p: Principal = Depends(require(Perm.OPS_READ))):
         v = svc.view()
         v["programs"] = _programs()
         v["checklist"] = svc.engine.checklist() if svc.engine.mode == "RECOVERY" else None
         v["consequences"] = ({t: svc.engine.approval_consequences(t) for t in ("AUTO", "MANUAL")}
                              if svc.engine.mode == "RECOVERY" else None)
+        from ..build import partner, web_drift
+        v["identity"] = {"runtime": "TWIN", "build": build_identity()["build"], "web_drift": web_drift(),
+                         "partner": partner(feed_dir, "MAIN"),
+                         "project": {"config_id": cfg.config_id, "config_version": cfg.config_version}}
         return v
 
     def _programs() -> list[dict]:
@@ -379,6 +430,11 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                     raise HTTPException(422, "start time: YYYY-MM-DDTHH:MM")
             svc.reset(p.username, start)
         return {"ok": True}
+
+    @app.post("/api/twin/nutrient/simulate")
+    def nutrient_simulate(body: Preparation, p: Principal = Depends(require(Perm.OPS_READ))):
+        """PROG-10: a labelled simulation of a nutrient preparation (synthetic fixture). Nothing is dosed or stored."""
+        return simulate_preparation(body)
 
     @app.post("/api/twin/fault")
     def fault(body: FaultIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
@@ -478,6 +534,67 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         return _lay_cache["digest"], _lay_cache["doc"]
     svc.layout_fn = layout_now
 
+    # ------------------------------------------------------------------ blocks and the explicit graph (0.7.0)
+    from ..blocks.store import BlockStore
+    from ..equipment.views import views_hydraulic
+    from . import blocks as block_routes
+    def public_ids() -> dict[str, str]:              # 0.7.1: the IDs people see, as the main dashboard has them
+        return {i["item_id"]: i.get("public_id") or i["item_id"]
+                for i in ((svc.snap or {}).get("equipment") or {}).get("items", [])}
+    svc.blocks = BlockStore(hist, items=lambda: {k: v | {"public_id": public_ids().get(k, k)}
+                                                 for k, v in views_hydraulic(svc.items.views()).items()})
+    app.state.blocks = svc.blocks
+    block_routes.register(app, require, svc.blocks, legacy_layout=lambda: (draft()[0], draft()[1]))
+    from . import runs as run_routes
+    run_routes.register(app, require, hist, svc.programs)
+
+    @app.get("/api/twin/modules")
+    def modules_view(p: Principal = Depends(require(Perm.OPS_READ))):
+        sim = virtual.uids()
+        return {"simulated": virtual.all(), "models": MODULE_WORDS,
+                "real": [{"device_uid": d.device_uid, "model": d.model.value, "label": d.label} for d in svc.cfg.devices
+                         if d.device_uid not in sim],
+                "meaning": "A simulated module exists in this twin only: the real system never sees it, and equipment "
+                           "on its channels cannot be sent to the real system."}
+
+    @app.post("/api/twin/modules")
+    def module_add(body: ModuleIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        live = {d["device_uid"] for d in (svc.snap or {}).get("config", {}).get("devices", [])}
+        try:
+            dev = virtual.add(body.device_uid, body.model, body.label, live)
+        except VirtualRefused as e:
+            raise HTTPException(409, str(e))
+        svc.rebuild_modules(p.username)
+        hist.event("TWIN_MODULE_ADDED", dev, actor=p.username)
+        return {"module": dev, "runtime_id": svc.runtime_id,
+                "note": "added; the twin was reset to a new run with the new channels"}
+
+    @app.post("/api/twin/modules/remove")
+    def module_remove(body: ModuleRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        try:
+            virtual.remove(body.device_uid)
+        except VirtualRefused as e:
+            raise HTTPException(409, str(e))
+        svc.rebuild_modules(p.username)
+        hist.event("TWIN_MODULE_REMOVED", {"device_uid": body.device_uid}, actor=p.username)
+        return {"removed": body.device_uid, "runtime_id": svc.runtime_id}
+
+    @app.post("/api/twin/graph/level")
+    def graph_level(body: GraphLevelIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
+        """A tank's water in the graph model, as a recorded mass adjustment of this run (0.7.0)."""
+        from ..twin.graph_water import params_from
+        with svc.lock:
+            g = svc.graph()
+            if g is None:
+                raise HTTPException(409, "this twin has no installation design yet: press Import from Overview, "
+                                         "or start a New design, first")
+            try:
+                svc.gwater.set_level(body.node, body.litres, params_from(g, svc.items.views()), f"set by {p.username}")
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+        hist.event("TWIN_GRAPH_LEVEL", {"tank": body.node, "litres": body.litres, "run_id": svc.run_id}, actor=p.username)
+        return {"ok": True}
+
     @app.post("/api/twin/water/level")
     def water_level(body: WaterLevelIn, p: Principal = Depends(require(Perm.SIM_COMMAND))):
         with svc.lock:
@@ -489,7 +606,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     _dia_cache: dict = {}
 
     @app.get("/api/twin/diagram")
-    def diagram(p: Principal = Depends(require(Perm.READ))):
+    def diagram(p: Principal = Depends(require(Perm.OPS_READ))):
         # the drawing, its comparison with the real system's and its issues change only with the draft, the
         # snapshot or the equipment: computed once for each, not on every refresh of the page
         try:
@@ -519,7 +636,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 "issues": layout.issues(lay, svc.items.items), "items": items}
 
     @app.get("/api/twin/frames")
-    def frames(after: float = -1.0, p: Principal = Depends(require(Perm.READ))):
+    def frames(after: float = -1.0, p: Principal = Depends(require(Perm.OPS_READ))):
         with svc.lock:
             frames = list(svc.frames)
             run = svc.run_id
@@ -535,6 +652,171 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         save_draft(lay)
         hist.event("TWIN_LAYOUT_SAVED", {"digest": layout.digest(lay), "symbols": len(lay.nodes)}, actor=p.username)
         return {"digest": layout.digest(lay), "issues": layout.issues(lay, svc.items.items)}
+
+    @app.get("/api/twin/design/proposals")
+    def design_proposals(p: Principal = Depends(require(Perm.OPS_READ))):
+        """Drawings brought in by a project import on the main dashboard (C075-03), to open as the twin's design."""
+        from .. import exchange as xch
+        return {"drawings": xch.drawing_proposals(feed_dir / "proposals")}
+
+    @app.post("/api/twin/design/import-proposal")
+    def design_import_proposal(body: ProposalIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """An imported project's drawing becomes the twin's design (the same guard as Import from Overview); it then
+        follows the normal path: edit, run, Export to Overview, approval on the main dashboard."""
+        from .. import exchange as xch
+        try:
+            d = xch.read_proposal(feed_dir / "proposals", body.file)
+        except xch.ExchangeRefused as e:
+            raise HTTPException(404, str(e))
+        dr = d.get("drawing") or {}
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+        has = bool(cur_t["graph"].get("nodes")) or bool((cur_d.get("diagram") or {}).get("placeholders"))
+        if own and has and not body.replace:
+            raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                     "opening the imported drawing replaces them: press it again to replace them")
+        try:
+            svc.blocks.save_drawing(p.username, "installation", dr.get("graph") or {"nodes": [], "edges": []},
+                                    {k: v for k, v in (dr.get("diagram") or {}).items() if k != "background"},
+                                    expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"],
+                                    note=f"imported project drawing {body.file}")
+        except BlockRefused as e:
+            raise HTTPException(409, f"the imported drawing could not be opened: {e}")
+        hist.event("TWIN_DESIGN_IMPORTED", {"source": "project import", "file": body.file}, actor=p.username)
+        return {"source": "project", "conflicts": d.get("conflicts") or [], "replaced": bool(own and has)}
+
+    @app.post("/api/twin/design/import")
+    def design_import(body: DesignImportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Import from Overview (0.7.1): bring the real system's equipment, programs and approved drawing into the twin
+        as the working design. When the real system has an installation graph, the twin's drawing becomes that graph
+        (a design changed in the twin and not exported is replaced only with `replace`). When it still has only the
+        earlier drawing, the answer is a migration proposal for the editor: nothing is saved until the user saves it,
+        and every ambiguous or unlinked part is listed for the user to decide. Nothing on the real system changes."""
+        refused(svc.import_snapshot, p.username)
+        live = (svc.snap or {}).get("hydraulics") or {}
+        lt, ld = live.get("topology") or {}, live.get("diagram") or {}
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        if (lt.get("graph") or {}).get("nodes"):
+            own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+            differs = cur_t["digest"] != lt.get("digest") or cur_d.get("digest") != ld.get("digest")
+            if own and differs and not body.replace:
+                raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                         "Import from Overview replaces them: press it again to replace them")
+            try:
+                if differs:
+                    svc.blocks.save_drawing(p.username, "installation", lt["graph"], ld.get("diagram") or {},
+                                            expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"],
+                                            note="imported from the Overview")
+            except BlockRefused as e:
+                raise HTTPException(409, f"the Overview's drawing could not be loaded: {e}")
+            hist.event("TWIN_DESIGN_IMPORTED", {"source": "overview graph", "replaced": bool(own and differs)},
+                       actor=p.username)
+            return {"source": "graph", "topology_rev": svc.blocks.topology()["rev"], "replaced": bool(own and differs)}
+        # 0.7.3: the earlier drawing, kept as drawn, becomes the twin's saved design (the same guard against replacing
+        # a design that was not exported); C077-08: with the answers given for this drawing before, applied again
+        return save_legacy(p.username, body.replace, "imported from the Overview's earlier drawing")
+
+    # C077-08: the owner's answers to the earlier drawing's reconciliation questions, kept per drawing (its digest), so
+    # every later Import from Overview of the same drawing is complete without asking again
+    answers_path = state_dir / "legacy-answers.json"
+
+    def answers_doc() -> dict:
+        with contextlib.suppress(OSError, ValueError):
+            return json.loads(answers_path.read_text(encoding="utf-8"))
+        return {}
+
+    def answers_save(doc: dict) -> None:
+        tmp = answers_path.with_name(answers_path.name + ".tmp")
+        tmp.write_text(json.dumps(doc, indent=1, sort_keys=True), encoding="utf-8")
+        tmp.replace(answers_path)
+
+    def legacy_proposal(answers: dict | None = None) -> dict:
+        from ..topology.migrate import propose
+        lay, _ = live_layout()
+        items = svc.blocks.items()
+        rec = answers_doc().get(layout.digest(lay)) or {}
+        return propose(lay, {k: v.get("kind") for k, v in items.items()}, {k: v.get("name") for k, v in items.items()},
+                       answers if answers is not None else rec.get("answers") or {})
+
+    def legacy_view(prop: dict) -> dict:
+        return {k: prop[k] for k in ("ambiguous", "unresolved", "matched", "to_create", "kept", "source", "meaning",
+                                     "questions", "blockers", "ready")}
+
+    def save_legacy(actor: str, replace: bool, note: str, answers: dict | None = None) -> dict:
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        prop = legacy_proposal(answers)
+        digest = prop["source"]["digest"]
+        doc = answers_doc()
+        rec = doc.get(digest) or {}
+        own = cur_t.get("actor") not in (None, "live-snapshot") or cur_d.get("actor") not in (None, "live-snapshot")
+        has = bool(cur_t["graph"].get("nodes")) or bool((cur_d.get("diagram") or {}).get("placeholders"))
+        # the twin's design is still exactly what the last import of this drawing saved: nothing of the user's is lost
+        untouched = rec.get("saved") == [cur_t["rev"], cur_d["rev"]]
+        if own and has and not untouched and not replace:
+            raise HTTPException(409, "the twin's design has changes that were not exported to the Overview; "
+                                     "Import from Overview replaces them: press it again to replace them")
+        try:
+            svc.blocks.save_drawing(actor, "installation", prop["topology"], prop["diagram"],
+                                    expected_topology_rev=cur_t["rev"], expected_diagram_rev=cur_d["rev"], note=note)
+        except BlockRefused as e:
+            raise HTTPException(409, f"the Overview's drawing could not be loaded: {e}")
+        doc[digest] = rec | {"saved": [svc.blocks.topology()["rev"], svc.blocks.diagram("installation")["rev"]]}
+        if answers is not None:
+            doc[digest] |= {"answers": answers, "actor": actor, "utc": datetime.now(timezone.utc).isoformat()}
+        answers_save(doc)
+        hist.event("TWIN_DESIGN_IMPORTED", {"source": "earlier drawing", "kept": prop["kept"], "ready": prop["ready"],
+                                            "questions": len(prop["questions"]), "blockers": len(prop["blockers"]),
+                                            "answered": sum(1 for q in prop["questions"] if q["answer"])},
+                   actor=actor)
+        return {"source": "legacy", "proposal": legacy_view(prop), "replaced": bool(own and has and not untouched)}
+
+    @app.get("/api/twin/design/reconcile")
+    def reconcile_view(p: Principal = Depends(require(Perm.OPS_READ))):
+        """The earlier drawing's reconciliation: the factual questions its geometry raises, with the drawing's
+        suggestion and any answer given, and what still blocks a simulation, by name."""
+        live = (svc.snap or {}).get("hydraulics") or {}
+        if ((live.get("topology") or {}).get("graph") or {}).get("nodes"):
+            return {"drawing": "graph", "questions": [], "blockers": [], "ready": True}
+        view = legacy_view(legacy_proposal())
+        # R402-06: the import's result describes the twin's design only while that design is exactly what the import
+        # saved. A New design, or any edit saved after it, is checked as it is now; the answers stay for a re-import.
+        cur_t, cur_d = svc.blocks.topology(), svc.blocks.diagram("installation")
+        rec = answers_doc().get(view["source"]["digest"]) or {}
+        current = rec.get("saved") == [cur_t["rev"], cur_d["rev"]]
+        out = {"drawing": "legacy", "current": current, "design_rev": [cur_t["rev"], cur_d["rev"]]} | view
+        if not current:
+            nodes = (cur_t.get("graph") or {}).get("nodes") or []
+            errors = [i for i in svc.blocks.topology_issues() if i.get("severity") == "ERROR"]
+            changed = ("The twin's design is empty (a New design)" if not nodes else
+                       "The twin's design was changed after the import")
+            out |= {"import_ready": view["ready"], "ready": False, "blockers": [
+                {"id": "design:changed", "text": f"{changed}: the import's result does not describe it",
+                 "fix": "check the current design (Run in the twin), or Import from Overview again to apply these answers"}]
+                + [{"id": f"graph:{i.get('id')}", "text": i.get("message", ""), "fix": i.get("fix", "")} for i in errors]}
+        return out
+
+    @app.post("/api/twin/design/reconcile")
+    def reconcile(body: ReconcileIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        """Apply the answers in one step: kept for this drawing, then the twin's design is the earlier drawing with them
+        applied (the same guard as Import from Overview). Only a yes connects anything."""
+        refused(svc.import_snapshot, p.username)
+        live = (svc.snap or {}).get("hydraulics") or {}
+        if ((live.get("topology") or {}).get("graph") or {}).get("nodes"):
+            raise HTTPException(409, "the Overview already has an installation graph: there is nothing to reconcile")
+        lay, _ = live_layout()
+        prev = (answers_doc().get(layout.digest(lay)) or {}).get("answers") or {}
+        merged = prev | {k: v for k, v in body.answers.items()}
+        return save_legacy(p.username, body.replace, "the earlier drawing with the reconciliation answers", merged)
+
+    @app.get("/api/twin/design/reference")
+    def design_reference(p: Principal = Depends(require(Perm.OPS_READ))):
+        """The Overview's current drawing, to show when the twin has no design yet (never a blank editor)."""
+        live = (svc.snap or {}).get("hydraulics") or {}
+        lt, ld = live.get("topology") or {}, live.get("diagram") or {}
+        if (lt.get("graph") or {}).get("nodes"):
+            return {"source": "graph", "graph": lt["graph"], "diagram": ld.get("diagram") or {}}
+        pr = legacy_proposal()
+        return {"source": "legacy", "graph": pr["topology"], "diagram": pr["diagram"], "kept": pr["kept"]}
 
     @app.post("/api/twin/layout/start-from")
     def start_from(body: LayoutStartIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
@@ -564,7 +846,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     # ------------------------------------------------------------------ changes for the real system (0.6.0)
     def changed(fn, *a):
         if svc.snap is None:
-            raise HTTPException(409, "no snapshot from the real system yet")
+            raise HTTPException(409, "the twin has not received the real system's data yet: wait a minute; if it stays like this, check that the main dashboard is running")
         with svc.lock:
             if any(o["state"] == "RUNNING" for o in svc.engine.view()["ops"]):
                 raise HTTPException(409, "a program is running in the twin: stop it before changing equipment")
@@ -582,23 +864,25 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
                 out.append(f"{pid} v{ver}")
         return out
 
-    _all_points = sorted(str(x) for x in cfg.all_points())
-    _fits: dict[str, list[str]] = {}
+    # the channel lists follow the twin's current configuration (simulated modules rebuild it), never the boot one
+    _fits: dict[tuple, list[str]] = {}
 
     @app.get("/api/twin/changes")
-    def changes_view(p: Principal = Depends(require(Perm.READ))):
+    def changes_view(p: Principal = Depends(require(Perm.OPS_READ))):
         snap = svc.snap or {"equipment": {"types": [], "items": []}, "bindings": [], "programs": []}
         eff = svc.changes.overlay(snap) if svc.snap else snap
         if svc.snap:
-            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results)
+            pv = changes_preview(snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof,
+                                 virtual.uids(), svc.blocks.export())
         else:
             pv = {"items": [], "bindings": [], "programs": [], "missing": [], "empty": True}
-        all_points = _all_points
+        cur = svc.cfg
+        all_points = sorted(str(x) for x in cur.all_points())
 
         def fitting(role) -> list[str]:          # channels whose kind, direction and interface suit the role
-            key = role.model_dump_json()
-            if key not in _fits:                   # the configuration does not change while the twin runs
-                _fits[key] = [pt for pt in all_points if not channel_issues(cfg, role, pt, None)]
+            key = (cur.config_version, role.model_dump_json())
+            if key not in _fits:
+                _fits[key] = [pt for pt in all_points if not channel_issues(cur, role, pt, None)]
             return _fits[key]
         types = []
         for t in snap["equipment"]["types"]:
@@ -614,6 +898,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             binds.setdefault(b["item_id"], {})[b["role"]] = b["point"]
         doc = svc.changes.doc
         items = [{k: i[k] for k in ("item_id", "name", "type_id", "type_version", "icon", "body", "status")}
+                 | {"public_id": i.get("public_id") or i["item_id"]}
                  | {"bindings": binds.get(i["item_id"], {}),
                     "changed": i["item_id"] in doc["items"] or i["item_id"] in doc["retire"]
                     or any(k.startswith(i["item_id"] + ".") for k in doc["bindings"])}
@@ -623,7 +908,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/equipment/save")
     def eq_save(body: ItemSaveIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
-        r = changed(svc.changes.save_item, svc.snap, cfg, body.item_id, body.name, body.type_id, body.type_version,
+        r = changed(svc.changes.save_item, svc.snap, svc.cfg, body.item_id, body.name, body.type_id, body.type_version,
                     body.icon, body.body)
         hist.event("TWIN_EQUIPMENT_CHANGED", {"item": body.item_id}, actor=p.username)
         return r
@@ -636,7 +921,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
 
     @app.post("/api/twin/equipment/bind")
     def eq_bind(body: BindIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
-        changed(svc.changes.bind, svc.snap, cfg, body.item_id, body.role, body.point)
+        changed(svc.changes.bind, svc.snap, svc.cfg, body.item_id, body.role, body.point)
         hist.event("TWIN_CHANNEL_CHANGED", {"item": body.item_id, "role": body.role, "point": body.point},
                    actor=p.username)
         return {"ok": True}
@@ -670,7 +955,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         from ..equipment.definitions import TEMPLATES
         from ..twin import starter as st
         if svc.snap is None:
-            raise HTTPException(409, "no snapshot from the real system yet")
+            raise HTTPException(409, "the twin has not received the real system's data yet: wait a minute; if it stays like this, check that the main dashboard is running")
         missing = st.missing_types(svc.snap)
         if missing:
             names = ", ".join(TEMPLATES[t]["name"] for t in missing)
@@ -693,7 +978,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
             made = []
             try:
                 for part in todo:
-                    svc.changes.save_item(svc.snap, cfg, part["item_id"], part["name"], part["type_id"],
+                    svc.changes.save_item(svc.snap, svc.cfg, part["item_id"], part["name"], part["type_id"],
                                           active[part["type_id"]], part["icon"], {})
                     made.append(part["item_id"])
             except ChangeRefused as e:
@@ -732,8 +1017,9 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
     @app.post("/api/twin/export")
     def export(body: ExportIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
         if svc.snap is None:
-            raise HTTPException(409, "no snapshot from the real system yet")
-        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results)
+            raise HTTPException(409, "the twin has not received the real system's data yet: wait a minute; if it stays like this, check that the main dashboard is running")
+        pv = changes_preview(svc.snap, svc.changes, svc.programs.versions(), svc.results, svc.current_proof,
+                             virtual.uids(), svc.blocks.export())
         try:
             r = write_export(feed_dir, pv, by=p.username, note=body.note, twin_run=svc.run_id,
                              snapshot_utc=svc.snapshot_utc)
@@ -745,7 +1031,7 @@ def create_twin_app(feed_dir: str | Path, *, state_dir: str | Path, allowed_host
         return r
 
     @app.get("/api/twin/events")
-    def events(p: Principal = Depends(require(Perm.READ))):
+    def events(p: Principal = Depends(require(Perm.OPS_READ))):
         rows = hist.query("SELECT utc, kind, actor, payload_json FROM events ORDER BY id DESC LIMIT 200")
         return [dict(r) for r in rows]
 

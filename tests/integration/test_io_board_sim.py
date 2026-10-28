@@ -57,8 +57,10 @@ def cmd(c, h, target, desired, n=[0]):
 def test_the_board_lists_the_six_virtual_modules(sim):
     app, c = sim
     h = login(c, "view1")
+    assert c.get("/api/board", headers=h).status_code == 403            # 0.7.0: the I/O board is not a viewer's
+    h = login(c, "oper1")
     b = c.get("/api/board", headers=h).json()
-    assert b["mode"] == "SIMULATION" and b["can"] == {"command": False, "assign": False, "all_off": False}
+    assert b["mode"] == "SIMULATION" and b["can"]["assign"] is False
     assert len(b["modules"]) == 6 and sum(len(m["points"]) for m in b["modules"]) == 80
     ai = point(b, "analog_A.AI1")
     assert ai["electrical"]["unit"] == "mA" and ai["model_signal"] == "tank.MAIN.level" and ai["assignment"] is None

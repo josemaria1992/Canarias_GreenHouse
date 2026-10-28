@@ -220,6 +220,49 @@ class AlarmEngine:
                 elif s.quality in GOOD:
                     self.clear("AI_SIGNAL_INVALID", pid)
 
+    # ------------------------------------------------------------------ equipment item limits (0.7.0, ALM-01)
+    def evaluate_item_limits(self, inputs: list[dict], t_s: float, sim_s: float | None) -> None:
+        """Each input: {"item", "name", "role", "label", "unit", "value" (engineering, None = UNKNOWN), "low",
+        "high", "deadband", "delay_s", "quality"}. A limit raises after it has been passed for `delay_s`; it clears
+        only once the value is back inside by the deadband. UNKNOWN neither raises nor clears: the communication
+        and signal alarms say why, and a fault that can no longer be read is not called fixed."""
+        for x in inputs:
+            target = f"{x['item']}.{x['role']}"
+            for kind in ("LOW", "HIGH"):
+                lim = x.get(kind.lower())
+                rule = f"ITEM_{kind}"
+                key = (rule, target)
+                if lim is None:
+                    self._pending_raise.pop(key, None)
+                    if self.is_active(rule, target):
+                        self.clear(rule, target)       # the limit was removed from the item
+                    continue
+                v = x.get("value")
+                if v is None:
+                    continue
+                active = self.is_active(rule, target)
+                db = x.get("deadband") or 0.0
+                cond = (v < lim if not active else v < lim + db) if kind == "LOW" else (v > lim if not active else v > lim - db)
+                if cond and not active:
+                    pend = self._pending_raise.setdefault(key, _Pending(t_s))
+                    if t_s - pend.since_s + 1e-9 < (x.get("delay_s") or 0.0):
+                        continue
+                    self._pending_raise.pop(key, None)
+                    word = "below its low limit" if kind == "LOW" else "above its high limit"
+                    self.raise_or_update(rule, target, severity="WARNING", sim_s=sim_s, value=v, threshold=lim,
+                                         quality=x.get("quality"), origin=x.get("origin"),
+                                         message=f"{x['name']} {x['label']} is {v:g} {x.get('unit') or ''}, {word} "
+                                                 f"{lim:g}. Response: alarm only (programs use their own stop "
+                                                 f"conditions). Check: the reading and the equipment on site.")
+                elif cond:
+                    occ = self.open[key]
+                    occ.last_seen_utc, occ.last_sim_s, occ.value = utcnow(), sim_s, v
+                    self.dirty.add(occ.occurrence_id)
+                else:
+                    self._pending_raise.pop(key, None)
+                    if active:
+                        self.clear(rule, target)
+
     def evaluate_devices(self, device_ok: dict[str, tuple[bool, str | None]], sim_s: float | None) -> None:
         for uid, (ok, err) in device_ok.items():
             if ok:

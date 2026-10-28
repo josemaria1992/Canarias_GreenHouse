@@ -1,5 +1,210 @@
 # Changelog
 
+## 0.7.10 (2026-10-28): review R913, program retirement, messages that say what to do
+
+- A litre target met during a pump changeover stops in the program's own order, each OFF verified (the valve never
+  closes before the failed pump is proven OFF); water measured while the pumps stop counts in the cycle, and a
+  reading lost meanwhile is reported as uncertain volume (R913-01/02).
+- Equipment types: any number of readings of one quantity keep what they measure (R913-03); every request waiting
+  for review stays reachable (R913-04).
+- Programs can be retired by an administrator (history kept; an active program is deactivated first). Litre meters
+  validate in every supported flow unit.
+- Alarm and error messages name the cause and the next step; the restart checklist shows what to do per check.
+  Safety rules are unchanged.
+
+## 0.7.9 (2026-10-28): owner decisions on equipment type requests and access
+
+- A need the equipment type form cannot meet is sent to the operators, who review it and approve or reject it (a
+  reason is required to reject) on Equipment types. Approving changes no type, item, program or output.
+- Operators open Equipment types (drafting with the guided form, requests); activation stays with administrators.
+
+## 0.7.8 (2026-10-27): review C077 and R402, equipment types without code (UX-07)
+
+- Sectors on one pump group take turns; a stop (Stop all, a user stop, leaving AUTO, a lost lease, a changed program)
+  cancels what waits, whether the rest of a cycle or a start waiting its turn; no restart springs back (C077-01/02,
+  R402-01).
+- A failed pump gets OFF again until verified; litres are counted through a changeover; a target met or the volume cap
+  reached meanwhile ends the cycle without starting the spare pump; litres count in the meter's own flow unit
+  (L/min, L/h, m³/h, L/s) and other quantities are refused (C077-03/04/05, R402-02/03).
+- Twin: New design is really empty; an inline meter snaps to the grid and turns; the earlier drawing imports with its
+  connections and one reconciliation (yes / no / parallel spare); its completion describes only the design it saved
+  (C077-06/07/08, R402-06).
+- Equipment types: a guided form replaces the JSON editor (kind, icon gallery with the real diagram symbol, relevant
+  questions, Add a feature, a summary in words); a new or copied type asks every contact's polarity; what a reading
+  measures persists (UX-07, R402-04/05).
+
+## 0.7.7 (2026-10-27): owner answers on pump replacement
+
+- Either pump serves either sector (the block's duty pair). When the healthy pump is busy with the other sector, the
+  interrupted cycle stops through its normal stop and its remaining time or litres wait; once the pump is free the
+  rest starts again on it. Sectors are never watered together and never interrupted for one another.
+- The changeover is not watering; litre cycles deliver exactly their litres.
+
+## 0.7.6 (2026-10-27): review C075-01..07, owner decisions, setup journey UX-01..06
+
+Review fixes: the standby pump is part of every proof context (C075-01); the duty pair can be chosen (C075-02); the
+project export carries the Overview drawing faithfully, imported items and drawings have a continuation (C075-03);
+an import applies only what was previewed, against the installation as previewed (C075-04); run history and charts
+use the context held at the run start (C075-05); a refused tank move restores everything (C075-06); malformed
+project records are refused by name (C075-07).
+
+Owner decisions: programs on superseded block safety cannot start until reviewed, validated and twin-tested; a duty
+pump failing mid-cycle is replaced by its partner for the rest of the cycle (OFF verified first, valves kept, limits
+not extended; refused with a reason when the partner is busy or not ready).
+
+Setup journey: Blocks explain empty choices by the missing stage (UX-01); a flow meter is inserted into a pipe
+(UX-02); earlier pipes, links and measurements are explained, confirmable and in a legend (UX-03); a Finish checklist
+in the twin (UX-04); built-in types such as Tank are discoverable and made available in one step (UX-05); type
+editors keep their own open state and unsaved text through refreshes (UX-06).
+
+## 0.7.5 (2026-10-27): Python 3.11 controller fix
+
+- 0.7.4's program authoring used a nested f-string that Python 3.11 (the CM4's) cannot parse: program preview and
+  save failed on the bench. Fixed in 2b3b8a8; the whole tree is compiled with the bench's Python 3.11 before release.
+- The owner tour presses Stop all only when it can act; backup state writes retry a Windows file lock.
+
+## 0.7.4 (2026-10-27): owner corrections to 0.7.3 and the open features
+
+Owner corrections (docs/reviews/2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md):
+- Program Preview/Save name the field and say how to fix it; the block step says when a newer block version exists.
+- The earlier Overview drawing is converted faithfully (sizes, labels, boxes, routes kept; unmapped symbols as
+  marked placeholders; unconnected pipes as sketches) and drawn by one renderer on Overview, Twin and Blocks. Import
+  from Overview saves it in the twin; with no twin design the Overview's drawing is shown as the reference.
+- Tanks get a schematic size from their capacity (same rule in server and browser; shown on Equipment). A level
+  sensor dropped on a tank is associated with it (no pipe), moves with it and can be undone.
+- Equipment types sits beside Equipment; the Blocks shortcuts are gone; blocks have their own start and stop
+  conditions, applied to every program over them (an unknown reading never permits a start).
+
+Open features:
+- IMPORT-01 project exchange (JSON/YAML) with a record-by-record preview; DRAFTs only, proposals for items and the
+  drawing; secrets, leases, sessions, bindings excluded; malformed, oversized and path-escaping documents refused.
+- PROG-09 drainage lead alternation with standby response; PROG-10 labelled simulated nutrient preparation (real
+  dosing stays blocked on the real system).
+- HIST-03 a run's configuration as executed (block, item and binding versions, what changed since); DATA-01 a run
+  chart of its channels with gaps, digital lanes and the timeline as annotations, and a chart link per item.
+
+## 0.7.3 (2026-10-27): the twin can read the main dashboard's build
+
+- The main dashboard's identity file in the feed folder was written readable by its own account only (the service's
+  umask), so the twin could not compare builds. It is now written like the feed's other files (owner and the twin's
+  group may read it), and the twin also reads the build named in the main dashboard's snapshot. Found when 0.7.2 was
+  installed on the bench.
+
+## 0.7.2 (2026-10-27): the twin reports its build where it may write
+
+- On the controller the twin's account may write only in the feed's `evidence` folder, so its build identity was not
+  published and the main dashboard could not confirm that the twin runs the same build. The twin now writes it there
+  (`aquacrop.build`), and the main dashboard reads it there. Found when 0.7.1 was installed on the bench.
+- Everything in 0.7.1 below, including the conversion of pre-0.7 drawings (tank, sector and source symbols matched to
+  items of that kind by name; water kinds of pre-0.7 types from their built-in template).
+
+## 0.7.1 (2026-10-27): the owner's approved page structure, editable IDs, windows, one bench application
+
+Owner decisions of 26 October 2026 (`OWNER_APPROVED_DECISIONS.md`) and the independent re-review of `7bc098c`.
+Software and simulation only, plus the bench deployment recorded in `docs/RESULTS-0.7.1.md`; no physical output was
+switched for this release. ADR-0023 to ADR-0026 amended, ADR-0027 new.
+
+- **Review corrections RR-01 to RR-04 (ADR-0026 amendment).** A pump verified OFF during a stop stays the stop's duty:
+  if it runs again before a dependent valve closes, the valve stays open, the stop holds with an alarm and OFF is sent
+  again until it is proven off, then the wait starts over. Changes from the twin: a block version that a compensation
+  took back is reported as undone, never applied; an interrupted drawing change is checked by both its graph and its
+  drawing and keeps what Undo needs (no false "graph changed"); listing the change records never writes them, and a
+  late copy can never overwrite a newer record.
+- **Overview is the installation's drawing.** The drawing exported from the Digital Twin and applied, with each item's
+  state written on it (running, stopped, open, closed, UNKNOWN, fault, INCOMPLETE, PLANNED · UNASSIGNED). The separate
+  "What is happening now", tanks and sectors panels are gone; alarms, modules that do not answer and whether physical
+  writes are possible stay above the details. Until a drawing is applied, the earlier one stays with a note saying how
+  its successor is made.
+- **Equipment** is its own page for operators and administrators: Name then ID (the ID follows the name, `Valve 1` →
+  `Valve_1`, until you change it), type, icon (names start with a capital). IDs keep the case typed and can be changed
+  after creation; a change keeps every channel, block, program, schedule and history entry pointing at the same
+  equipment (ADR-0027). The same for program IDs.
+- **Blocks** associates equipment and holds the safety settings: no drawing editor and no equipment library any more,
+  a read-only drawing to find members, members chosen by type (Valves → Valve_1, Valve_2), and the **maximum runtime**
+  of one operation configured once per block. The stretched, off-centre option circle and the unequal checkboxes are
+  fixed: every checkbox and option circle is the same 18 px square on the text's line, with a visible keyboard focus.
+- **Programs**: how much is *water for* a time or *deliver* litres, once per cycle; when is windows (start and finish)
+  on chosen days with the wait after each cycle. The first cycle of a window does not wait; at the finish the cycle is
+  stopped (an unmet volume is reported as such, never done); the next window starts its own first cycle as soon as the
+  earlier one is verified stopped, without the earlier wait; a window that ends while it waits never starts late. Each
+  program's state is shown (watering, stopping, waiting and why, resting, waiting for its window). Programs written
+  with the 0.7.0 form open as a new draft with windows to review.
+- **Digital Twin is where the installation is drawn**: Import from Overview, New design, Edit, Save in the twin, run it,
+  Export to Overview; the main dashboard approves and applies it, and Undo takes it back. The twin's own equipment form
+  and JSON program editor are gone (equipment is made on Equipment, programs on Programs). Simulated modules are made
+  only in the twin; their channels stay in the twin and never go with an export.
+- **Drawing editor**: aligned equipment gets a straight pipe (ports level when dragged or connected; *Straighten
+  pipes* for an imported drawing; the step in the owner's screenshot is gone), a pipe starts from a free outlet of the
+  selected symbol, free inlets it can feed are green with a ring and the others say why not, Escape cancels, ports can
+  be moved along their symbol, the equipment list is grouped by type.
+- **Add Module** is for real modules: administrators and operators with commissioning prepare one with the address
+  wizard (ADR-0023 amendment); other operators send a request, which is recorded on the bench and followed there
+  (requested, being prepared, waiting for the configuration, added, rejected, closed). Nothing is emailed; a request is
+  Added only when the module is in the running configuration.
+- **One build identity** (ADR-0027): version, source commit and a digest of the web files, in the page header, the
+  health answer and as the browser's cache key, so a page never runs scripts of another build. The main dashboard and
+  the twin each warn when the other runs a different build.
+- Database schema 7 (public IDs and their log, module requests; requests recorded by 0.7.0 are carried over). 0.7.0
+  and 0.6.x refuse a schema 7 database: going back needs the pre-upgrade backup (`docs/operations/upgrade-0.7.md`).
+
+## 0.7.0 (2026-10-26): blocks, an explicit installation graph, programs from forms
+
+Owner upgrade brief of 25 October 2026. Simulation and software only: no physical result was produced for this
+release. What each capability is today: `docs/CAPABILITIES-0.7.md`. Upgrading and going back:
+`docs/operations/upgrade-0.7.md`. A tour with screenshots: `docs/operator/walkthrough-0.7.md`.
+
+- **Corrections from the independent review of 26 October (R07-01 to R07-04, ADR-0026 amendment).**
+  - A twin test counts on the real system only for the equipment, channels, settings and water network it was
+    run with. After a rebinding or another such change the program shows "twin test outdated", cannot be
+    activated, and an already active version does not start again until it is tested in the twin again. A run in
+    progress keeps the outputs it switched on.
+  - A block's stop plans now run as written: stopped early by a user, a guard time or a window, a program follows
+    the block's normal stop; after a failure or a stop condition, the block's fault stop, with its waits, each
+    stop verified before the next step. An unverified stop holds the rest of the plan and raises an alarm. The
+    preview says which plan applies when.
+  - Twin water: a pump feeding two branches never gives more than its rated flow in all, also with a booster on
+    one branch (water model `graph-water-2`; earlier graph-model twin results become history).
+  - Changes from the twin: when the change record cannot be written during an apply or its undo, the answer says
+    so and this process keeps the true record; the next start checks every step recorded as done against the real
+    system, so a step already taken back is never reported as applied. Short Windows file locks are retried.
+- **Who sees what (ADR-0023).** The menu follows the account's role and the server refuses everything else.
+  Viewers see Overview, Programs and Alarms only; they no longer open history, equipment, modules or the twin.
+  Operators build equipment, drawings, blocks and programs, propose channels and request modules; writing a new
+  module's address and modes is an administrator's task, even for operators with the commissioning flag. An old
+  link to a page the role cannot open says which role it needs.
+- **The installation graph (ADR-0024).** Blocks → Installation drawing: place equipment, connect an outlet to the
+  inlet it feeds, add junctions where pipes really join. Pipes are drawn with horizontal and vertical segments
+  only, while dragging too; moving a symbol or a segment changes the drawing, never the connections, and two
+  pipes that cross show a gap and stay apart. Works with the mouse, touch and the keyboard. The 0.6 drawing stays
+  as a read-only reference and can be loaded as a draft with every ambiguity listed.
+- **Blocks.** A block is one purpose (water a sector, fill a tank, return drainage) over equipment you already
+  have: where the water comes from, where it goes, the path along the drawn pipes, the meter on that path, and an
+  example startup and stop plan to check.
+- **Programs from forms (ADR-0025).** Where, how much (time, measured volume, or by hand within a maximum), when
+  (days and times, a date range, a repeat inside a window), start and stop conditions. Preview shows the exact
+  steps the engine will run. No JSON. Older programs keep running unchanged.
+- **Equipment from forms.** Typed properties with units, scaling and alarm limits (with delay and deadband);
+  tanks, water sources and sectors need no channel. Alarm limits are evaluated on real readings of verified
+  channels and in the twin.
+- **Safer runs.** Every switch ON checks the item's limits (minimum off time, starts per hour) across programs
+  and restarts; a configured fault input inhibits a start or stops a run with a lasting alarm; a stale or
+  missing reading counts as not holding.
+- **The twin's water (ADR-0026).** The twin moves water along the explicit graph with a ledger that balances
+  every step, says NOT MODELLED where a number is missing, and shows flows and tank levels on the drawing. Twin
+  evidence names its run and the exact equipment, channels, graph and model it ran with; a reset or any of
+  those changing makes it stale. Simulated modules can be added in the twin (never exported).
+- **Exports applied durably.** An approved export from the twin (now including the graph, drawing and blocks)
+  is applied step by step through a journal: a failure undoes what was done and says so, a restart in the middle
+  settles it, and two approvals at once apply it once.
+- **Operation History.** Program runs with their result and volume, a timeline of recorded steps, commands and
+  alarms, and a CSV export.
+- Fixed while testing in the browser: choosing "Deliver a measured volume" (or any other choice) now redraws
+  the form at once instead of after the next click elsewhere; the arrow keys keep moving a selected symbol after
+  the page refreshes; the twin's graph shows a newly imported drawing without reloading the page; tank water
+  and flow numbers are drawn in the twin's colours instead of black.
+- Database schema 6 (equipment usage, graph and drawing revisions, blocks, twin runs). 0.6.13 refuses a schema 6
+  database: going back needs the pre-upgrade backup (`upgrade-0.7.md`).
+
 ## 0.6.13 (2026-10-25): twin edits no longer hide newer equipment; the standard drawing stays linked
 
 - An equipment edit made in the twin before the real system changed the same item used to replace the whole item

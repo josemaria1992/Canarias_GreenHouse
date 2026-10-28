@@ -27,6 +27,7 @@ from pathlib import Path
 
 from ..equipment.definitions import ICONS, ItemBody, TypeBody, channel_issues, item_issues
 from ..programs.definitions import digest as program_digest, parse as program_parse
+from . import feed
 
 EXPORT_PREFIX = "export-"
 KIND = "AQUACROP_TWIN_EXPORT"
@@ -46,8 +47,10 @@ def package_digest(doc: dict) -> str:
 
 
 def program_items(body: dict) -> set[str]:
-    """Every equipment item a program body names (trigger and action)."""
-    out = set()
+    """Every equipment item a program body names (trigger, action, conditions) and both pumps of a duty pair
+    (0.7.5 review C075-01: the standby can run the operation, so its settings and channels are part of every proof,
+    readiness and export decision that uses this set)."""
+    out = set(x for x in (body.get("duty") or []) if isinstance(x, str))
 
     def walk(x):
         if isinstance(x, dict):
@@ -285,19 +288,49 @@ def twin_programs(snap: dict, versions: list[dict]) -> list[dict]:
     return out
 
 
-def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dict]) -> dict:
-    """What an export would carry now, with its proof and what is missing."""
+def hydraulics_changes(snap: dict, mine: dict | None) -> dict | None:
+    """The twin's graph, drawing and blocks against the real system's (0.7.0): None when they are the same.
+    `mine` is the twin BlockStore's export. The base revisions are the real system's, as last imported."""
+    if not mine:
+        return None
+    live = snap.get("hydraulics") or {}
+    lt, ld = live.get("topology") or {}, live.get("diagram") or {}
+    t, d = mine["topology"], mine["diagram"]
+    live_blocks = {(b["block_id"], b["digest"]) for b in live.get("blocks", [])}
+    new_blocks = [b for b in mine.get("blocks", []) if b.get("created_by") != "live-snapshot"
+                  and (b["block_id"], b["digest"]) not in live_blocks and b["status"] != "RETIRED"]
+    graph_changed = t["digest"] != lt.get("digest")
+    drawing_changed = d.get("digest") is not None and d["digest"] != ld.get("digest")
+    if not (graph_changed or drawing_changed or new_blocks):
+        return None
+    return {"graph_changed": graph_changed, "drawing_changed": drawing_changed,
+            "topology": {"graph": t["graph"], "digest": t["digest"], "base_rev": lt.get("rev", 0)},
+            "diagram": {"diagram": d["diagram"], "digest": d.get("digest"), "base_rev": ld.get("rev", 0)},
+            "blocks": [{k: b[k] for k in ("block_id", "name", "body", "digest")} for b in new_blocks],
+            "meaning": ("a change of connections: blocks and twin results that relied on the old ones are checked again"
+                        if graph_changed else "the drawing only: the connections are the same")}
+
+
+def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dict], proof=None,
+            virtual_uids: set[str] | None = None, hydraulics: dict | None = None) -> dict:
+    """What an export would carry now, with its proof and what is missing. `proof(program_id, version)` gives the
+    results that count (0.7.0, F01: the current twin run, in the current equipment/channel/drawing context); the
+    others stay visible as history and never count. Without `proof` nothing counts."""
     live_items = TwinChanges._live_items(snap)
     progs = twin_programs(snap, versions)
+
+    def counted(pid, ver):
+        return proof(pid, ver) if proof is not None else []
     for p in progs:
-        runs = [r for r in results if r.get("program_id") == p["program_id"] and r.get("version") == p["twin_version"]]
+        runs = counted(p["program_id"], p["twin_version"])
+        every = [r for r in results if r.get("program_id") == p["program_id"] and r.get("version") == p["twin_version"]]
         p["runs"] = runs[-20:]
         p["passed"] = any(r.get("result") == "DONE" for r in runs)
         p["failed"] = sum(1 for r in runs if r.get("result") != "DONE")
+        p["history_runs"] = len(every) - len(runs)  # earlier twin runs or another context: history, not proof
     exercised: dict[str, list[str]] = {}
     for v in versions:
-        if any(r.get("program_id") == v["program_id"] and r.get("version") == v["version"] and r.get("result") == "DONE"
-               for r in results):
+        if any(r.get("result") == "DONE" for r in counted(v["program_id"], v["version"])):
             for iid in program_items(v["body"]):
                 exercised.setdefault(iid, []).append(f"{v['program_id']} v{v['version']}")
     items = []
@@ -310,12 +343,23 @@ def preview(snap: dict, ch: TwinChanges, versions: list[dict], results: list[dic
         live = live_items[iid]
         items.append({"item_id": iid, "op": "retire", "name": live["name"], "base_version": c["base_version"],
                       "before": {k: live[k] for k in ("name", "type_id", "type_version", "icon", "body")}, "exercised_by": []})
-    binds = [{"item_id": k.split(".", 1)[0], "role": k.split(".", 1)[1], "point": c["point"], "base_point": c["base_point"]}
+    sim = virtual_uids or set()
+    every = [{"item_id": k.split(".", 1)[0], "role": k.split(".", 1)[1], "point": c["point"], "base_point": c["base_point"]}
              for k, c in sorted(ch.doc["bindings"].items())]
-    missing = [f"{p['name']} (v{p['twin_version']} in the twin) has no run that ended DONE in this twin run" for p in progs if not p["passed"]]
+    # 0.7.1 (owner decision): a channel of a simulated module stays in the twin; it is never sent to the real system and
+    # does not stop an export of the drawing or of anything else
+    twin_only = [b for b in every if b["point"] and b["point"].split(".", 1)[0] in sim]
+    binds = [b for b in every if b not in twin_only]
+    missing = [f"{p['name']} (v{p['twin_version']} in the twin) has no run that ended DONE in this twin run with the "
+               "current equipment, channels and drawing" + (" (earlier runs are history only: run it again)"
+                                                             if p["history_runs"] else "")
+               for p in progs if not p["passed"]]
     missing += [f"{p['name']} (v{p['twin_version']}) is not validated in the twin" for p in progs if p["status"] != "VALIDATED"]
-    return {"items": items, "bindings": binds, "programs": progs, "missing": missing,
-            "empty": not (items or binds or progs)}
+    hyd = hydraulics_changes(snap, hydraulics)
+    return {"items": items, "bindings": binds, "programs": progs, "missing": missing, "hydraulics": hyd,
+            "twin_only": [f"{b['item_id']}.{b['role']} on {b['point']} (a simulated module: stays in the twin)"
+                          for b in twin_only],
+            "empty": not (items or binds or progs or hyd)}
 
 
 def write_export(feed_dir: Path, pv: dict, *, by: str, note: str, twin_run: str, snapshot_utc: str | None) -> dict:
@@ -328,6 +372,7 @@ def write_export(feed_dir: Path, pv: dict, *, by: str, note: str, twin_run: str,
             raise ChangeRefused(f"{p['program_id']}: its body does not match its digest")
     doc = {"kind": KIND, "by": by, "note": note, "written_utc": _now(), "twin_run": twin_run,
            "base_snapshot_utc": snapshot_utc, "items": pv["items"], "bindings": pv["bindings"],
+           "hydraulics": pv.get("hydraulics"),
            "programs": [{k: v for k, v in p.items() if k != "status"} for p in pv["programs"]],
            "meaning": "logic test on virtual modules with DEMO dynamics; not physical verification"}
     doc["digest"] = package_digest(doc)
@@ -336,7 +381,7 @@ def write_export(feed_dir: Path, pv: dict, *, by: str, note: str, twin_run: str,
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, default=str), encoding="utf-8")
     os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    feed.replace(tmp, path)
     return {"digest": doc["digest"], "written_utc": doc["written_utc"], "items": len(doc["items"]),
             "bindings": len(doc["bindings"]), "programs": len(doc["programs"])}
 

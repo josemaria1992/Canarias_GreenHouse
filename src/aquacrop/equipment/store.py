@@ -13,6 +13,10 @@ most one role of one item. VERIFIED needs the same server-side check as an assig
 confirmed by readback, DI both ways, AI a fresh reading within tolerance) plus the user's observation,
 or an earlier VERIFIED I/O assignment of the same channel, which is cited, not copied. A changed item
 version or a type upgrade that alters a role sends its binding back to PROPOSED.
+
+IDs (0.7.1, `aquacrop.ids`): an item's key (`item_id`) never changes; its public ID is what people see and edit. A
+new item may be given any-case ID (`Valve_1`): its key is derived from it (`valve_1`). `rename_item` changes the
+public ID only, under a revision check; no binding, graph node, block, program or history row is touched.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ from typing import Callable
 from pydantic import ValidationError
 
 from ..control.assignments import AssignmentRefused, EdgeWatch
+from ..ids import IdRefused, PublicIds, check_public, key_for
 from .definitions import (ICONS, ID_RE, TEMPLATES, ItemBody, Purpose, RoleDef, TypeBody, channel_issues, digest,
                           errors_text, item_issues)
 
@@ -49,6 +54,7 @@ class EquipmentStore:
         self.h, self.cfg, self.assignments = hist, cfg, assignments
         self.dependents = dependents or (lambda item_id: [])
         self._lock = threading.RLock()
+        self.ids = PublicIds(hist, "item")
 
     # ------------------------------------------------------------------ helpers
     def _log(self, actor: str, kind: str, ref: str, action: str, payload: dict) -> None:
@@ -101,10 +107,11 @@ class EquipmentStore:
                 if not hit:
                     raise EquipmentRefused(f"type {type_id} v{version} does not exist")
                 if hit[0]["status"] != "DRAFT":
-                    raise EquipmentRefused(f"type {type_id} v{version} is {hit[0]['status']}: edits make a new version")
+                    raise EquipmentRefused(f"type {type_id} v{version} is {hit[0]['status'].lower()} and cannot change: "
+                                           "use Edit (it creates the next draft version)")
             else:
                 if any(r["status"] == "DRAFT" for r in existing):
-                    raise EquipmentRefused(f"type {type_id} already has a draft; edit that one")
+                    raise EquipmentRefused(f"type {type_id} already has a draft: open Edit draft on it instead")
                 version = (existing[-1]["version"] + 1) if existing else 1
             now = _now()
             row = (type_id, version, "DRAFT", name, digest(canon), now, actor, now, json.dumps(canon, sort_keys=True))
@@ -120,7 +127,7 @@ class EquipmentStore:
         with self._lock:
             t = self.type_version(type_id, version)
             if t["status"] != "DRAFT":
-                raise EquipmentRefused(f"type {type_id} v{version} is {t['status']}; only a draft is activated")
+                raise EquipmentRefused(f"type {type_id} v{version} is {t['status'].lower()}: only a draft can be activated")
             TypeBody.model_validate(t["body"])
             prev = self._active_type(type_id)
             now = _now()
@@ -141,7 +148,8 @@ class EquipmentStore:
         with self._lock:
             users = [i["item_id"] for i in self.items() if i["type_id"] == type_id and i["status"] == "ACTIVE"]
             if users:
-                raise EquipmentRefused(f"type {type_id} is used by {', '.join(users)}: retire or move them first")
+                raise EquipmentRefused(f"type {type_id} is still used by {', '.join(users)}: retire those items, or upgrade "
+                                       "them to another type, then retire it")
             now = _now()
             self.h.submit(lambda c: c.execute("UPDATE equipment_types SET status='RETIRED', updated_utc=? WHERE "
                                               "type_id=? AND status IN ('ACTIVE','DRAFT')", (now, type_id)), wait=True)
@@ -157,13 +165,81 @@ class EquipmentStore:
                 made.append(tid)
         return made
 
+    def availability(self) -> list[dict]:
+        """UX-05: every built-in and installed type with where it stands: TEMPLATE (built in, not added), DRAFT
+        (added, awaiting activation), ACTIVE (choosable for new equipment) or RETIRED."""
+        by: dict[str, list] = {}
+        for t in self.types():
+            by.setdefault(t["type_id"], []).append(t)
+        out = []
+        for tid in sorted(set(TEMPLATES) | set(by)):
+            vs = by.get(tid, [])
+            act = [t for t in vs if t["status"] == "ACTIVE"]
+            dr = [t for t in vs if t["status"] == "DRAFT"]
+            state = "ACTIVE" if act else "DRAFT" if dr else "RETIRED" if vs else "TEMPLATE"
+            cur = (act or dr or vs or [None])[-1]
+            tb = (cur or {}).get("body") or TEMPLATES.get(tid, {}).get("body") or {}
+            out.append({"type_id": tid, "name": (cur or TEMPLATES.get(tid, {})).get("name", tid), "state": state,
+                        "version": cur["version"] if cur else None, "built_in": tid in TEMPLATES,
+                        "hydraulic": tb.get("hydraulic"), "roles": len(tb.get("roles") or [])})
+        return out
+
+    def make_available(self, actor: str, type_id: str) -> dict:
+        """UX-05: an administrator makes a built-in type choosable in one step: added from its template if missing,
+        then activated. Never reactivates a retired type, never replaces an edited draft, never touches items."""
+        if type_id not in TEMPLATES:
+            raise EquipmentRefused(f"{type_id} is not a built-in type: activate it on Equipment types")
+        st = next(a for a in self.availability() if a["type_id"] == type_id)
+        name = TEMPLATES[type_id]["name"]
+        if st["state"] == "ACTIVE":
+            return {"type_id": type_id, "state": "ACTIVE", "version": st["version"], "changed": False}
+        if st["state"] == "RETIRED":
+            raise EquipmentRefused(f"{name} was retired on this installation; it is not brought back automatically. "
+                                   "Make a new version deliberately on Equipment types if it is wanted again")
+        if st["state"] == "DRAFT":
+            d = next(t for t in self.types() if t["type_id"] == type_id and t["status"] == "DRAFT")
+            if digest(TypeBody.model_validate(d["body"]).model_dump(mode="json")) != \
+                    digest(TypeBody.model_validate(TEMPLATES[type_id]["body"]).model_dump(mode="json")):
+                raise EquipmentRefused(f"the draft of {name} on this installation differs from the built-in one: "
+                                       "review and activate it on Equipment types")
+            version = d["version"]
+        else:
+            version = self.save_type_draft(actor, type_id, name, TEMPLATES[type_id]["body"])["version"]
+        self.activate_type(actor, type_id, version)
+        return {"type_id": type_id, "state": "ACTIVE", "version": version, "changed": True}
+
     # ------------------------------------------------------------------ items
     def items(self, *, include_retired: bool = True) -> list[dict]:
         rows = self.h.query(
             "SELECT i.* FROM equipment_items i JOIN (SELECT item_id, max(version) AS v FROM equipment_items "
             "GROUP BY item_id) m ON i.item_id=m.item_id AND i.version=m.v ORDER BY i.name")
-        out = [dict(r) | {"body": json.loads(r["json"])} for r in rows]
+        ids = self.ids.all()
+        out = [dict(r) | {"body": json.loads(r["json"]),
+                          "public_id": ids[r["item_id"]]["public_id"] if r["item_id"] in ids else r["item_id"],
+                          "id_rev": ids[r["item_id"]]["rev"] if r["item_id"] in ids else 0} for r in rows]
         return [x for x in out if include_retired or x["status"] != "RETIRED"]
+
+    def keys(self) -> set[str]:
+        return {r["item_id"] for r in self.h.query("SELECT DISTINCT item_id FROM equipment_items")}
+
+    def resolve(self, given: str) -> str:
+        """The key of an item named by its key or its public ID (any case)."""
+        k = self.ids.resolve(given, self.keys())
+        if k is None:
+            raise EquipmentRefused(f"equipment {given} does not exist")
+        return k
+
+    def rename_item(self, actor: str, item_id: str, new_id: str, expected_rev: int) -> dict:
+        """Change the public ID only: references keep the key, history keeps the earlier ID in the log."""
+        with self._lock:
+            it = self.item(item_id)
+            try:
+                r = self.ids.rename(item_id, new_id, expected_rev, self.keys(), actor)
+            except IdRefused as e:
+                raise EquipmentRefused(str(e))
+            if not r.get("unchanged"):
+                self._log(actor, "ITEM", item_id, "ID_CHANGED", {"from": r["previous"], "to": new_id, "name": it["name"]})
+            return self.item(item_id) | {"id_history": self.ids.history(item_id)}
 
     def item(self, item_id: str) -> dict:
         hit = [i for i in self.items() if i["item_id"] == item_id]
@@ -172,7 +248,27 @@ class EquipmentStore:
         return hit[0]
 
     def save_item(self, actor: str, item_id: str, name: str, type_id: str, type_version: int | None, icon: str,
-                  body: dict, *, expected_version: int | None = None, reactivate: bool = False) -> dict:
+                  body: dict, *, expected_version: int | None = None, reactivate: bool = False,
+                  public_id: str | None = None) -> dict:
+        """Create (expected_version None) or change an item. `item_id` is the key of an existing item, or, for a new
+        one, the ID typed (any case, unless `public_id` gives it): the key is derived from it."""
+        keys = self.keys()
+        new_public = None
+        if item_id in keys and expected_version is None and not reactivate:
+            raise EquipmentRefused(f"ID {self.ids.public(item_id)} is already used: choose another ID")
+        if item_id not in keys:
+            known = self.ids.resolve(item_id, keys)
+            if known is not None and expected_version is None and not reactivate:
+                raise EquipmentRefused(f"ID {item_id} is already used by {self.ids.public(known)}")
+            if known is not None:
+                item_id = known
+            else:
+                new_public = public_id or item_id
+                try:
+                    check_public(new_public)
+                except IdRefused as e:
+                    raise EquipmentRefused(f"equipment {e}")
+                item_id = key_for(new_public, keys)
         self._check_id(item_id, "equipment id")
         name = (name or "").strip()
         if not 1 <= len(name) <= 80:
@@ -183,11 +279,13 @@ class EquipmentStore:
             if type_version is None:
                 act = self._active_type(type_id)
                 if act is None:
-                    raise EquipmentRefused(f"type {type_id} has no active version; activate it first")
+                    raise EquipmentRefused(f"type {type_id} has no active version: an administrator activates it on "
+                                           "Equipment types first")
                 type_version = act["version"]
             t = self.type_version(type_id, type_version)
             if t["status"] not in ("ACTIVE", "SUPERSEDED"):
-                raise EquipmentRefused(f"type {type_id} v{type_version} is {t['status']}: items use activated types")
+                raise EquipmentRefused(f"type {type_id} v{type_version} is {t['status'].lower()}: items use activated types "
+                                       "only; an administrator activates it on Equipment types")
             tb = TypeBody.model_validate(t["body"])
             try:
                 ib = ItemBody.model_validate(body)
@@ -199,13 +297,15 @@ class EquipmentStore:
             for other in self.items(include_retired=False):
                 if other["item_id"] != item_id and other["name"].casefold() == name.casefold():
                     raise EquipmentRefused(f"another equipment item is already called {name}")
+            if new_public is not None and (clash := self.ids._clash(new_public, item_id, keys)) is not None:
+                raise EquipmentRefused(f"ID {new_public} is already used by {self.ids.public(clash)}")
             prev = self.h.query("SELECT max(version) AS v, status FROM equipment_items WHERE item_id=?", (item_id,))
             cur = prev[0]["v"] if prev and prev[0]["v"] is not None else None
             if expected_version != cur:
                 raise EquipmentRefused(f"equipment {item_id} changed meanwhile (now v{cur}); reload and edit again"
                                        if cur else f"equipment {item_id} does not exist yet")
             if cur is not None and self.item(item_id)["status"] == "RETIRED" and not reactivate:
-                raise EquipmentRefused(f"equipment {item_id} is retired")
+                raise EquipmentRefused(f"equipment {item_id} is retired and cannot be changed: create a new item instead")
             version = (cur or 0) + 1
             canon = ib.model_dump(mode="json")
             now = _now()
@@ -214,6 +314,11 @@ class EquipmentStore:
             self.h.submit(lambda c: c.execute(
                 "INSERT INTO equipment_items(item_id, version, status, type_id, type_version, name, icon, digest, "
                 "created_utc, created_by, updated_utc, json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", row), wait=True)
+            if new_public is not None:
+                try:
+                    self.ids.claim(item_id, new_public, keys | {item_id}, actor)
+                except IdRefused as e:              # lost a race for the same ID: the item keeps its key as ID
+                    self._log(actor, "ITEM", item_id, "ID_REFUSED", {"wanted": new_public, "why": str(e)})
             self._log(actor, "ITEM", f"{item_id}@{version}", "SAVED",
                       {"name": name, "type": f"{type_id}@{type_version}", "icon": icon})
             if cur is not None:
@@ -224,7 +329,8 @@ class EquipmentStore:
         it = self.item(item_id)
         act = self._active_type(it["type_id"]) if to_version is None else self.type_version(it["type_id"], to_version)
         if act is None:
-            raise EquipmentRefused(f"type {it['type_id']} has no active version")
+            raise EquipmentRefused(f"type {it['type_id']} has no active version to upgrade to: an administrator "
+                                   "activates it on Equipment types first")
         old = self._type_body(it["type_id"], it["type_version"])
         new = TypeBody.model_validate(act["body"])
         o, n = {r.role: r for r in old.roles}, {r.role: r for r in new.roles}
@@ -292,11 +398,11 @@ class EquipmentStore:
     def _role(self, item_id: str, role: str) -> tuple[dict, TypeBody, RoleDef]:
         it = self.item(item_id)
         if it["status"] == "RETIRED":
-            raise EquipmentRefused(f"{it['name']} is retired")
+            raise EquipmentRefused(f"{it['name']} is retired: its channels cannot change")
         tb = self._type_body(it["type_id"], it["type_version"])
         r = next((x for x in tb.roles if x.role == role), None)
         if r is None:
-            raise EquipmentRefused(f"{it['name']} has no role {role}")
+            raise EquipmentRefused(f"{it['name']} has no connection called {role}: its equipment type does not define it")
         return it, tb, r
 
     def bind(self, actor: str, item_id: str, role: str, point: str | None, note: str | None = None) -> dict:
@@ -313,7 +419,8 @@ class EquipmentStore:
                 raise EquipmentRefused("; ".join(issues))
             other = self.by_point().get(point)
             if other and (other["item_id"], other["role"]) != (item_id, role):
-                raise EquipmentRefused(f"{point} already carries {other['item_id']}.{other['role']}: clear it there first")
+                raise EquipmentRefused(f"{point} is already used by {other['item_id']} ({other['role']}): clear that channel "
+                                       "on that item first, or choose another channel")
             if cur and cur["point"] == point:
                 raise EquipmentRefused(f"{it['name']} {r.label} is already on {point}")
             return self._bind_write(actor, item_id, role, point, "PROPOSED", note, {})
@@ -334,7 +441,8 @@ class EquipmentStore:
             if cite_assignment:
                 a = self.assignments.current().get(point)
                 if not a or a["status"] != "VERIFIED":
-                    raise EquipmentRefused(f"{point} has no VERIFIED I/O assignment to cite")
+                    raise EquipmentRefused(f"{point} has no verified I/O assignment yet: verify it on the I/O board first, "
+                                           "then cite it here")
                 evidence = {"check": "CITED_IO_ASSIGNMENT", "assignment_utc": a["utc"], "assignment_by": a["actor"],
                             "assignment_signal": a["signal"], "assignment_evidence": a["evidence"]}
             else:
@@ -385,9 +493,9 @@ class EquipmentStore:
                 "exported_utc": _now(),
                 "types": [{"type_id": t["type_id"], "version": t["version"], "status": t["status"], "name": t["name"],
                            "body": t["body"]} for t in self.types()],
-                "items": [{"item_id": i["item_id"], "version": i["version"], "status": i["status"], "name": i["name"],
-                           "type_id": i["type_id"], "type_version": i["type_version"], "icon": i["icon"],
-                           "body": i["body"]} for i in self.items()],
+                "items": [{"item_id": i["item_id"], "public_id": i["public_id"], "version": i["version"],
+                           "status": i["status"], "name": i["name"], "type_id": i["type_id"],
+                           "type_version": i["type_version"], "icon": i["icon"], "body": i["body"]} for i in self.items()],
                 "bindings": [{"item_id": v["item_id"], "role": v["role"], "point": v["point"], "status": v["status"]}
                              for v in self.bindings().values()],
                 "note": "Import makes DRAFT types and items without channels; bindings are not imported."}

@@ -34,6 +34,20 @@ EVIDENCE_DIR = "evidence"
 KIND = "AQUACROP_LIVE_SNAPSHOT"
 HANDOFF_KEY = "twin-handoff.key"
 TICKET_S = 60
+WINDOWS = os.name == "nt"                  # where a refused replace is worth retrying
+
+
+def replace(tmp: Path, path: Path, attempts: int = 60) -> None:
+    """os.replace, retried for about three seconds when Windows refuses it because a reader (a sync client, an antivirus
+    or another thread listing the directory) has the target open; any other error, or the last refusal, is raised."""
+    for i in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if not WINDOWS or i == attempts - 1:
+                raise
+            time.sleep(0.05)
 
 
 def _atomic(path: Path, doc: dict) -> None:
@@ -41,21 +55,23 @@ def _atomic(path: Path, doc: dict) -> None:
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, default=str), encoding="utf-8")
     os.chmod(tmp, 0o640)              # the services run with umask 077; the other side reads through its group
-    os.replace(tmp, path)
+    replace(tmp, path)
 
 
 def publish_snapshot(feed_dir: Path, *, cfg, equipment, programs, hist, software_version: str,
-                     layout: dict | None = None) -> dict:
+                     layout: dict | None = None, hydraulics: dict | None = None) -> dict:
     users = [dict(r) for r in hist.query("SELECT username, password_hash, role, commissioning, disabled, "
                                          "must_change_password FROM users")]
-    doc = {"kind": KIND, "software_version": software_version, "written_utc": datetime.now(timezone.utc).isoformat(),
+    from ..build import identity
+    doc = {"kind": KIND, "software_version": software_version, "build": identity()["build"],
+           "written_utc": datetime.now(timezone.utc).isoformat(),
            "config": cfg.model_dump(mode="json", exclude_none=True), "config_version": cfg.config_version,
            "equipment": equipment.export(),
            "bindings": [{"item_id": v["item_id"], "role": v["role"], "point": v["point"], "status": v["status"]}
                         for v in equipment.bindings().values()],
-           "programs": [{k: v[k] for k in ("program_id", "version", "status", "name", "digest", "body")}
+           "programs": [{k: v.get(k) for k in ("program_id", "public_id", "version", "status", "name", "digest", "body")}
                         for v in programs.versions()],
-           "users": users, "layout": layout}
+           "users": users, "layout": layout, "hydraulics": hydraulics}     # 0.7.0: graph, drawing and blocks
     _atomic(Path(feed_dir) / SNAPSHOT, doc)
     hist.event("TWIN_SNAPSHOT_PUBLISHED", {"config_version": cfg.config_version, "items": len(doc["equipment"]["items"]),
                                            "programs": len(doc["programs"]), "users": len(users)}, actor="system")
@@ -98,7 +114,7 @@ def write_handoff_key(feed_dir: Path) -> bytes:
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_bytes(key.hex().encode())
     os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    replace(tmp, path)
     return key
 
 

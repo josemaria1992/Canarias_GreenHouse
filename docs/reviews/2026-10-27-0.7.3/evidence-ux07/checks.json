@@ -1,0 +1,127 @@
+[
+ {
+  "id": "UX07-1 New type opens on visual kind choices with a copy option, no JSON",
+  "ok": true,
+  "detail": "13 kinds (Pump, Valve, Tank, Flow meter, Level sensor, Pressure sensor, pH sensor, EC sensor, Temperature sensor, Water source, Sector, Button or switch, Something else); 13 types to copy; textareas on the page: 0"
+ },
+ {
+  "id": "UX07-2 Pump asks: control output, running? fault?",
+  "ok": true,
+  "detail": "RUNNING,FAULT"
+ },
+ {
+  "id": "UX07-2 a new running signal has no polarity until chosen",
+  "ok": true,
+  "detail": "— not chosen: say which, as wired; it is never assumed."
+ },
+ {
+  "id": "UX07-2 saving names what is missing and keeps the entries",
+  "ok": true,
+  "detail": "Say how “Running” signals: does its contact close or open when it is active? If the wiring is not confirmed yet, leave this signal out for now."
+ },
+ {
+  "id": "UX07-3 every icon can be chosen and previewed before saving",
+  "ok": true,
+  "detail": "18/18 icons previewed: pump, valve, tank, level, flow, pressure, temperature, button, lamp, fan, heater, motor, sensor, switch, drop, gauge, plug, generic"
+ },
+ {
+  "id": "UX07-3 the preview shows the pump's drawing symbol with its connection points",
+  "ok": true,
+  "detail": "ports: in, out; Pump as drawn in the water diagram, connection points: Suction, Discharge"
+ },
+ {
+  "id": "UX07-4 a refresh keeps the open form, entries and icon",
+  "ok": true,
+  "detail": "name, icon and limit kept"
+ },
+ {
+  "id": "UX07-5 Add a feature adds a detail (and says what is missing or duplicated first)",
+  "ok": true,
+  "detail": "Enter the name of the detail. / This type already has a detail called “Rated flow”: choose another name."
+ },
+ {
+  "id": "UX07-5 a second control output is explained as unsupported and the need is sent to the operators for review",
+  "ok": true,
+  "detail": "Request 80: A second output to reverse the pump for back-flushing the filter. | "
+ },
+ {
+  "id": "UX07-5 the summary is in ordinary words",
+  "ok": true,
+  "detail": "Irrigation pump — Start (control output); Running signal (it is running; contact closes when active, optional); Fault signal (it has a fault; contact opens when active, optional); maximum running time 30 min; at least 10 s off between starts; details asked on each item: Rated flow (L/min), Motor power (kW)."
+ },
+ {
+  "id": "UX07-5 the draft is saved and its card reads in words",
+  "ok": true,
+  "detail": "Irrigation pump — Start (control output); Running signal (it is running; contact closes when active, optional); Fault signal (it has a fault; contact opens when active, optional); maximum running time 30 min; at least 10 s off between starts; details asked on each item: Rated flow (L/min), Motor power (kW)."
+ },
+ {
+  "id": "UX07-6 a reopened draft means the same",
+  "ok": true,
+  "detail": "fault contact opens: true; Irrigation pump — Start (control output); Running signal (it is running; contact closes when active, optional); Fault signal (it has a fault; contact opens when active, optional); maximum running time 30 min; at least 10 s off between starts; details asked on each item: Rated flow (L/min), Motor power (kW)."
+ },
+ {
+  "id": "UX07-6 a second edit changes only what was edited (hidden fields kept)",
+  "ok": true,
+  "detail": "simulation {\"behavior\":\"PUMP_FLOW\",\"delay_s\":1,\"demo_flow_L_min\":20}; operations RUN_FOR,SCHEDULE,DELIVER_VOLUME,KEEP_BETWEEN,TRIGGERED,SEQUENCE_STEP; roles start,running,fault(NC)"
+ },
+ {
+  "id": "UX07-6 a no-change edit of the built-in Valve saves the same definition",
+  "ok": true,
+  "detail": "v1 -> draft v2"
+ },
+ {
+  "id": "UX07-7 Tank: no channel, capacity entered on each tank, preview labelled representative",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "UX07-7 Tank draft saved with no roles",
+  "ok": true,
+  "detail": "{\"max_runtime_s\":null,\"max_starts_per_hour\":null,\"max_volume_L\":null,\"min_off_s\":null}"
+ },
+ {
+  "id": "UX07-8 Line flow meter: measurement, units and signal choices",
+  "ok": true,
+  "detail": "units L/min/L/h/m³/h; signals 4–20 mA/0–20 mA/0–5 V/1–5 V/Not decided yet"
+ },
+ {
+  "id": "UX07-8 Line flow meter saved",
+  "ok": true,
+  "detail": "{\"direction\":\"INPUT\",\"electrical\":[\"CURRENT_4_20\"],\"feedback_timeout_s\":null,\"inverted\":false,\"label\":\"Flow rate\",\"purpose\":\"MEASUREMENT\",\"required\":true,\"role\":\"flow\",\"signal\":\"ANALOG\",\"unit\":\"L/min\"}"
+ },
+ {
+  "id": "UX07-8 Tank level probe: measurement, units and signal choices",
+  "ok": true,
+  "detail": "units cm/m/%/L; signals 4–20 mA/0–20 mA/0–5 V/1–5 V/Not decided yet"
+ },
+ {
+  "id": "UX07-8 Tank level probe saved",
+  "ok": true,
+  "detail": "{\"direction\":\"INPUT\",\"electrical\":[\"CURRENT_4_20\"],\"feedback_timeout_s\":null,\"inverted\":false,\"label\":\"Level\",\"purpose\":\"MEASUREMENT\",\"required\":true,\"role\":\"level\",\"signal\":\"ANALOG\",\"unit\":\"cm\"}"
+ },
+ {
+  "id": "UX07-9 custom type with a reading, a status signal and a detail",
+  "ok": true,
+  "detail": "Cabinet monitor — Temperature reading in °C (Not decided yet); Door open signal (something else that is on or off; contact closes when active, optional); details asked on each item: Manufacturer."
+ },
+ {
+  "id": "UX07-10 the pump preview has the size the diagram renderer (Overview and Twin) draws a pump at",
+  "ok": true,
+  "detail": "preview 40x40, diagram 40x40; ports in,out"
+ },
+ {
+  "id": "UX07-11 an operator opens Equipment types (owner, 28 Oct) but cannot activate: the button is disabled and the server refuses",
+  "ok": true,
+  "detail": "activate: permission equipment_activate required"
+ },
+ {
+  "id": "UX07-11 the administrator activates it",
+  "ok": true,
+  "detail": "v1 ACTIVE"
+ },
+ {
+  "id": "UX07 no page errors",
+  "ok": true,
+  "detail": ""
+ }
+]

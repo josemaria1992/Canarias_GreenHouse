@@ -1,16 +1,24 @@
 """Program bodies: a trigger and an action over equipment items, as validated data.
 
 Triggers
-  MANUAL      started by an authorized user ("run now"), in MANUAL mode only
-  WEEKLY      weekly windows in the site time zone (`schedule.py`)
-  CONDITION   an input condition held for a debounce time, re-armed only after it clears
-  CONTINUOUS  always armed while the program is active (KEEP_BETWEEN), optionally limited to weekly windows
+  MANUAL         started by an authorized user ("run now"), in MANUAL mode only
+  WEEKLY         weekly windows in the site time zone (`schedule.py`), optionally inside a local date range
+  CONDITION      an input condition held for a debounce time, re-armed only after it clears
+  CONTINUOUS     always armed while the program is active (KEEP_BETWEEN), optionally limited to weekly windows
+  WINDOW_REPEAT  (0.7.0) a weekly window in which the action repeats: the next cycle starts `rest_s` after the
+                 previous one ended verified, at most `max_count` cycles; nothing starts after the window's end
+                 and a cycle still running then is stopped through its plan (reported WINDOW_ENDED, not DONE)
+
+Conditions on any program (0.7.0): `permissives` must all hold (for their debounce) when an operation starts;
+`guards` are watched while it runs and any one that holds for its debounce stops it through its plan. A missing,
+stale or bad reading is UNKNOWN: it prevents the start, and stops a running operation.
 
 Actions
   RUN_FOR         one item ON for a bounded duration (or for the window, bounded by the item's max runtime)
   DELIVER_VOLUME  one item ON until a measured volume, a runtime guard or a no-flow timeout
   KEEP_BETWEEN    one item switched to keep a measurement inside [low, high] with hysteresis and debounce
-  SEQUENCE        ordered steps: ON / OFF with verification, WAIT, RUN, DELIVER; a stop path in reverse
+  SEQUENCE        ordered steps: ON / OFF with verification, WAIT, RUN, DELIVER; optional normal and fault stop
+                  plans (OFF / WAIT) the engine follows step by step when it stops the operation early
 
 Bounds that every program carries: a maximum runtime per operation (never above the item's), a maximum
 number of steps (no loops exist), timeouts on every verification, and a failure path (`on_failure`).
@@ -21,9 +29,11 @@ import hashlib
 import json
 from typing import Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from datetime import date
 
-from ..equipment.definitions import ID_RE, ItemBody, Operation, Purpose, TypeBody
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
+
+from ..equipment.definitions import ID_RE, ItemBody, Operation, Purpose, TypeBody, flow_factor
 from .schedule import written_length_s
 
 MAX_STEPS = 32
@@ -33,10 +43,34 @@ class _M(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
+def _drop_defaults(d: dict, keys: dict) -> dict:
+    """Fields added in 0.7.0 are left out of a body while they hold their default, so the digest of every program
+    written before them stays exactly what it was."""
+    for k, default in keys.items():
+        if k not in d:
+            continue
+        v = d[k]
+        if v == default or (isinstance(default, list) and isinstance(v, (list, tuple)) and not v):
+            del d[k]
+    return d
+
+
 class WeeklyEntry(_M):
     days: tuple[Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"], ...] = Field(min_length=1)
     start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    from_date: date | None = None              # inclusive local start dates of the occurrences (0.7.0)
+    to_date: date | None = None
+
+    @model_validator(mode="after")
+    def _range(self):
+        if self.from_date and self.to_date and self.from_date > self.to_date:
+            raise ValueError("the date range ends before it starts")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        return _drop_defaults(handler(self), {"from_date": None, "to_date": None})
 
 
 class Condition(_M):
@@ -74,7 +108,14 @@ class ContinuousTrigger(_M):
     entries: tuple[WeeklyEntry, ...] = ()            # empty: always armed
 
 
-Trigger = Union[ManualTrigger, WeeklyTrigger, ConditionTrigger, ContinuousTrigger]
+class WindowRepeatTrigger(_M):
+    type: Literal["WINDOW_REPEAT"]
+    entries: tuple[WeeklyEntry, ...] = Field(min_length=1, max_length=7)
+    rest_s: float = Field(gt=0, le=86400)            # after each verified completion
+    max_count: int = Field(ge=1, le=96)
+
+
+Trigger = Union[ManualTrigger, WeeklyTrigger, ConditionTrigger, ContinuousTrigger, WindowRepeatTrigger]
 
 
 class RunFor(_M):
@@ -140,6 +181,27 @@ class Sequence(_M):
     type: Literal["SEQUENCE"]
     steps: tuple[Step, ...] = Field(min_length=1, max_length=MAX_STEPS)
     max_runtime_s: float = Field(gt=0, le=86400)
+    # review R07-02: the process's own ways to stop (OFF and WAIT steps over items the steps switch on). An
+    # interrupted operation (stopped by a user, its runtime guard or its window) stops through `normal_stop`; a
+    # failure, a stop condition or a stop of everything through `fault_stop`. Either one empty: every item still
+    # on is switched off, the last one first. Items a plan does not name are switched off after it, last first.
+    normal_stop: tuple[Step, ...] = Field(default=(), max_length=MAX_STEPS)
+    fault_stop: tuple[Step, ...] = Field(default=(), max_length=MAX_STEPS)
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        return _drop_defaults(handler(self), {"normal_stop": [], "fault_stop": []})
+
+    @model_validator(mode="after")
+    def _v(self):
+        started = {s.item for s in self.steps if s.do == "ON"}
+        for name, plan in (("normal stop", self.normal_stop), ("fault stop", self.fault_stop)):
+            for s in plan:
+                if s.do not in ("OFF", "WAIT"):
+                    raise ValueError(f"the {name} only switches off and waits")
+                if s.do == "OFF" and s.item not in started:
+                    raise ValueError(f"the {name} switches off {s.item}, which the sequence never switches on")
+        return self
 
 
 Action = Union[RunFor, DeliverVolume, KeepBetween, Sequence]
@@ -151,6 +213,18 @@ class ProgramBody(_M):
     action: Action = Field(discriminator="type")
     on_failure: Literal["STOP_AND_ALARM"] = "STOP_AND_ALARM"
     enabled: bool = True
+    permissives: tuple[Condition, ...] = Field(default=(), max_length=16)    # 0.7.0; 0.7.3: the block's own first
+    guards: tuple[Condition, ...] = Field(default=(), max_length=16)         # 0.7.0
+    authoring: dict | None = None           # 0.7.0: the form this body was compiled from (programs/authoring.py)
+    basis: Literal["WATERING_AFTER_STARTUP"] | None = None   # what a timed run's duration counts
+    duty: tuple[str, str] | None = None     # 0.7.3 PROG-09: (first, second) pump; each start leads with the one
+    #                                         started least recently, the standby takes a start the lead cannot
+    simulation_only: Literal["NUTRIENT_PREPARATION"] | None = None   # 0.7.3 PROG-10: never starts on real equipment
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        return _drop_defaults(handler(self), {"permissives": [], "guards": [], "authoring": None, "basis": None,
+                                              "duty": None, "simulation_only": None})
 
     @model_validator(mode="after")
     def _v(self):
@@ -161,6 +235,11 @@ class ProgramBody(_M):
             raise ValueError("a CONTINUOUS trigger is for KEEP_BETWEEN only")
         if a == "RUN_FOR" and self.action.duration_s is None and t != "WEEKLY":
             raise ValueError("RUN_FOR without a duration runs for its weekly window; give a duration otherwise")
+        if t == "WINDOW_REPEAT" and a not in ("SEQUENCE", "RUN_FOR", "DELIVER_VOLUME"):
+            raise ValueError("a repeat inside a window runs a sequence, a timed run or a volume")
+        if self.authoring is not None:
+            from .authoring import WateringForm
+            WateringForm.model_validate(self.authoring)     # a stored form is a valid form
         return self
 
 
@@ -185,6 +264,8 @@ def sensors(p: ProgramBody) -> list[tuple[str, str]]:
     a, t = p.action, p.trigger
     if t.type == "CONDITION":
         out.append((t.when.item, t.when.role))
+    for c in p.permissives + p.guards:
+        out.append((c.item, c.role))
     if a.type == "DELIVER_VOLUME":
         out.append((a.meter, a.meter_role))
     if a.type == "KEEP_BETWEEN":
@@ -246,12 +327,12 @@ def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int]
             continue
         if r.direction.value != "INPUT":
             out.append(f"{it['name']} {r.label} is not an input")
-        if (iid, role) in meters:                    # a volume integrates litres per minute: nothing else will do
+        if (iid, role) in meters:                    # a volume needs a flow rate (R402-02: converted to L/min)
             sc = ItemBody.model_validate(it["body"]).scaling.get(role)
             unit = (sc.unit if sc else r.unit) or ""
-            if r.purpose != Purpose.MEASUREMENT or unit.replace(" ", "").lower() != "l/min":
-                out.append(f"{it['name']} {r.label} is not a flow-rate measurement in L/min "
-                           f"({unit or 'no unit'}): it cannot measure a volume")
+            if r.purpose != Purpose.MEASUREMENT or flow_factor(unit) is None:
+                out.append(f"{it['name']} {r.label} reads {unit or 'no unit'}, not a flow rate, so it cannot measure "
+                           "a volume: choose a flow meter, or set its unit on Equipment to L/min, L/h, m³/h or L/s")
         elif (iid, role) in analog_sensors and r.purpose != Purpose.MEASUREMENT:
             out.append(f"{it['name']} {r.label} is not an analog measurement")
         if physical:
@@ -272,12 +353,18 @@ def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int]
                     x for x in (", ".join(rd["missing_required"]) and f"no channel for {', '.join(rd['missing_required'])}",
                                 ", ".join(rd["unverified"]) and f"not verified: {', '.join(rd['unverified'])}") if x))
     t = p.trigger
-    if t.type == "CONDITION":
-        it, tb = item(t.when.item)
+    conds = ([("the trigger", t.when)] if t.type == "CONDITION" else []) + \
+        [(f"start condition {i + 1}", c) for i, c in enumerate(p.permissives)] + \
+        [(f"stop condition {i + 1}", c) for i, c in enumerate(p.guards)]
+    for what, c in conds:
+        it, tb = item(c.item)
         if tb is not None:
-            r = next((x for x in tb.roles if x.role == t.when.role), None)
-            if r is not None and (r.signal.value == "ANALOG") != (t.when.op in ("ABOVE", "BELOW")):
-                out.append("the trigger's comparison does not fit its signal (ABOVE/BELOW for analog, IS_ON/IS_OFF for digital)")
+            r = next((x for x in tb.roles if x.role == c.role), None)
+            if r is not None and (r.signal.value == "ANALOG") != (c.op in ("ABOVE", "BELOW")):
+                out.append(f"{what}: the comparison does not fit its signal (above/below for a measurement, "
+                           "is on/is off for an on/off input)")
+            if r is not None and r.purpose == Purpose.COMMAND:
+                out.append(f"{what}: a command output is not independent evidence")
     if t.type == "WEEKLY" and p.action.type == "RUN_FOR" and p.action.duration_s is None:
         longest = max(written_length_s(e.start, e.end) for e in t.entries)
         it, tb = item(p.action.item)

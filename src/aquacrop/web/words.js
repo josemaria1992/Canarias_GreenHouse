@@ -159,6 +159,12 @@
     SUMP_HIGH_MAIN_FULL: ["The drainage tank is high while the main tank is full, so the return pump waits",
       "Find out why the main tank is full (the refill stop level, or a fill valve stuck open) and reduce the drainage from watering. Do not force the return pump on."],
     SUMP_LOW_SWITCH: ["The drainage tank low level switch is active", "Nothing to do: the return pump cannot run dry."],
+    // the demo configurations' reservoir and return tank (owner, 28 Oct 2026: every alarm says what to do)
+    RESERVOIR_LEVEL_LOW: ["The reservoir level is low", "Refill the reservoir; watering that needs it waits."],
+    RESERVOIR_LEVEL_HIGH: ["The reservoir level is high", "Stop adding water to the reservoir and check its fill valve."],
+    RESERVOIR_LOW_SWITCH: ["The reservoir low level switch is active", "Refill the reservoir: pumps fed from it cannot run dry."],
+    RESERVOIR_HIGH_SWITCH: ["The reservoir high level switch is active", "Stop all water going into the reservoir and check its level."],
+    RETURN_TANK_HIGH_SWITCH: ["The return tank high level switch is active", "Start the return pump, or check why it does not empty the tank."],
     DRIVE_FAULT_INPUT: ["The pump drive reports a fault", "Find and fix the cause at the pump drive, then reset the drive there."],
     SAFETY_CHAIN_OPEN: ["The safety circuit is open", "Find out why the safety circuit opened (for example an emergency stop) and close it."],
     ACQUISITION_STALE: ["New readings stopped arriving", "Check the connection to the I/O modules."],

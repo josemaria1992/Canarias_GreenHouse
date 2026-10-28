@@ -30,6 +30,7 @@ from ..programs.definitions import digest as program_digest, parse
 from ..programs.engine import Clock, Engine, ItemView
 from ..programs.store import ProgramStore, SqlEngineStore
 from .equipment_twin import EquipmentTwin, SimClock
+from .graph_water import GraphWater, ModelError, params_from
 from .water import Water
 from . import feed
 
@@ -39,7 +40,8 @@ MAX_STEPS_PER_S = 400
 FRAMES = 2400                     # timeline: ten minutes of wall time at four frames a second
 
 
-def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[str]) -> InstallationConfig:
+def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[str], virtual=None) -> InstallationConfig:
+    """`virtual`: the twin's simulated modules (0.7.0); they add a virtual bus and devices to the twin only."""
     d = dict(live)
     d["profile"] = "SIMULATED"
     d["config_id"] = f"{live['config_id']}-twin"
@@ -56,6 +58,9 @@ def twin_config(live: dict, *, allowed_hosts: list[str], allowed_origins: list[s
     d["historian"] = h
     d["security"] = dict(live.get("security", {}), allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
     d.pop("offsite_backup", None)
+    if virtual is not None and virtual.all():
+        d = virtual.merge(d)
+        d["config_version"] += "+sim-" + "-".join(sorted(virtual.uids()))
     return InstallationConfig.model_validate(d)
 
 
@@ -112,8 +117,19 @@ class EquipmentTwinService:
         self.frames: deque[dict] = deque(maxlen=FRAMES)
         self.water = Water()                      # 0.6.4: water along the drawing's pipes
         self.layout_fn = None                     # () -> (digest, layout doc), set by the app
+        self.blocks = None                        # BlockStore of the twin (0.7.0), set by the app
+        self.virtual = None                       # VirtualModules of the twin (0.7.0), set by the app
+        self.gwater = GraphWater()                # 0.7.0: water over the explicit graph, when the twin has one
+        self.model_error: str | None = None
         self.loop_error: str | None = None
+        self._op_context: dict[str, str] = {}     # op -> the context digest it started in
         self.engine = self._engine()
+        self.alarms = self._alarm_engine()        # 0.7.0: item alarm limits evaluated in the twin as on the real system
+
+    def _alarm_engine(self):
+        from ..control.alarms import AlarmEngine
+        return AlarmEngine(self.cfg, emit=lambda kind, payload: self.hist.event(
+            "TWIN_" + kind, payload | {"run_id": self.run_id}, actor="system"))
 
     @property
     def runtime_id(self) -> str:
@@ -142,8 +158,14 @@ class EquipmentTwinService:
         def on_event(kind, payload, actor):
             self.hist.event(kind, payload | {"runtime": self.runtime_id, "sim_utc": self.clock.utc().isoformat()},
                             actor=actor)
+            if kind == "PROGRAM_OP_STARTED":
+                self._op_context[payload["op_id"]] = self.context(payload["program"], payload["version"])["digest"]
             if kind == "PROGRAM_OP_ENDED":
-                self.results.append(payload | {"twin_run_id": self.run_id})
+                # the proof belongs to the context the run started in, and only if nothing semantic changed during it
+                start = self._op_context.pop(payload["op_id"], None)
+                end = self.context(payload["program_id"], payload["version"])["digest"]
+                self.results.append(payload | {"twin_run_id": self.run_id, "context": start if start == end else None,
+                                               "context_changed": start != end})
                 del self.results[:-500]
         return Engine(self.store_id, self.cfg.site.timezone, IO(), Clock(self.clock.utc, self.clock.mono), self.store,
                       resolve=self.items.views, programs=lambda: self.programs.active(self.store_id),
@@ -159,8 +181,9 @@ class EquipmentTwinService:
             if self.changes is not None:
                 self.changes.reconcile(snap)         # what the real system now has is no longer a change
             self.items.load(self.changes.overlay(snap) if self.changes is not None else snap)
+            hyd = self.blocks.import_snapshot(snap.get("hydraulics")) if self.blocks is not None else None
             rebuilt = False
-            if f"{snap['config_version']}-twin" != self.cfg.config_version:
+            if f"{snap['config_version']}-twin" != self.cfg.config_version.split("+sim-")[0]:
                 self._rebuild(snap["config"], actor)  # modules changed on the real system: a controlled reset
                 rebuilt = True
             have = {(v["program_id"], v["version"]): v for v in self.programs.versions()}
@@ -187,7 +210,8 @@ class EquipmentTwinService:
                 imported += 1
             self.snapshot_utc = snap["written_utc"]
             self.hist.event("TWIN_SNAPSHOT_IMPORTED", {"written_utc": snap["written_utc"], "items": len(self.items.items),
-                                                       "programs_new": imported, "config_rebuilt": rebuilt}, actor=actor)
+                                                       "programs_new": imported, "config_rebuilt": rebuilt,
+                                                       "hydraulics": hyd}, actor=actor)
             return {"written_utc": snap["written_utc"], "items": len(self.items.items), "programs_new": imported,
                     "config_rebuilt": rebuilt}
 
@@ -202,10 +226,19 @@ class EquipmentTwinService:
 
     def _rebuild(self, live_config: dict, actor: str) -> None:
         sec = self.cfg.security
-        self.cfg = twin_config(live_config, allowed_hosts=list(sec.allowed_hosts), allowed_origins=list(sec.allowed_origins))
+        self.cfg = twin_config(live_config, allowed_hosts=list(sec.allowed_hosts), allowed_origins=list(sec.allowed_origins),
+                               virtual=self.virtual)
         self.twin = EquipmentTwin(self.cfg, self.clock, self.items.views)
         self.commands = CommandService(self.cfg, self.twin.backend, self.hist, lambda c: None, lambda: ControllerState.AUTO)
         self.reset(actor, self.clock.start_utc)
+
+    def rebuild_modules(self, actor: str) -> None:
+        """After a simulated module is added or removed: rebuild the twin's configuration and reset (a new run)."""
+        if self.snap is None:
+            raise ValueError("no snapshot from the real system yet")
+        with self.lock:
+            self._rebuild(self.snap["config"], actor)
+            self.items.load(self.changes.overlay(self.snap) if self.changes is not None else self.snap)
 
     def sync_users(self, accounts) -> int:
         """One-way copy of the live accounts. A changed password, role, commissioning flag or a disabled or removed
@@ -262,6 +295,9 @@ class EquipmentTwinService:
             self.engine.start()
             self.frames.clear()
             self.water.reset()
+            self.gwater.reset()
+            self.alarms = self._alarm_engine()
+            self.model_error = None
             self._frame()
             self.hist.event("TWIN_RESET", {"start_utc": self.clock.start_utc.isoformat(), "run_id": self.run_id},
                             actor=actor)
@@ -271,19 +307,56 @@ class EquipmentTwinService:
         dashboard's requests get through between steps even at high speed. Returns the steps done."""
         t0, done = time.monotonic(), 0
         for _ in range(n):
+            # One fixed step in a causal order that does not depend on the batch size (0.7.0, F04): the clock
+            # advances with the outputs committed so far, the water moves for that step, the inputs (with the
+            # water's readings of this step) are published, then the programs act on them for the next step.
             with self.lock:
-                self.twin.step(DT_S)
+                self.twin.step(DT_S, prepare=lambda: self._water_observed(DT_S))
                 self.engine.tick()
-                self.step_water(DT_S, publish=False)  # every step: a valve closing mid-batch counts from then
             done += 1
             if budget_s is not None and time.monotonic() - t0 > budget_s:
                 break
         if done:
             with self.lock:
-                self.water.publish()
-                self.twin.external = self.water.item_values()
+                self.water.publish()                  # the page's picture: once per batch
+                if self.alarms is not None:
+                    from ..equipment.views import limit_inputs
+                    self.alarms.evaluate_item_limits(limit_inputs(self.items.views(), self.twin.samples(), self.clock.utc()),
+                                                     self.clock.sim_s, self.clock.sim_s)
                 self._frame()
         return done
+
+    def graph(self):
+        """The twin's explicit graph when it has one (0.7.0); None: the older drawing model runs."""
+        if self.blocks is None:
+            return None
+        g = self.blocks.graph()
+        return g if g.nodes else None
+
+    def _water_observed(self, dt: float) -> None:
+        g = self.graph()
+        if g is None:
+            self.step_water(dt, publish=False)
+            if self.layout_fn is not None:
+                self.twin.external = self.water.observe()
+            return
+        if self.model_error is not None:
+            return
+        views = self.items.views()
+        p = params_from(g, views)
+        node_item = {n.id: n.item for n in g.nodes}
+        try:
+            self.gwater.step(dt, g, p, lambda n: bool(node_item.get(n)) and self._item_on(node_item[n]))
+        except ModelError as e:                    # an invalid model run: paused and reported, never evidence
+            self.model_error = str(e)
+            self.running = False
+            self.hist.event("TWIN_MODEL_ERROR", {"error": str(e), "run_id": self.run_id}, actor="system")
+            return
+        ext = {}
+        for nid, v in self.gwater.readings(g, p).items():
+            if v is not None and node_item.get(nid):
+                ext[node_item[nid]] = v
+        self.twin.external = ext
 
     def _item_on(self, iid: str) -> bool:
         """A pump runs or a valve is open: its twin output is on and its start or travel time has passed."""
@@ -385,24 +458,54 @@ class EquipmentTwinService:
                 await asyncio.sleep(0.05)              # leave the event loop and the CPU to the dashboard
 
     # ------------------------------------------------------------------ results and evidence
+    def context(self, program_id: str, version: int) -> dict:
+        """What a run of this program version tests (0.7.0, F01): see programs/proof.py, shared with the real
+        system. A result counts as proof only in this same context and in the current twin run."""
+        from ..programs import proof
+        try:
+            v = self.programs.get(program_id, version)
+        except Exception:
+            return {"digest": None, "items": []}
+        g, lay = self.graph(), None
+        if g is None and self.layout_fn is not None:
+            with contextlib.suppress(Exception):
+                lay = self.layout_fn()[0]
+        return proof.context(v, self.items.views(), g, lay)
+
+    def current_proof(self, program_id: str, version: int) -> list[dict]:
+        """Results of this program version from the current twin run in the current context; older ones are history."""
+        ctx = self.context(program_id, version)["digest"]
+        return [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version
+                and r.get("twin_run_id") == self.run_id and ctx is not None and r.get("context") == ctx]
+
     def accept(self, actor: str, program_id: str, version: int, note: str) -> dict:
         v = self.programs.get(program_id, version)
-        runs = [r for r in self.results if r.get("program_id") == program_id and r.get("version") == version
-                and r.get("twin_run_id") == self.run_id]       # evidence from this run only, never an earlier one
+        runs = self.current_proof(program_id, version)          # this run and this context only
         passed = [r for r in runs if r.get("result") == "DONE"]
         if not passed:
-            raise ValueError(f"no operation of {program_id} v{version} ended DONE in this twin run")
+            raise ValueError(f"no operation of {program_id} v{version} ended DONE in this twin run with the current "
+                             "equipment, channels and drawing")
         if any(r.get("result") in ("FAILED", "STOP_UNVERIFIED") for r in runs) and not note.strip():
             raise ValueError("some runs of this version failed in the twin: say why you accept it anyway")
         ev = {"kind": "AQUACROP_TWIN_EVIDENCE", "program_id": program_id, "version": version, "digest": v["digest"],
               "passed": True, "accepted_by": actor, "accepted_utc": datetime.now(timezone.utc).isoformat(),
-              "twin_run_id": self.run_id, "runs": runs[-20:], "note": note,
+              "twin_run_id": self.run_id, "context": self.context(program_id, version)["digest"],
+              "runs": runs[-20:], "note": note,
               "meaning": "logic test on virtual modules with DEMO dynamics; not physical verification"}
         if v["digest"] != program_digest(parse(v["body"]).model_dump(mode="json")):
             raise ValueError("this version's body does not match its digest")
         path = feed.write_evidence(self.feed_dir, ev)
         self.hist.event("TWIN_EVIDENCE_WRITTEN", {"program": f"{program_id}@{version}", "path": str(path)}, actor=actor)
         return ev
+
+    def _graph_view(self) -> dict | None:
+        g = self.graph()
+        if g is None:
+            return None
+        out = self.gwater.view(g, params_from(g, self.items.views()))
+        # which graph and drawing these numbers belong to: the page draws them again when either changes
+        out["revs"] = f"{self.blocks.topology()['rev']}/{self.blocks.diagram()['rev']}"
+        return out
 
     def view(self) -> dict:
         with self.lock:
@@ -431,7 +534,9 @@ class EquipmentTwinService:
                     "effective_speed": round(self.effective_speed, 1), "speeds": SPEEDS,
                     "sim_utc": self.clock.utc().isoformat(), "sim_s": round(self.clock.sim_s, 1),
                     "timezone": self.cfg.site.timezone, "snapshot_utc": self.snapshot_utc, "engine": e, "items": items,
-                    "results": self.results[-50:],
+                    "results": self.results[-50:], "model_error": self.model_error,
+                    "alarms": [o.to_dict() for o in self.alarms.open.values()],
+                    "graph_water": self._graph_view(),
                     "label": "DIGITAL TWIN: virtual modules and DEMO dynamics. A pass here is a logic test, not "
                              "physical verification."}
 

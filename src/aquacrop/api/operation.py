@@ -50,7 +50,7 @@ class ProgramRefIn(_B):
     accept_overlaps: bool = False
 
 
-def register(app, require, host, programs, equipment, cfg) -> None:
+def register(app, require, host, programs, equipment, cfg, *, proof_context=None, blocks=None) -> None:
     why_not = ("Programs cannot run on this real system: scheduled bench tests are not enabled in its configuration. "
                "They need an approved IO 8CH allowlist and an armed test session (ADR-0018).")
 
@@ -58,7 +58,7 @@ def register(app, require, host, programs, equipment, cfg) -> None:
         if host is None:
             raise HTTPException(409, why_not)
         if request.headers.get("x-runtime-id") != host.runtime_id:
-            raise HTTPException(409, "this page belongs to another runtime or an earlier start; reload it")
+            raise HTTPException(409, "the controller restarted since this page was opened: reload the page and try again")
         return host
 
     async def call(fn, *a, **kw):
@@ -127,11 +127,16 @@ def register(app, require, host, programs, equipment, cfg) -> None:
             it = host_items.get(iid)
             if it and it.command_point and it.command_point not in cfg.bench_tests.allowlist:
                 problems.append(f"{it.name}: {it.command_point} is not an approved bench test output")
+        if blocks is not None:
+            from ..programs.authoring import superseded_safety
+            if (why := superseded_safety(v["body"], blocks)) is not None:
+                problems.append(why)
         if problems:
-            raise HTTPException(409, "not ready for a physical test: " + "; ".join(problems))
+            raise HTTPException(409, "not ready for a physical test. Fix these first: " + "; ".join(problems))
         return await call(programs.activate, p.username, STORE_ID, body.program_id, body.version,
                           require_simulation=True, overlaps_accepted=body.accept_overlaps,
-                          overlaps=(v["validation"] or {}).get("context", {}).get("overlaps", []))
+                          overlaps=(v["validation"] or {}).get("context", {}).get("overlaps", []),
+                          context=proof_context(body.program_id, body.version) if proof_context else None)
 
     @app.post("/api/operation/deactivate")
     async def deactivate(body: ProgramRefIn, request: Request, p: Principal = Depends(require(Perm.EQUIPMENT_ACTIVATE))):

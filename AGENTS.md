@@ -1,4 +1,4 @@
-# AGENTS.md: AquaCrop greenhouse platform (0.5.x)
+# AGENTS.md: AquaCrop greenhouse platform (0.7.x; 0.7.1)
 
 Guidance for Codex when reviewing this repository, including the stop-time review of a session's
 changes. Read this first; judge every change against the whole system, not the file it touches.
@@ -19,15 +19,19 @@ topology, wiring, VFD interface, calibration, recipes and the safe-state matrix 
 | `domain/` | Shared model types used by every other layer |
 | `io/` | Backend abstraction (`backend.py`): `virtual.py` (simulation) and `modbus_backend.py` (real bus), plus `sampling.py` |
 | `drivers/` | Serial/Modbus RTU drivers (`rtu.py`, `waveshare.py`, `vfd.py`), setup, diagnostics, port checks, error taxonomy |
-| `twin/` | Causal water/plant/chemistry model, clock, scenarios, installation runtime. Simulation only |
+| `twin/` | Causal water/plant/chemistry model, clock, scenarios, installation runtime; the equipment twin service, the graph water model (`graph_water.py`, 0.7) and simulated modules (`virtual_modules.py`). Simulation only |
 | `control/` | Processes, recipes, AUTO, alarms, supervisor, assignments, commands, and the bench lease (`bench.py`) |
 | `historian/` | SQLite storage, recording, retention (365-day window), trends, backups, offsite upload, SD card, timestamp quarantine, v0.1 import |
-| `equipment/` | User-defined equipment (0.5): types, items, append-only channel bindings |
-| `programs/` | User programs (0.5): validated declarative operations, weekly schedules, the engine (only actor, through the audited command path), AUTO/MANUAL mode, conflicts, restart recovery |
+| `equipment/` | User-defined equipment (0.5): types, items, append-only channel bindings; typed properties, scaling and alarm limits (0.7, `views.py` for design views) |
+| `topology/` | The explicit hydraulic graph (0.7, ADR-0024): nodes, ports, edges, junctions, sensor associations, validation, migration from the 0.6 drawing |
+| `diagram.py` | Drawings of the graph (0.7): symbols and orthogonal routes, route rules, crossings; presentation only |
+| `blocks/` | Blocks (0.7): purpose, members, process path over the graph, startup/stop plans; store for graph, drawings and blocks |
+| `programs/` | User programs (0.5): validated declarative operations, weekly schedules, the engine (only actor, through the audited command path), AUTO/MANUAL mode, conflicts, restart recovery; `authoring.py` (0.7) compiles the no-code form to a SEQUENCE |
 | `commissioning/` | Dashboard module wizard and discovery (0.5): set a new module's address/modes on a separate USB-RS485 adapter, then find it on the bus |
 | `security/` | Individual accounts (argon2), sessions, roles and permissions (`auth.py`) |
 | `api/` | FastAPI app and service wiring; hardware routes in `hardware.py` |
-| `web/` | Static browser UI (seven views); no build step |
+| `web/` | Static browser UI; no build step. `router.js` (orthogonal router, also run by `tests/js`) and `hydraulic-editor.js` (0.7) |
+| `ids.py`, `build.py` | (0.7.1) Editable public IDs over stable keys; the build identity (version, commit, web digest) used as cache key and shown, main/twin mismatch (ADR-0027) |
 | `cli.py`, `launcher.py` | `python -m aquacrop ...` commands and the Windows/desktop launcher |
 
 Also: `src/greenhouse` (v0.1 compatibility launcher, simulation only), `legacy/` (frozen v0.1 with
@@ -59,20 +63,35 @@ fakes), `docs/` (ADRs, model, operations, commissioning, acceptance).
 8a. **Program versions:** DRAFT is editable; VALIDATED is immutable; a VALIDATED version that fails
    revalidation becomes INVALID (still immutable) and is deactivated everywhere. Only VALIDATED bodies run.
    Twin evidence counts only from the current twin run.
+8b. **Connections are explicit edges (0.7, ADR-0024).** Moving, aligning, rerouting or a crossing in a drawing
+   never joins pipes; only an edge or a junction does. Every route is horizontal and vertical segments
+   only, in the browser and on the server (`diagram.route_issues`); a drawing change never changes the
+   graph's digest.
+8c. **Twin proof is bound to its context (0.7, ADR-0026).** Accepted evidence names the twin run and the
+   digest of the program, its items, the water network and the model; any of them changing makes it stale.
+   An approved export applies step by step through the durable journal and recovers after a restart.
+8d. **IDs (0.7.1, ADR-0027).** Keys (`item_id`, `program_id`) never change and every reference uses them; the public
+   ID people see and edit is separate, unique per kind ignoring case, renamed under a revision check and logged.
+   Never rewrite references, versions or history to rename something.
+8e. **One drawing workspace (0.7.1).** The installation is drawn in the twin and reaches the Overview only through an
+   approved export; Blocks and the Overview draw it read-only. A stop keeps every item it verified OFF as its duty
+   until the operation ends (RR-01).
 
 ## Owner decisions (0.5)
 
 9. **Never switch on unapproved equipment**, and nothing is merged without the owner's approval.
 10. **Daylight saving:** a watering must never be skipped across a DST change, and timing stays
     consistent. Site timezone is `Europe/Stockholm`.
-11. **Roles:** Viewer only looks. Operator runs daily work and the twin. Administrator has every right.
-    Commissioning is an extra flag for operators to work on real modules (bench arm, I/O assign,
-    module setup). Restart, mode and conflict approvals: administrator or operator, never viewer.
-    The digital twin is usable from any login.
+11. **Roles (ADR-0023, 0.7; amended 0.7.1):** Viewer sees Overview, Programs and Alarms only (no history,
+    equipment, modules or twin). Operator runs daily work, creates equipment (Equipment page), blocks and programs,
+    draws in the twin, proposes channels and sends module requests. Administrator has every right. Commissioning is
+    an extra flag for operators at the bench: module preparation with the address wizard, bench arm, I/O assign and
+    channel verification. Restart, mode and conflict approvals: administrator or operator, never
+    viewer. The server enforces every right; the menu only follows it.
 12. **Users:** you cannot delete yourself or remove/demote/disable the last administrator. When
     creating a user, the UI shows only the chosen role's rights.
-13. **UI messages** appear next to the buttons that caused them, not as pop-ups (module wizard and
-    Discovery so far; other pages still open).
+13. **UI messages** appear next to the buttons that caused them, not as pop-ups (module wizard, Discovery,
+    and in 0.7 the equipment, drawing, block and program forms).
 
 ## Deployed bench (site facts, for context)
 
@@ -108,6 +127,8 @@ python -m pytest                                   # unit, integration, acceptan
 python -m aquacrop config validate --config demo-48
 python -m aquacrop demo verify --config demo-48 --seed 42   # deterministic, no serial port
 python scripts/verify_release.py
+node tests/js/router.test.js                       # the orthogonal router (pytest runs it too when Node exists)
+python scripts/ui_check/run_journey_070.py --out ui-evidence-0.7   # 0.7 browser journey (needs Playwright)
 ```
 
 Python 3.11 to 3.14. Install with `pip install --require-hashes -r requirements.lock` then

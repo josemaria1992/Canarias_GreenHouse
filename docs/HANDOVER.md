@@ -1,4 +1,14 @@
-# Handover: AquaCrop platform 0.4.0, the bench bring-up release (2026-10-21)
+# Handover: AquaCrop platform 0.7.0 (2026-10-26); the 0.4.0 bench bring-up record follows
+
+**0.7.0, blocks, the installation graph and programs from forms (2026-10-26, ADR-0023 to ADR-0026):** role
+navigation enforced on the server (viewers lose history, equipment, modules and the twin); an explicit hydraulic
+graph with an orthogonal drawing editor; blocks; no-code program forms with date ranges, repeats and start/stop
+conditions; equipment limits and fault inputs on every switch ON; the twin's graph water model with a balanced
+ledger; twin proof bound to its run and context; durable apply of approved exports; Operation History with runs
+and CSV. Database schema 6. What each part is today: `CAPABILITIES-0.7.md`; upgrade and rollback:
+`operations/upgrade-0.7.md`; the tour: `operator/walkthrough-0.7.md`; the test record: `RESULTS-0.7.md`. Tested
+in software, on the fake bus and in a headless browser only. CM4 upgrade and every physical result: NOT RUN.
+Sections below this paragraph describe 0.4.0 and are kept as the record.
 
 **0.4.0, bench bring-up (2026-10-20 and 2026-10-21, ADR-0017):** `aquacrop hw setup` gives each module
 its address and channel modes with one module on the wire. The installer states the SKU and the marked

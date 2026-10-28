@@ -20,3 +20,8 @@
 | [0016](0016-added-digital-io-modules.md) | Two additional SKU 26244 modules, 80-point inventory | owner-confirmed inventory; physical allocation pending |
 | [0017](0017-bench-bring-up-safe-state-and-io-board.md) | Bench bring-up: module setup, safe-state OFF, I/O board, assignment and check records | owner-accepted; not yet run on the hardware |
 | [0018](0018-equipment-programs-and-parallel-twin.md) | User-defined equipment, programs, the module wizard and a twin service beside the live one | proposed (0.5.0) |
+| [0023](0023-role-matrix-and-navigation.md) | Role matrix and role navigation; the server enforces every right | proposed (0.7.0) |
+| [0024](0024-explicit-topology-blocks-and-orthogonal-drawings.md) | Explicit hydraulic graph, blocks, and orthogonal drawings that never connect anything | proposed (0.7.0) |
+| [0025](0025-no-code-programs-and-engine-conditions.md) | No-code program forms compiled to sequences; start and stop conditions in the engine | proposed (0.7.0) |
+| [0026](0026-graph-water-model-proof-context-and-durable-apply.md) | Graph water model, twin proof bound to its context, durable apply of approved exports | proposed (0.7.0) |
+| [0027](0027-editable-public-ids-and-build-identity.md) | Editable public IDs over stable keys; one build identity for main and twin | accepted (0.7.1) |

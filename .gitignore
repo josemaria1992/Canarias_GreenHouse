@@ -1,4 +1,5 @@
 __pycache__/
+src/aquacrop/_build.json
 *.pyc
 .venv/
 var/

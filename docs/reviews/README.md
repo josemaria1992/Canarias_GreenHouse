@@ -1,0 +1,44 @@
+# Codex and Claude review handoff
+
+This is the shared repository location for Codex feedback and Claude's implementation summaries. Keep each review cycle in its dated folder so the reviewed source and evidence remain traceable.
+
+## Current cycle
+
+**Latest independent review: [e40285f — C077 and UX-07](2026-10-27-0.7.3/CODEX_REVIEW_e40285f_20261027.md).** Scoped to changes since `8dc47b6`. 38 focused Python and 37 JS tests pass, but R402-01..06 identify remaining stop/queue, flow-unit, changeover-target, contact-polarity, measurement round-trip and current-design readiness defects. Includes independent browser observations and evidence; distinguishes author tests and open owner decisions. The implementation is not deployed or accepted as complete. Start here for the next corrections; older status below is historical.
+
+**Additional owner feedback: [UX-07 — create and edit equipment types without code](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_NO_CODE_TYPES_20261027.md).** The owner has approved the guided form and requires visual previews of all available symbols plus equipment-specific questions. The note explains Add a feature for extra supported readings/signals/properties and distinguishes unsupported software requests; automatic request routing is not yet approved or defined. Includes existing-model boundaries and browser acceptance. C077 safety and Twin findings remain open.
+
+**Start here: [Codex review of 0.7.7 and latest owner feedback](2026-10-27-0.7.3/CODEX_REVIEW_0.7.7_20261027.md)** — implementation `de3088a`, summary `c32121f`, CI-only follow-up `cc93b37`. Earlier C075 fixes are present and focused checks pass, but C077-01..08 remain: restart after Stop all, simultaneous sectors, takeover OFF verification/accounting, unapproved one-hour abandonment, incomplete empty-design reset, meter grid placement and the unfinished legacy import journey. Includes concise instructions and reproducible fake-only evidence. Both Raspberry services independently report 0.7.7; final CI is successful. Signed-in real-bench and physical acceptance remain NOT RUN.
+
+**Owner clarification:** either pump can serve either sector; sectors never water simultaneously; no preemption when the healthy pump is busy. The owner explicitly rejected the one-hour waiting cutoff. **Empty design clears the Twin diagram only; keep everything else, with equipment available in the side palette.** See the appended corrections in [owner decisions](2026-10-27-0.7.3/OWNER_DECISIONS_20261027.md). The new review supersedes the status statements below; older records remain historical evidence.
+
+### Earlier handoffs (historical status)
+
+**Latest owner feedback: [missing Tank type and Edit closing by itself](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_EQUIPMENT_TYPES_20261027.md)**. Start here for UX-05/UX-06: built-in type availability/activation guidance and a reproduced refresh-state collision that closes the editor. Fix the product flow and demonstrate it in a browser; the owner's live type status has not been assumed.
+
+**Related owner feedback: [empty Blocks selectors, inline flow meters and dashed imported drawings](2026-10-27-0.7.3/OWNER_UX_FEEDBACK_BLOCKS_AND_PIPES_20261027.md)**. UX-01..UX-04 cover verified prerequisites, a deliberate meter-in-pipe workflow and guided completion of imported drawings. The owner does not find the current setup intuitive. Do not infer plumbing or restore the removed Blocks shortcuts.
+
+**Current overall status: [acceptance matrix, verified Raspberry deployment and VPN access](2026-10-27-0.7.3/CURRENT_ACCEPTANCE_AND_ACCESS_20261027.md)**. Both services were independently verified as healthy 0.7.5 over the VPN, and the owner-approved hostname mapping now works on this PC. No new application fixes have been pushed; seven reproduced defects and the newer owner decisions remain outstanding. This status note includes the known CI failure and concise next instructions for Claude.
+
+**Owner decisions: [block-safety approval and clarified pump replacement](2026-10-27-0.7.3/OWNER_DECISIONS_20261027.md)**. Changed block safety requires program review/validation/retesting before new starts. If Pump 1 fails during Sector 1 watering, keep Valve 1 open and use Pump 2 to finish Sector 1's remaining time, then continue to Sector 2. This supersedes the earlier Sector 2-first example. Physical routing, an already-busy replacement and detailed target accounting remain to be clarified; do not treat unanswered questions as approval.
+
+**Latest: [Codex follow-up on Claude's 0.7.5 update](2026-10-27-0.7.3/CODEX_REVIEW_0.7.5_20261027.md)** — reviews `7a70ee6`. Start here for current findings C075-01 through C075-07 and the two pending owner policy questions. Claude's next summary should answer these findings in the existing `CLAUDE_UPDATE.md`.
+
+**[0.7.3 owner corrections — 27 October 2026](2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md)**
+
+- Start with **[implementation instructions](2026-10-27-0.7.3/CLAUDE_FIX_INSTRUCTIONS.md)**. They contain the owner corrections and token-efficient working agreement.
+- Consult **[review findings](2026-10-27-0.7.3/REVIEW.md)** and **[evidence](2026-10-27-0.7.3/EVIDENCE.md)** only as needed. They record review of `f91e34d`, with the documentation-only `3cc3c34` delta checked.
+- Claude writes the response into **[CLAUDE_UPDATE.md](2026-10-27-0.7.3/CLAUDE_UPDATE.md)** in the same folder and commits/pushes it with the implementation. It now contains the 0.7.5 summary independently reviewed in the latest follow-up above; it is not independent acceptance evidence.
+
+Publication context: this handoff is based on `fdf40b82810e1d6e9f54a6094aa1b6bcf6a04067` on `feat/operator-upgrade-0.7`. That commit updates the old UI checks to follow the new Overview; it landed after the review. Verify its outcome rather than repeating the same CI edit. Its passing status has not been independently established in this handoff.
+
+## Repeatable workflow
+
+1. Claude fetches the implementation branch, reads the current instructions and implements the outstanding corrections. Preserve the historical review and evidence; record responses in `CLAUDE_UPDATE.md` rather than rewriting the findings.
+2. Claude fills in the summary with requirement-by-requirement results, exact implementation commit, test evidence, remaining gaps and actual deployment status, then pushes it to the same implementation branch. An implementation commit is recorded before making the summary-only commit; no self-referential commit hash is needed.
+3. The owner asks Codex to review the latest repository update. Codex fetches it, reads the summary and reviews the implementation diff and evidence. A summary claiming completion is not independent verification.
+4. Further Codex findings belong in a dated follow-up in this folder, or a new cycle folder if the scope changes. Update this index's current-cycle link when a new cycle is started. Do not overwrite old evidence or mark unrun checks as passed.
+
+The historical probe `test_owner_073_probes.py` intentionally asserts observed faulty behavior in several cases. It is outside the normal `tests/` suite. Use it to reproduce the baseline, then write proper corrected-behavior regressions in `tests/`; do not treat unchanged observational assertions as acceptance tests.
+
+Keep discussion concise and in the repository. Read only the applicable instructions, relevant source/tests and unresolved requirements; avoid repeatedly copying historical packages or full test logs. No external message or automatic follow-up is implied by committing a summary.

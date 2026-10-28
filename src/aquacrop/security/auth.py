@@ -38,7 +38,10 @@ RANK = {Role.VIEWER: 0, Role.OPERATOR: 1, Role.ADMIN: 2}
 
 
 class Perm(str, enum.Enum):
-    READ = "read"
+    READ = "read"                        # the viewer's scoped reads: Overview, program summaries, alarms (0.7.0)
+    OPS_READ = "ops_read"                # operational reads: history, events, equipment, twin, modules (0.7.0)
+    ADMIN_READ = "admin_read"            # settings, users, storage, backups, the API schema (0.7.0)
+    MODULE_REGISTER = "module_register"  # bounded read-only discovery and module registration proposals (0.7.0)
     SIM_COMMAND = "sim_command"          # simulation commands, injection, overrides, twin controls
     ALARM_ACK = "alarm_ack"
     LOCKOUT_RESET = "lockout_reset"
@@ -53,10 +56,12 @@ class Perm(str, enum.Enum):
     IO_ASSIGN = "io_assign"              # assign and verify I/O channels on the I/O board; needs commissioning
     EQUIPMENT_EDIT = "equipment_edit"    # equipment type drafts, items and program drafts (0.5.0)
     EQUIPMENT_ACTIVATE = "equipment_activate"  # activate or retire equipment types; activate programs
-    MODULE_SETUP = "module_setup"        # dashboard module wizard: reserve and write a new module's address; commissioning
+    MODULE_SETUP = "module_setup"        # module wizard: reserve and write a new module's address; administrators and
+    #                                      operators with commissioning (owner decision 26 Oct 2026, 0.7.1)
 
 
-PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.ALARM_ACK: Role.OPERATOR,
+PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.OPS_READ: Role.OPERATOR, Perm.ADMIN_READ: Role.ADMIN,
+                 Perm.MODULE_REGISTER: Role.OPERATOR, Perm.SIM_COMMAND: Role.OPERATOR, Perm.ALARM_ACK: Role.OPERATOR,
                  Perm.LOCKOUT_RESET: Role.OPERATOR, Perm.EXPORT_AUDIT: Role.ADMIN, Perm.CONFIG_ADMIN: Role.ADMIN,
                  Perm.USER_ADMIN: Role.ADMIN, Perm.BACKUP: Role.ADMIN, Perm.BENCH_ARM: Role.OPERATOR,
                  Perm.PROCESS_CONTROL: Role.OPERATOR, Perm.RECIPE_EDIT: Role.OPERATOR,
@@ -64,25 +69,51 @@ PERM_MIN_ROLE = {Perm.READ: Role.VIEWER, Perm.SIM_COMMAND: Role.OPERATOR, Perm.A
                  Perm.EQUIPMENT_EDIT: Role.OPERATOR, Perm.EQUIPMENT_ACTIVATE: Role.ADMIN,
                  Perm.MODULE_SETUP: Role.OPERATOR}
 
+# Rights that need the commissioning flag (administrators always have it): arm bench tests, assign and verify channels,
+# and (0.7.1, owner decision 26 Oct 2026, ADR-0023 amended) prepare a new module with the address wizard. Every other
+# operator sends a module request instead.
 COMMISSIONING_PERMS = (Perm.BENCH_ARM, Perm.IO_ASSIGN, Perm.MODULE_SETUP)
+
+def needs_text(perm: "Perm") -> str:
+    """Who may do this, in the operator's words, for a refusal (owner, 28 Oct 2026: say what to do)."""
+    role = PERM_MIN_ROLE.get(perm, Role.ADMIN)
+    who = {Role.VIEWER: "any signed-in account", Role.OPERATOR: "an operator or administrator account",
+           Role.ADMIN: "an administrator account"}[role]
+    if perm in COMMISSIONING_PERMS:
+        who = "an administrator, or an operator with Commissioning ticked on their account"
+    return f"this needs {who} (right: {perm.value}); ask an administrator if your account should have it"
+
+
+# Navigation per role (exactly the specified pages; the web shell and the tests read this).
+NAVIGATION = {
+    "viewer": ["overview", "programs", "alarms"],
+    "operator": ["overview", "equipment", "equipment-types", "blocks", "twin", "hw-add", "programs", "history", "alarms"],
+    "admin": ["overview", "equipment", "blocks", "twin", "hw-add", "programs", "history", "alarms",
+              "equipment-types", "hardware", "settings"],
+}
 
 # What each role may do, shown when a user is created or changed. Owner decision 2026-10-24: an administrator
 # has every right, commissioning included; the commissioning flag matters for operators only.
 ROLE_TEXT = {
-    "viewer": {"title": "Viewer", "summary": "Looks, changes nothing.",
-               "can": ["See every page: overview, I/O board, equipment, programs, history, alarms and the digital twin",
-                       "Export history"],
-               "cannot": ["Change, start, stop or acknowledge anything"]},
+    "viewer": {"title": "Viewer", "summary": "Looks at the overview, the programs and the alarms; changes nothing.",
+               "can": ["See the overview, the program summaries and schedules, and the alarms"],
+               "cannot": ["Change, start, stop or acknowledge anything",
+                          "Open the digital twin, history, events, equipment or module pages, or export data"]},
     "operator": {"title": "Operator", "summary": "Runs the installation day to day.",
-                 "can": ["Everything a viewer can",
+                 "can": ["Overview, Equipment, Blocks, Digital Twin, Add Module, Programs, Operation History, Alarms & Events",
                          "Acknowledge alarms and reset process faults",
                          "Switch the installation between AUTO and MANUAL, approve the restart checklist, choose "
                          "between conflicting programs, run or stop a program by hand",
-                         "Create and edit equipment and program drafts, and validate them",
-                         "Use the digital twin: run it, inject faults, accept a twin result"],
+                         "Create and edit equipment, blocks and program drafts, and validate them",
+                         "Open Equipment types: draft types with the guided form, send and review requests for "
+                         "features the software cannot do yet (activation stays with administrators)",
+                         "Use the digital twin: run it, inject faults, accept a twin result",
+                         "Send a module request and follow it; export operational history",
+                         "With Commissioning: prepare a new module with the address wizard, verify wiring, arm bench tests"],
                  "cannot": ["Activate equipment types or programs on the real system",
                             "Manage users, backups, retention or settings",
-                            "Work on the real modules, unless Commissioning is ticked"]},
+                            "Write a module's address or modes, verify wiring or switch real outputs at the bench, "
+                            "unless Commissioning is ticked"]},
     "admin": {"title": "Administrator", "summary": "Every right, including commissioning.",
               "can": ["Everything an operator can, and commissioning",
                       "Activate and retire equipment types, activate programs",
@@ -90,10 +121,10 @@ ROLE_TEXT = {
                       "Backups, retention, off-site copies and every other setting"],
               "cannot": []},
 }
-COMMISSIONING_TEXT = ("Commissioning is the right to work on the real modules at the bench: switch real outputs during an "
-                      "armed test session, choose and verify which module channel each piece of equipment uses, prepare "
-                      "new modules with the Add module wizard, and start discovery scans. Give it to an operator who "
-                      "works at the bench. Administrators always have it.")
+COMMISSIONING_TEXT = ("Commissioning is the right to work on the real modules at the bench: prepare a new module with the "
+                      "address wizard (USB adapter on the controller), switch real outputs during an armed test session and "
+                      "verify which module channel each piece of equipment uses. Give it to an operator who works at the "
+                      "bench. Administrators always have it.")
 
 MIN_PASSWORD_LEN = 12
 _ph = PasswordHasher()  # Argon2id defaults of the maintained library
@@ -114,7 +145,7 @@ class Principal:
     def can(self, perm: Perm) -> bool:
         if perm in COMMISSIONING_PERMS and not self.has_commissioning:
             return False
-        if self.must_change_password and perm != Perm.READ:
+        if self.must_change_password and perm not in (Perm.READ,):
             return False
         return RANK[self.role] >= RANK[PERM_MIN_ROLE[perm]]
 

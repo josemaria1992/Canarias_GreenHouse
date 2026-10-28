@@ -1,4 +1,7 @@
 /* AquaCrop equipment pages (0.5.0): equipment types, individual equipment, and the channel of each role.
+ * 0.7.1 (owner decisions): Equipment is the one page where equipment is created and configured, for operators and
+ * administrators; Digital Twin only places it in the drawing. Name then ID: the ID follows the name (`Valve 1` ->
+ * `Valve_1`) until the user edits it, and stays editable after creation (a rename keeps every reference).
  * Loaded after app.js and built on window.AqUI. All text is inserted with textContent. Icons are drawn from the
  * built-in set (icons.js); an icon never decides what a channel does. A chosen channel is PROPOSED until the same
  * server-side check as on the I/O board plus your observation make it VERIFIED. Nothing on these pages sends
@@ -9,6 +12,14 @@
   const { h, api, act, pill, fmtTime, can, mount, toast, S, VIEWS } = U;
 
   const icon = window.AqIcons.icon;
+  const cap = s => String(s || "").charAt(0).toUpperCase() + String(s || "").slice(1);
+  const MSG = {};
+  const say = (k, text, bad) => { MSG[k] = { text, bad: !!bad }; };
+  const note = k => MSG[k] ? h("span", { class: "inline-msg " + (MSG[k].bad ? "bad" : "ok"), role: "status" }, MSG[k].text) : null;
+  async function send(k, method, path, body, ok) {
+    try { const r = await api(method, path, body); say(k, ok); U.refresh(); return r; }
+    catch (e) { say(k, String(e.message || e), true); U.refresh(); return null; }
+  }
   const STATUS_CLS = { ACTIVE: "ok", DRAFT: "warn", SUPERSEDED: "", RETIRED: "", VERIFIED: "ok", PROPOSED: "warn" };
 
   // ---------------------------------------------------------------- equipment items
@@ -29,7 +40,8 @@
       const taken = E.bindings.find(x => x.point === p.point && !(x.item_id === it.item_id && x.role === role.role));
       return h("option", { value: p.point, disabled: !!taken }, p.point + (taken ? ` (${taken.item_id})` : ""));
     });
-    const sel = h("select", { "aria-label": `Channel for ${it.name} ${role.label}`, disabled: !can("io_assign") },
+    const lockedVerified = b && b.status === "VERIFIED" && !can("io_assign");
+    const sel = h("select", { "aria-label": `Channel for ${it.name} ${role.label}`, disabled: !can("equipment_edit") || lockedVerified },
       h("option", { value: "" }, "— choose a channel —"), opts);
     if (b) sel.value = b.point;
     const obs = h("input", { placeholder: "what you saw the device do", maxlength: 300, "aria-label": "Observation" });
@@ -41,7 +53,7 @@
     return h("tr", null,
       h("td", null, role.label, role.required ? "" : h("span", { class: "muted small" }, " (optional)")),
       h("td", null, `${role.direction.toLowerCase()} ${role.signal.toLowerCase()} · ${role.purpose.toLowerCase()}`),
-      h("td", null, sel, " ", h("button", { class: "small", disabled: !can("io_assign"), onclick: () =>
+      h("td", null, sel, " ", h("button", { class: "small", disabled: !can("equipment_edit") || lockedVerified, onclick: () =>
         act("POST", "/api/equipment/bind", { item_id: it.item_id, role: role.role, point: sel.value || null }, sel.value ? "channel proposed" : "channel cleared") },
         sel.value || !b ? "Set" : "Clear")),
       h("td", null, b ? pill(b.status, STATUS_CLS[b.status]) : pill("NO CHANNEL", role.required ? "bad" : "")),
@@ -57,111 +69,272 @@
     const roles = t ? t.body.roles : [];
     const props = t ? t.body.properties || [] : [];
     return h("div", { class: "card eq-item" },
-      h("div", { class: "row" }, icon(it.icon), h("h3", null, it.name),
+      h("div", { class: "row" }, icon(it.icon), h("h3", null, it.name), h("span", { class: "mono small", "data-public-id": it.item_id }, it.public_id || it.item_id),
         pill(it.status, STATUS_CLS[it.status]), h("span", { class: "muted" }, `${t ? t.name : it.type_id} v${it.type_version} · equipment v${it.version}`),
-        r ? (r.ready ? pill("READY FOR PROGRAMS", "ok") : pill("NOT READY", "warn")) : null),
+        r ? (r.ready ? pill("READY FOR PROGRAMS", "ok") : roles.some(x => E.bindings.find(b => b.item_id === it.item_id && b.role === x.role))
+          ? pill("NOT READY", "warn") : pill("PLANNED · UNASSIGNED", "warn")) : null),
       r && !r.ready ? h("p", { class: "muted small" }, [
         r.missing_required.length ? `No channel: ${r.missing_required.join(", ")}. ` : "",
         r.unverified.length ? `Not verified: ${r.unverified.join(", ")}. ` : "",
         r.unscaled.length ? `No scaling: ${r.unscaled.join(", ")}.` : ""].join("")) : null,
       latest && latest.version !== it.type_version ? h("p", { class: "warn small" }, `Type v${latest.version} is active; this item stays on v${it.type_version} until you upgrade it.`,
         " ", h("button", { class: "small", disabled: !can("equipment_edit"), onclick: () => upgrade(it, latest.version) }, "Preview upgrade")) : null,
+      upgradeBox(it),
       props.length ? h("p", { class: "small" }, props.map(p => `${p.label}: ${it.body.properties[p.key] ?? p.default ?? "—"}${p.unit ? " " + p.unit : ""}`).join(" · ")) : null,
+      tankPreview(it),
+      chartLink(E, it),
       h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Role", "Signal", "Channel", "State", "Check"].map(x => h("th", null, x)))),
         h("tbody", null, roles.map(role => roleRow(E, it, role, board)))),
       h("p", { class: "muted small" }, "Commanded state, coil readback and independent feedback are shown separately on the twin and bench pages; a missing feedback is UNKNOWN, never OFF."),
-      it.status === "ACTIVE" ? itemDetails(it) : null,
-      it.status === "ACTIVE" && can("equipment_activate") ? h("button", { class: "small ghost", onclick: () => {
-        const why = prompt(`Retire ${it.name}? Its history and records are kept. Reason:`); if (why) act("POST", `/api/equipment/items/${it.item_id}/retire`, { reason: why }, "retired");
-      } }, "Retire") : null);
+      it.status === "ACTIVE" ? itemDetails(it, t) : null,
+      it.status === "ACTIVE" && can("equipment_activate") ? retireRow(it) : null);
+  }
+  function retireRow(it) {
+    const why = h("input", { maxlength: 200, placeholder: "why it is retired", "aria-label": `Reason to retire ${it.name}` });
+    return h("details", null, h("summary", { class: "small" }, `Retire ${it.name}`),
+      h("div", { class: "row" }, why, h("button", { class: "small ghost", onclick: () => {
+        if (why.value.trim().length < 3) { why.focus(); return; }
+        act("POST", `/api/equipment/items/${it.item_id}/retire`, { reason: why.value }, "retired; its history and records are kept");
+      } }, `Retire ${it.name}`)), h("p", { class: "muted small" }, "Retiring keeps the item's history and records; programs that use it must be changed first."));
   }
 
-  function itemDetails(it) {
-    // properties, analog scaling, alarm limits and twin links, as the item's JSON body (validated by the server)
-    const ta = h("textarea", { rows: 10, spellcheck: "false", "aria-label": `Details of ${it.name} (JSON)` });
-    ta.value = JSON.stringify(it.body, null, 2);
-    const name = h("input", { maxlength: 80, value: it.name, "aria-label": "Name" });
-    const save = () => {
-      let body; try { body = JSON.parse(ta.value); } catch (e) { toast("not valid JSON: " + e.message, true); return; }
-      act("POST", "/api/equipment/items", { item_id: it.item_id, name: name.value, type_id: it.type_id, type_version: it.type_version,
-        icon: it.icon, body, expected_version: it.version }, "saved as a new equipment version");
+  // 0.7.3 DATA-01: the item's bound channels charted in Operation History (gaps, quality and digital lanes there)
+  function chartLink(E, it) {
+    const pts = (E.bindings || []).filter(b => b.item_id === it.item_id && b.point).map(b => b.point);
+    if (!pts.length) return null;
+    return h("button", { class: "small ghost", "data-chart-item": it.item_id, onclick: () => { S.trendSel = pts.slice(0, 8); location.hash = "#history"; } }, "Chart its channels");
+  }
+  // 0.7.3: a tank with a capacity shows the size it gets in the drawing (the editor's rule, schematic only)
+  function tankPreview(it) {
+    const cap = Number(((it.body || {}).properties || {}).capacity_l);
+    if (!(cap > 0) || !window.AqHydraulicEditor || !window.AqHydraulicEditor.tankSize) return null;
+    const z = window.AqHydraulicEditor.tankSize(cap), k = 0.3, NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg"), r = document.createElementNS(NS, "rect");
+    svg.setAttribute("width", z.w * k + 2); svg.setAttribute("height", z.h * k + 2); svg.setAttribute("aria-hidden", "true");
+    Object.entries({ x: 1, y: 1, width: z.w * k, height: z.h * k, rx: 3, fill: "none", stroke: "currentColor" }).forEach(([a, b]) => r.setAttribute(a, b));
+    svg.appendChild(r);
+    return h("p", { class: "small muted", "data-tank-size": `${z.w}x${z.h}` }, svg, ` Drawn ${z.w} × ${z.h} in the installation drawing for ${cap} L (schematic, not the tank's real dimensions).`);
+  }
+  // 0.7.0: the item's details as typed fields (no JSON): properties of its type, the scaling and alarm limits of
+  // each measurement. Values the user typed survive the page's refresh; problems come back beside the button.
+  const ED = {};
+  function itemDetails(it, t) {
+    const d = ED[it.item_id] = ED[it.item_id] || { name: it.name, body: JSON.parse(JSON.stringify(it.body)), msg: null, version: it.version };
+    if (d.version !== it.version && !d.dirty) Object.assign(d, { name: it.name, body: JSON.parse(JSON.stringify(it.body)), version: it.version });
+    const b = d.body;
+    b.properties = b.properties || {}; b.scaling = b.scaling || {}; b.alarms = b.alarms || [];
+    const mark = () => { d.dirty = true; d.msg = null; };          // an edit retires the last save's message
+    const props = (t ? t.body.properties || [] : []).map(p => {
+      const cur = b.properties[p.key];
+      let inp;
+      if (p.kind === "CHOICE") inp = h("select", { "aria-label": p.label, onchange: ev => { b.properties[p.key] = ev.target.value; mark(); } },
+        h("option", { value: "" }, "— not set —"), p.choices.map(c => h("option", { value: c, selected: cur === c ? true : null }, c)));
+      else if (p.kind === "BOOLEAN") inp = h("input", { type: "checkbox", checked: cur ? true : null, "aria-label": p.label, onchange: ev => { b.properties[p.key] = ev.target.checked; mark(); } });
+      else if (p.kind === "TEXT") inp = h("input", { maxlength: 200, value: cur == null ? "" : cur, "aria-label": p.label, oninput: ev => { b.properties[p.key] = ev.target.value; mark(); } });
+      else inp = h("input", { type: "number", step: p.kind === "INTEGER" ? 1 : "any", min: p.min == null ? null : p.min, max: p.max == null ? null : p.max, class: "w-num",
+        value: cur == null ? "" : cur, "aria-label": p.label,
+        oninput: ev => { if (ev.target.value === "") delete b.properties[p.key]; else b.properties[p.key] = Number(ev.target.value); mark(); } });
+      return h("label", null, `${p.label}${p.unit ? " (" + p.unit + ")" : ""}${p.required ? " *" : ""}`, inp);
+    });
+    const meas = t ? t.body.roles.filter(r => r.purpose === "MEASUREMENT") : [];
+    const scaleRows = meas.map(r => {
+      const sc = b.scaling[r.role];
+      const set = (k, v) => { b.scaling[r.role] = Object.assign(b.scaling[r.role] || { raw_min: 4, raw_max: 20, raw_unit: "mA", eng_min: 0, eng_max: 100, unit: r.unit || "", provenance: "PROPOSED" }, { [k]: v }); mark(); };
+      const num = (k, label) => h("input", { type: "number", step: "any", class: "w-num", value: sc && sc[k] != null ? sc[k] : "", "aria-label": `${r.label} ${label}`, oninput: ev => set(k, Number(ev.target.value)) });
+      return h("tr", null, h("td", null, r.label),
+        h("td", null, sc ? null : h("span", { class: "muted small" }, "not scaled "), num("raw_min", "signal at minimum"), " – ", num("raw_max", "signal at maximum"), " ",
+          h("select", { "aria-label": `${r.label} signal unit`, onchange: ev => set("raw_unit", ev.target.value) }, ["mA", "V"].map(u => h("option", { value: u, selected: sc && sc.raw_unit === u ? true : null }, u)))),
+        h("td", null, num("eng_min", "value at minimum"), " – ", num("eng_max", "value at maximum"), " ",
+          h("input", { maxlength: 16, class: "w-num", value: sc ? sc.unit : (r.unit || ""), "aria-label": `${r.label} unit`, oninput: ev => set("unit", ev.target.value) })),
+        h("td", null, h("select", { "aria-label": `${r.label} provenance`, onchange: ev => set("provenance", ev.target.value) },
+          ["PROPOSED", "DATASHEET", "CALIBRATED", "DEMO"].map(v => h("option", { value: v, selected: sc && sc.provenance === v ? true : null }, v.toLowerCase()))),
+          sc && sc.provenance === "CALIBRATED" ? h("input", { maxlength: 120, placeholder: "calibration record", value: sc.calibration_ref || "", "aria-label": `${r.label} calibration record`, oninput: ev => set("calibration_ref", ev.target.value) }) : null),
+        h("td", null, sc ? h("button", { class: "small ghost", onclick: () => { delete b.scaling[r.role]; mark(); U.refresh(); } }, "Remove") : null));
+    });
+    const alarmRows = meas.map(r => {
+      let a = b.alarms.find(x => x.role === r.role);
+      const ensure = () => { if (!a) { a = { role: r.role, low: null, high: null, deadband: 0, delay_s: 0 }; b.alarms.push(a); } return a; };
+      const num = (k, label) => h("input", { type: "number", step: "any", min: k === "low" || k === "high" ? null : 0, class: "w-num", value: a && a[k] != null ? a[k] : "", "aria-label": `${r.label} ${label}`,
+        oninput: ev => { ensure()[k] = ev.target.value === "" ? (k === "low" || k === "high" ? null : 0) : Number(ev.target.value); mark(); } });
+      return h("tr", null, h("td", null, r.label), h("td", null, num("low", "low alarm")), h("td", null, num("high", "high alarm")),
+        h("td", null, num("deadband", "deadband")), h("td", null, num("delay_s", "delay seconds")),
+        h("td", null, a ? h("button", { class: "small ghost", onclick: () => { b.alarms = b.alarms.filter(x => x !== a); mark(); U.refresh(); } }, "Remove") : null));
+    });
+    const save = async () => {
+      b.alarms = b.alarms.filter(x => x.low != null || x.high != null);
+      try {
+        await api("POST", "/api/equipment/items", { item_id: it.item_id, name: d.name, type_id: it.type_id, type_version: it.type_version,
+          icon: it.icon, body: b, expected_version: it.version });
+        d.msg = { text: "Saved as a new version of this equipment.", bad: false }; d.dirty = false;
+      } catch (e) { d.msg = { text: String(e.message || e), bad: true }; }
+      U.refresh();
     };
-    return h("details", null, h("summary", { class: "small" }, "Edit details (properties, scaling, alarm limits, twin links)"),
-      h("p", { class: "muted small" }, 'Examples: "properties": {"rated_flow_l_min": 20} · "scaling": {"flow": {"raw_min": 4, "raw_max": 20, "raw_unit": "mA", "eng_min": 0, "eng_max": 100, "unit": "L/min", "provenance": "DEMO"}} · "sim_links": {"flow_item": "flow-1"} (a pump drives that flow meter in the twin)'),
-      h("label", null, "Name ", name), ta,
-      h("button", { class: "small", disabled: !can("equipment_edit"), onclick: save }, "Save details"));
+    const idIn = h("input", { maxlength: 48, value: d.pid == null ? (it.public_id || it.item_id) : d.pid, "aria-label": `ID of ${it.name}`, class: "mono",
+      oninput: ev => { d.pid = ev.target.value; } });
+    const rename = async () => {
+      const want = idIn.value.trim(), bad = window.AqIds.problem(want);
+      if (bad) { say("id:" + it.item_id, bad, true); U.refresh(); return; }
+      const r = await send("id:" + it.item_id, "POST", `/api/equipment/items/${encodeURIComponent(it.item_id)}/id`, { public_id: want, expected_rev: it.id_rev || 0 },
+        `ID is now ${want}. Blocks, programs, channels and history keep pointing at this equipment.`);
+      if (r) d.pid = null;
+    };
+    return h("details", { "data-item-details": it.item_id }, h("summary", { class: "small" }, `Details of ${it.name}: name, ID, properties, scaling, alarm limits`),
+      h("div", { class: "row wrap" }, h("label", null, "Name", h("input", { maxlength: 80, value: d.name, "aria-label": `Name of ${it.item_id}`, oninput: ev => { d.name = ev.target.value; mark(); } })),
+        h("label", null, "ID", idIn), h("button", { class: "small", disabled: !can("equipment_edit"), onclick: rename }, "Change ID"), note("id:" + it.item_id)),
+      h("div", { class: "row wrap" }, props),
+      meas.length ? [h("h4", null, "Scaling (the module's signal to the engineering value)"),
+        h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Reading", "Signal range", "Value range and unit", "Where it comes from", ""].map(x => h("th", null, x)))), h("tbody", null, scaleRows)),
+        h("h4", null, "Alarm limits"),
+        h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Reading", "Low", "High", "Deadband", "Delay (s)", ""].map(x => h("th", null, x)))), h("tbody", null, alarmRows)),
+        h("p", { class: "muted small" }, "A limit raises an alarm after its delay and clears once the value is back inside by the deadband. A reading that is missing or stale neither raises nor clears it.")] : null,
+      h("div", { class: "row" }, h("button", { class: "small", disabled: !can("equipment_edit"), onclick: save }, "Save details"),
+        d.msg ? h("span", { class: "inline-msg " + (d.msg.bad ? "bad" : "ok"), role: "status" }, d.msg.text) : null));
   }
 
+  const UP = {};
   async function upgrade(it, to) {
-    const p = await api("GET", `/api/equipment/items/${it.item_id}/upgrade?to_version=${to}`).catch(e => { toast(String(e.message), true); return null; });
-    if (!p) return;
-    const lines = [`Upgrade ${it.name} from type v${p.from} to v${p.to}?`,
-      p.roles_added.length ? `Roles added: ${p.roles_added.join(", ")}` : null,
+    const p = await api("GET", `/api/equipment/items/${it.item_id}/upgrade?to_version=${to}`).catch(e => ({ error: String(e.message || e) }));
+    UP[it.item_id] = { p, to };
+    U.refresh();
+  }
+  function upgradeBox(it) {
+    const u = UP[it.item_id]; if (!u) return null;
+    const p = u.p;
+    if (p.error) return h("p", { class: "bad small" }, p.error);
+    const lines = [p.roles_added.length ? `Roles added: ${p.roles_added.join(", ")}` : null,
       p.roles_removed.length ? `Roles removed: ${p.roles_removed.join(", ")}` : null,
       p.bindings_cleared.length ? `Channels cleared: ${p.bindings_cleared.join(", ")}` : null,
       p.bindings_back_to_proposed.length ? `Verify again: ${p.bindings_back_to_proposed.join(", ")}` : null,
-      p.programs.length ? `Programs to revalidate: ${p.programs.join(", ")}` : null,
-      p.item_issues.length ? `Problems: ${p.item_issues.join("; ")}` : null].filter(Boolean);
-    if (p.item_issues.length) { alert(lines.join("\n")); return; }
-    if (confirm(lines.join("\n"))) act("POST", `/api/equipment/items/${it.item_id}/upgrade`, { to_version: p.to, expected_version: it.version }, "upgraded");
+      p.programs.length ? `Programs to revalidate: ${p.programs.join(", ")}` : null].filter(Boolean);
+    return h("div", { class: "confirm", role: "group", "aria-label": `Upgrade ${it.name}` },
+      h("p", null, h("strong", null, `Upgrade ${it.name} from type v${p.from} to v${p.to}?`)), h("ul", { class: "small" }, lines.map(x => h("li", null, x))),
+      p.item_issues.length ? h("p", { class: "bad small" }, `Not possible: ${p.item_issues.join("; ")}`) : null,
+      h("div", { class: "row" }, h("button", { class: "ghost small", onclick: () => { delete UP[it.item_id]; U.refresh(); } }, "Cancel"),
+        p.item_issues.length ? null : h("button", { class: "small", onclick: () => { delete UP[it.item_id]; act("POST", `/api/equipment/items/${it.item_id}/upgrade`, { to_version: p.to, expected_version: it.version }, "upgraded"); } }, "Upgrade")));
   }
 
   function newItemCard(E) {
     const types = activeTypes(E);
     const tsel = h("select", { "aria-label": "Type" }, types.map(t => h("option", { value: t.type_id }, `${t.name} (v${t.version})`)));
-    const name = h("input", { maxlength: 80, placeholder: "e.g. LED 1 on digital_A" });
-    const id = h("input", { maxlength: 48, placeholder: "led-1", pattern: "[a-z0-9][a-z0-9_-]*" });
-    const isel = h("select", { "aria-label": "Icon" }, E.icons.map(i => h("option", { value: i }, i)));
+    const name = h("input", { maxlength: 80, placeholder: "e.g. Valve 1", "aria-label": "Name" });
+    const id = h("input", { maxlength: 48, placeholder: "Valve_1", class: "mono", "aria-label": "ID" });
+    window.AqIds.follow(name, id);
+    const isel = h("select", { "aria-label": "Icon" }, E.icons.map(i => h("option", { value: i }, cap(i))));
     const preview = h("span", null);
     const showIcon = () => preview.replaceChildren(icon(isel.value));
     isel.addEventListener("change", showIcon);
     tsel.addEventListener("change", () => { const t = types.find(x => x.type_id === tsel.value); if (t && !isel.dataset.dirty) { isel.value = t.body.default_icon; showIcon(); } });
     if (types[0]) isel.value = types[0].body.default_icon;
     showIcon();
+    // UX-05: a type with a capacity (a tank) asks for it here and shows the size it gets in the drawing
+    const capIn = h("input", { type: "number", min: 1, max: 1000000, step: "any", class: "w-num", "aria-label": "Capacity in litres" });
+    const capBox = h("span", { "data-capacity": "" });
+    const capShow = () => {
+      const t = types.find(x => x.type_id === tsel.value), has = t && (t.body.properties || []).some(q => q.key === "capacity_l");
+      capBox.replaceChildren(...(has ? [h("label", null, "Capacity (L) ", capIn), " ", tankPreview({ body: { properties: { capacity_l: Number(capIn.value) } } }) || h("span", { class: "muted small" }, "Enter the capacity to see its size in the drawing.")] : []));
+    };
+    capIn.addEventListener("input", capShow); tsel.addEventListener("change", capShow); capShow();
+    const create = async () => {
+      const bad = !name.value.trim() ? "Give it a name." : window.AqIds.problem(id.value.trim());
+      if (bad) { say("new", bad, true); U.refresh(); return; }
+      const t = types.find(x => x.type_id === tsel.value);
+      const props = t && (t.body.properties || []).some(q => q.key === "capacity_l") && Number(capIn.value) > 0 ? { capacity_l: Number(capIn.value) } : null;
+      const passive = t && !(t.body.roles || []).length;
+      const r = await send("new", "POST", "/api/equipment/items", { item_id: id.value.trim(), name: name.value, type_id: tsel.value, icon: isel.value, body: props ? { properties: props } : {} },
+        passive ? `${name.value} created as ${id.value.trim()}. It needs no channel. Next: place and connect it in the Digital Twin, export the drawing and approve it here; then Blocks can use it.`
+          : `${name.value} created as ${id.value.trim()}. It is planned and unassigned until a channel is chosen; place it in the drawing from Digital Twin.`);
+      if (r) [name, id, capIn].forEach(f => { f.value = ""; delete f.dataset.dirty; delete f.dataset.owned; });
+    };
     return h("div", { class: "card" }, h("h3", null, "New equipment"),
-      types.length ? h("div", { class: "row" },
-        h("label", null, "Type ", tsel), h("label", null, "Name ", name), h("label", null, "Id ", id), h("label", null, "Icon ", isel), preview,
-        h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/items",
-          { item_id: id.value, name: name.value, type_id: tsel.value, icon: isel.value, body: {} }, "equipment created") }, "Create"))
-        : h("p", { class: "muted" }, "No active equipment type yet. Activate one on Equipment types first."),
-      h("p", { class: "muted small" }, "Properties, scaling and alarm limits are edited after creation. The icon is only a picture."));
+      types.length ? h("div", { class: "row wrap" },
+        h("label", null, "Name ", name), h("label", null, "ID ", id), h("label", null, "Type ", tsel), capBox, h("label", null, "Icon ", isel), preview,
+        h("button", { disabled: !can("equipment_edit"), onclick: create }, "Create"), note("new"))
+        : h("p", { class: "muted" }, can("equipment_activate") ? "No active equipment type yet. Activate one on Equipment types first." : "No active equipment type yet: an administrator activates the types on Equipment types."),
+      missingTypes(E),
+      h("p", { class: "muted small" }, "The ID fills in from the name (Valve 1 → Valve_1) until you change it, and can be changed later. Properties, scaling and alarm limits are edited after creation. The icon is only a picture."));
+  }
+  // C075-03: equipment an imported project proposed, created here (with its imported settings) or dismissed
+  function importedCard(E, props) {
+    const items = (props && props.items) || [];
+    if (!items.length) return null;
+    const active = new Set(activeTypes(E).map(t => t.type_id));
+    return h("div", { class: "card", "data-imported-items": "" }, h("h3", null, `Equipment from an imported project (${items.length})`),
+      h("table", { class: "compact small" }, h("tbody", null, items.map(x => h("tr", null, h("td", null, x.name), h("td", { class: "mono" }, x.item_id),
+        h("td", null, x.type_name || x.type_id, active.has(x.type_id) ? "" : " — this type is not available yet (see below)"),
+        h("td", null, h("button", { class: "small", disabled: !can("equipment_edit") || !active.has(x.type_id) ? true : null,
+          onclick: () => send("imp", "POST", "/api/equipment/items", { item_id: x.item_id, name: x.name, type_id: x.type_id, icon: x.icon || "generic", body: x.body },
+            `${x.name} created with its imported settings. Choose and verify its channels here; place it in the Digital Twin.`) }, "Create"), " ",
+          h("button", { class: "small ghost", disabled: !can("equipment_edit") ? true : null,
+            onclick: () => send("imp", "POST", "/api/project/proposals/dismiss", { file: x.file, item_id: x.item_id }, `${x.name} dismissed.`) }, "Dismiss")))))),
+      note("imp"), h("p", { class: "muted small" }, "Channels are never imported: they are chosen and verified on this installation."));
+  }
+  // UX-05: the water-system types an installation needs, when one is not choosable yet: what state it is in and the
+  // permitted next step (an administrator makes a built-in type available; an operator is told who can)
+  const NEEDED = ["water_source", "tank", "pump", "valve", "flow", "sector", "level"];
+  function missingTypes(E) {
+    const av = (E.availability || []).filter(a => NEEDED.includes(a.type_id) && a.state !== "ACTIVE");
+    if (!av.length) return null;
+    const word = { TEMPLATE: "built in, not added yet", DRAFT: "added, awaiting activation", RETIRED: "retired on this installation" };
+    const admin = can("equipment_activate");
+    return h("div", { class: "small", "data-missing-types": "" },
+      h("p", null, "Not in the Type list yet: ", av.map(a => `${a.name} (${word[a.state]})`).join(", "), "."),
+      admin ? h("div", { class: "row wrap" }, av.filter(a => a.state !== "RETIRED").map(a => h("button", { class: "small", "data-make-available": a.type_id,
+        onclick: () => send("types", "POST", "/api/equipment/types/make-available", { type_id: a.type_id }, `${a.name} is now in the Type list.`).then(() => U.refresh()) }, `Make ${a.name} available`)), note("types"))
+        : h("p", { class: "muted" }, "An administrator makes these types available (Equipment types); ask one to activate them."),
+      av.some(a => a.state === "RETIRED") ? h("p", { class: "muted" }, "A retired type is not brought back automatically: an administrator makes a new version on Equipment types if it is wanted again.") : null,
+      h("p", { class: "muted" }, "Making a type available lets you create that kind of equipment. The new item then goes into the drawing in the Digital Twin (placed, connected, exported and approved) before Blocks can choose it."));
   }
 
   VIEWS.equipment = async function () {
-    const [E, board] = await Promise.all([api("GET", "/api/equipment"), api("GET", "/api/board").catch(() => null)]);
+    const [E, board, props] = await Promise.all([api("GET", "/api/equipment"), api("GET", "/api/board").catch(() => null),
+      api("GET", "/api/project/proposals").catch(() => null)]);
     const pts = board ? board.modules.flatMap(m => m.points.map(p => ({ point: p.id, kind: p.kind }))) : [];
     const live = E.items.filter(i => i.status === "ACTIVE"), retired = E.items.filter(i => i.status === "RETIRED");
     mount("v-equipment",
       h("div", { class: "card" }, h("div", { class: "row" }, h("h2", null, "Equipment"),
         h("span", { class: "muted" }, `${live.length} items · ${E.bindings.filter(b => b.status === "VERIFIED").length} verified channels`),
-        h("a", { href: "/api/equipment/export", download: "aquacrop-equipment.json" }, "Export")),
+        h("a", { href: "/api/equipment/export", download: "aquacrop-equipment.json" }, "Export"),
+        can("equipment_edit") ? h("a", { href: "#equipment-types" }, "Equipment types") : null),
         h("p", { class: "muted" }, "Each item is made from an equipment type. Choose the channel of each role, then verify it with the device connected. A verified channel is still not an output permission: physical switching also needs the bench-test profile and an armed test session.")),
-      newItemCard(E), live.map(it => itemCard(E, it, pts)),
+      newItemCard(E), importedCard(E, props), live.map(it => itemCard(E, it, pts)),
       retired.length ? h("details", { class: "card" }, h("summary", null, `Retired (${retired.length})`), retired.map(it => h("p", null, `${it.name} · retired ${fmtTime(it.updated_utc)}`))) : null);
   };
 
   // ---------------------------------------------------------------- equipment types
-  function typeEditor(E, t) {
-    const ta = h("textarea", { rows: 16, cols: 90, spellcheck: "false", "aria-label": "Type definition (JSON)" });
-    ta.value = JSON.stringify(t ? t.body : { category: "", default_icon: "generic", roles: [], operations: [], limits: {}, simulation: { behavior: "NOT_MODELLED" } }, null, 2);
-    const id = h("input", { maxlength: 48, value: t ? t.type_id : "", disabled: !!t, "aria-label": "Type id" });
-    const name = h("input", { maxlength: 80, value: t ? t.name : "", "aria-label": "Type name" });
-    const save = () => {
-      let body; try { body = JSON.parse(ta.value); } catch (e) { toast("The definition is not valid JSON: " + e.message, true); return; }
-      act("POST", "/api/equipment/types/draft", { type_id: id.value, name: name.value, body, version: t && t.status === "DRAFT" ? t.version : null }, "draft saved");
+  // UX-07: a guided form (what it is, how it looks, the relevant questions, a summary in words); never JSON
+  function typeEditor(E, t, key) {
+    return window.AqTypeForm ? window.AqTypeForm.editor(E, t, key) : h("p", { class: "bad small" }, "The type form did not load: reload the page.");
+  }
+  // closing an editor with unsaved entries asks first; closing discards them, so reopening starts from the saved type
+  function editorToggle(key, name) {
+    return ev => {
+      const d = ev.target;
+      if (d.open) return;
+      const dirty = (window.AqTypeForm && window.AqTypeForm.dirty(key)) || d.querySelector("[data-dirty]");
+      if (dirty && !confirm(`Close the editor of ${name}? Your unsaved changes are discarded.`)) { d.open = true; return; }
+      d.querySelectorAll("[data-dirty]").forEach(f => { delete f.dataset.dirty; });
+      if (window.AqTypeForm) window.AqTypeForm.forget(key);
     };
-    return h("div", { class: "row col" }, h("div", { class: "row" }, h("label", null, "Id ", id), h("label", null, "Name ", name)), ta,
-      h("div", { class: "row" }, h("button", { disabled: !can("equipment_edit"), onclick: save }, t && t.status === "DRAFT" ? "Save draft" : "Save as new draft version"),
-        h("span", { class: "muted small" }, "Roles: direction OUTPUT/INPUT, signal DIGITAL/ANALOG, purpose COMMAND/RUNNING/FAULT/OPEN/CLOSED/STATE/MEASUREMENT. Switchable types need limits.max_runtime_s.")));
+  }
+  // UX-05: every built-in type and where it stands, with the permitted next step
+  function availabilityCard(E) {
+    const av = (E.availability || []).filter(a => a.built_in);
+    const word = { TEMPLATE: "built in, not added", DRAFT: "draft, awaiting activation", ACTIVE: "available for new equipment", RETIRED: "retired" };
+    const cls = { TEMPLATE: "", DRAFT: "warn", ACTIVE: "ok", RETIRED: "" };
+    return h("div", { class: "card", "data-availability": "" }, h("h3", null, "Built-in types"),
+      h("table", { class: "compact small" }, h("tbody", null, av.map(a => h("tr", null, h("td", null, a.name), h("td", null, pill(word[a.state], cls[a.state])),
+        h("td", null, a.roles ? `${a.roles} channel role(s)` : "no channel (passive)"),
+        h("td", null, (a.state === "TEMPLATE" || a.state === "DRAFT") && can("equipment_activate")
+          ? h("button", { class: "small", onclick: () => act("POST", "/api/equipment/types/make-available", { type_id: a.type_id }, `${a.name} is available for new equipment`) }, "Make available") : null))))),
+      h("p", { class: "muted small" }, "Make available adds the built-in definition when it is missing and activates it. A retired type or an edited draft is never changed by it; review those below."));
   }
   function typeCard(E, t) {
     const users = E.items.filter(i => i.type_id === t.type_id && i.status === "ACTIVE");
     return h("div", { class: "card" },
       h("div", { class: "row" }, icon(t.body.default_icon), h("h3", null, t.name), pill(`${t.status} v${t.version}`, STATUS_CLS[t.status]),
-        h("span", { class: "muted" }, `${t.body.category} · ${t.body.roles.length} roles · ${users.length} items`)),
+        h("span", { class: "muted" }, `${t.body.category ? t.body.category + " · " : ""}${t.body.roles.length ? t.body.roles.length + " connection(s) to the controller" : "no controller connection"} · ${users.length} item(s)`)),
       t.body.description ? h("p", { class: "small" }, t.body.description) : null,
-      h("p", { class: "small" }, "Roles: ", t.body.roles.map(r => `${r.label} (${r.direction === "OUTPUT" ? "out" : "in"} ${r.signal.toLowerCase()}${r.required ? "" : ", optional"})`).join(" · ")),
-      h("p", { class: "small" }, `Operations: ${(t.body.operations || []).join(", ") || "none"} · Twin behaviour: ${t.body.simulation.behavior}`),
+      h("p", { class: "small", "data-type-summary": t.type_id }, window.AqTypeForm ? window.AqTypeForm.summaryOf(t.body, t) : ""),
       h("div", { class: "row" },
         t.status === "DRAFT" ? h("button", { disabled: !can("equipment_activate"), onclick: () => {
           const msg = users.length ? `Activate ${t.name} v${t.version}? ${users.length} item(s) stay on their current version until each is upgraded.` : `Activate ${t.name} v${t.version}?`;
@@ -170,10 +343,35 @@
         t.status === "ACTIVE" && can("equipment_activate") ? h("button", { class: "ghost small", onclick: () => {
           const why = prompt(`Retire ${t.name}? Reason:`); if (why) act("POST", `/api/equipment/types/${t.type_id}/retire`, { reason: why }, "type retired");
         } }, "Retire") : null),
-      t.status === "ACTIVE" || t.status === "DRAFT" ? h("details", null, h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t)) : null);
+      t.status === "ACTIVE" || t.status === "DRAFT" ? (key => h("details", { "data-state-key": key, ontoggle: editorToggle(key, t.name) },
+        h("summary", null, t.status === "DRAFT" ? "Edit draft" : "Edit (creates the next draft version)"), typeEditor(E, t, key)))(`type:${t.type_id}:${t.status === "DRAFT" ? "draft" : "next"}:edit`) : null);
+  }
+  // owner, 28 Oct 2026: requests for features the software cannot do yet go to the operators, who approve or reject them
+  function requestsCard(R) {
+    // R913-04: every request waiting for review is listed, however many newer ones were reviewed; history pages on
+    const open = (R && R.open) || [], done = (R && R.reviewed) || [];
+    const rs = open.concat(done);
+    const cls = { OPEN: "warn", APPROVED: "ok", REJECTED: "" };
+    const word = { OPEN: "waiting for review", APPROVED: "approved", REJECTED: "rejected" };
+    const decide = (r, decision) => () => {
+      const note = decision === "REJECTED" ? prompt(`Reject request ${r.request_id}? Why:`) : prompt(`Approve request ${r.request_id}? A note (optional):`, "");
+      if (note === null || (decision === "REJECTED" && !note.trim())) return;
+      act("POST", "/api/equipment/type-requests/review", { request_id: r.request_id, decision, note }, `request ${r.request_id} ${word[decision]}`);
+    };
+    return h("div", { class: "card", "data-type-requests": String(open.length) },
+      h("div", { class: "row" }, h("h3", null, "Requests"), pill(open.length ? `${open.length} waiting for review` : "none waiting", open.length ? "warn" : "ok")),
+      h("p", { class: "muted small" }, R ? R.meaning : ""),
+      rs.length ? h("table", { class: "compact small" }, h("tbody", null, rs.map(r => h("tr", { "data-request": String(r.request_id) },
+        h("td", null, `#${r.request_id}`), h("td", null, `${r.type_name ? r.type_name + ": " : ""}${r.need}`, h("div", { class: "muted" }, `by ${r.by}, ${fmtTime(r.utc)}`)),
+        h("td", null, pill(word[r.status] || r.status, cls[r.status] || ""), r.reviewer ? h("div", { class: "muted" }, `by ${r.reviewer}${r.note ? ": " + r.note : ""}`) : null),
+        h("td", null, r.status === "OPEN" && R.can_review ? [h("button", { class: "small", onclick: decide(r, "APPROVED") }, "Approve"), " ",
+          h("button", { class: "ghost small", onclick: decide(r, "REJECTED") }, "Reject")] : null)))))
+        : h("p", { class: "muted small" }, "No requests yet. They come from Add a feature in the type form, when the software cannot do what is needed."),
+      R && R.reviewed_total > done.length ? h("div", { class: "row small" }, h("span", { class: "muted" }, `Showing ${done.length} of ${R.reviewed_total} reviewed requests.`),
+        h("button", { class: "small ghost", onclick: () => { S.reqLimit = (S.reqLimit || 50) + 50; U.refresh(); } }, "Show older")) : null);
   }
   VIEWS["equipment-types"] = async function () {
-    const E = await api("GET", "/api/equipment");
+    const [E, R] = await Promise.all([api("GET", "/api/equipment"), api("GET", `/api/equipment/type-requests?limit=${S.reqLimit || 50}`).catch(() => null)]);
     const current = {};
     for (const t of E.types) if (t.status !== "SUPERSEDED") current[t.type_id + ":" + t.status] = t;
     const shown = Object.values(current).sort((a, b) => a.name.localeCompare(b.name));
@@ -186,10 +384,12 @@
     });
     mount("v-equipment-types",
       h("div", { class: "card" }, h("div", { class: "row" }, h("h2", null, "Equipment types"),
-        h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/types/seed", undefined, "templates added as drafts") }, "Add built-in templates"),
+        h("button", { disabled: !can("equipment_edit"), onclick: () => act("POST", "/api/equipment/types/seed", undefined, "built-in types added as drafts") }, "Add every built-in type as a draft"),
         h("label", { class: "small" }, "Import ", imp)),
-        h("p", { class: "muted" }, "A type defines the channels (roles) an item needs, its properties, limits, permitted operations and how the twin simulates it. Templates arrive as drafts you review and activate; activating a new version never changes existing items until each is upgraded.")),
+        h("p", { class: "muted" }, "A type describes a kind of equipment: what it is, how it is drawn, which connections to the controller it has, its details and limits. Each named item is then made from a type on Equipment. Built-in types arrive as drafts you review and activate; activating a new version never changes existing items until each is upgraded.")),
+      availabilityCard(E),
+      requestsCard(R),
       shown.map(t => typeCard(E, t)),
-      h("details", { class: "card" }, h("summary", null, "New type"), typeEditor(E, null)));
+      h("details", { class: "card", "data-state-key": "type:new:edit", ontoggle: editorToggle("type:new:edit", "the new type") }, h("summary", null, "New type"), typeEditor(E, null, "type:new:edit")));
   };
 })();

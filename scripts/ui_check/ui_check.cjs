@@ -74,6 +74,8 @@ async function show(p, view) {
   }, view), 10000);
   await p.waitForTimeout(400);
 }
+// an ISO time in microseconds (Date.parse keeps milliseconds: a reading 0.9 ms after the request would compare equal)
+const usOf = s => Date.parse(s) * 1000 + (+((String(s).match(/\.\d{3}(\d{1,3})/) || [])[1] || "0").padEnd(3, "0") || 0);
 const visibleText = p => p.evaluate(() => (document.querySelector("section.view:not(.hidden)") || document.body).innerText);
 const procs = async p => (await get(p, "/api/processes")).processes;
 
@@ -102,7 +104,7 @@ async function main() {
   const nav = await until(p, async () => { const t = (await p.locator("#nav").innerText()).replace(/\s+/g, " "); return /Watering/.test(t) && !/\bControl\b/.test(t) && t; }, 5000)
     || (await p.locator("#nav").innerText()).replace(/\s+/g, " ");
   check("UI-01 nav", ["Getting started", "Watering", "Sector 1", "Sector 2", "Main tank", "Nutrients & acid", "Drainage return", "Recipes",
-    "Digital Twin", "History", "Alarms & events"].every(t => nav.includes(t)) && !/\bControl\b|Trends/.test(nav), nav);
+    "Digital Twin", "History", "Alarms & Events"].every(t => nav.includes(t)) && !/\bControl\b|Trends/.test(nav), nav);
   for (const v of PLANT_PAGES.concat(SHARED_PAGES)) {
     await show(p, v);
     const txt = await visibleText(p);
@@ -542,8 +544,13 @@ async function o34run(b, ctx0) {
   await p.emulateMedia({ colorScheme: "dark" });
   await show(p, "overview");
   const link = p.locator("section.view:not(.hidden) a", { hasText: "All alarms and events" }).first();
-  await link.hover();
-  const hov = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).backgroundColor]);
+  // the page redraws every second: a link replaced between hover and read gives empty colours, so read again
+  let hov = ["", ""];
+  for (let i = 0; i < 5 && !hov[0]; i++) {
+    await link.hover();
+    hov = await link.evaluate(a => a.isConnected && a.matches(":hover") ? [getComputedStyle(a).color, getComputedStyle(a).backgroundColor] : ["", ""]).catch(() => ["", ""]);
+    if (!hov[0]) await p.waitForTimeout(200);
+  }
   await link.focus(); await p.keyboard.press("Shift+Tab"); await p.keyboard.press("Tab");
   const foc = await link.evaluate(a => [getComputedStyle(a).color, getComputedStyle(a).outlineColor, getComputedStyle(a).outlineStyle]);
   // the Carbon look (owner, 2026-10-24) puts white link text on IBM Blue; O-01 asks for no blue *text* and a
@@ -646,7 +653,7 @@ async function o34run(b, ctx0) {
   await until(p, async () => (await panel(p).locator('[data-reading="fresh"]').count()) > 0, 8000);
   const shown = await panel(p).locator("[data-acquired]").getAttribute("data-acquired");
   const sTxt = await panelText(p);
-  check("O-04 a sensor click asks for a new reading and shows its own time", body.fresh && shown === body.sample.acquired_utc && Date.parse(shown) > Date.parse(body.requested_utc) &&
+  check("O-04 a sensor click asks for a new reading and shows its own time", body.fresh && shown === body.sample.acquired_utc && usOf(shown) > usOf(body.requested_utc) &&
     /New reading, taken after you asked/.test(sTxt) && /Measured at/.test(sTxt) && /Validity\s+Reading valid/.test(sTxt) && /pH/.test(sTxt),
     `asked ${body.requested_utc}, acquired ${body.sample.acquired_utc} (shown ${shown}): ${body.sample.value} ${body.sample.unit}, ${body.sample.quality}`);
   await api(p, "/api/twin/control", "POST", { action: "acq_stall" });
@@ -663,19 +670,23 @@ async function o34run(b, ctx0) {
     `acquisition stalled: "${(oTxt.match(/No new reading[^\n]*/) || [""])[0]}", measured ${body2.sample.acquired_utc}, ${(oTxt.match(/Age\s+[^\n]*/) || [""])[0]}`);
   await p.waitForTimeout(2500);
 
-  // O-05: sector names, readings and their pages and history stay on the Overview
+  // O-05: a sector's readings, its page and its history are reached from the Overview. 0.7.1 (owner decision of
+  // 26 October 2026): the Overview is the drawing and its Sectors card is gone, so they come from the sector's symbol
   await show(p, "overview");
-  const sec = await p.locator("#overview-sectors").innerText();
-  await p.locator("#overview-sectors a", { hasText: "Open Sector 1" }).click();
+  const noCard = (await p.locator("#overview-sectors").count()) === 0;
+  await pick(p, "sector.S1");
+  const sec = await panelText(p);
+  await panel(p).locator("a", { hasText: "Open the Sector 1 page" }).click();
   const toS1 = await until(p, () => p.evaluate(() => location.hash === "#sector-S1"));
   await show(p, "overview");
-  await p.locator('#overview-sectors tr[data-sector="S2"] a', { hasText: "History of these readings" }).click();
+  await pick(p, "sector.S2");
+  await panel(p).locator("a", { hasText: "History of these readings" }).click();
   await show(p, "history");
   const histSel = await p.evaluate(() => window.AqUI.S.trendSel.slice());
   const pv = await get(p, "/api/plant");
-  check("O-05 sector data on the Overview", /Sector 1/.test(sec) && /Sector 2/.test(sec) && /L\/min/.test(sec) && /bar/.test(sec) && toS1 &&
+  check("O-05 sector data from the Overview", noCard && /Sector 1/.test(sec) && /L\/min/.test(sec) && /bar/.test(sec) && toS1 &&
     histSel.includes(pv.signals["flow.S2"].point) && histSel.includes(pv.signals["pressure.S2"].point),
-    `Sectors card with valve, flow and pressure; Open Sector 1 opens #sector-S1; History of Sector 2 chooses ${histSel.join(", ")}`);
+    `Sector 1's symbol shows valve, flow and pressure and opens #sector-S1; Sector 2's history chooses ${histSel.join(", ")}`);
 
   // O-02: a refill shows water entering the main tank and its level rising (opened from the diagram)
   await show(p, "overview");
@@ -825,11 +836,16 @@ async function board040(b) {
   await login(p, USER, PASS);
   await api(p, "/api/users/" + USER, "POST", { commissioning: true });     // the throwaway admin commissions
   await login(p, USER, PASS);
-  const nav = await p.locator("#nav").innerText();
+  // the menu is built from the session and then the status (the board link needs both): wait for it, report what it showed
+  const navState = () => p.evaluate(() => ({ text: document.querySelector("#nav").innerText,
+    board: !!document.querySelector("#nav-board:not(.hidden)"), group: !!document.querySelector('#nav [data-nav="hardware"]:not(.hidden)') }));
+  await until(p, async () => /I\/O board/.test((await navState()).text), 10000).catch(() => {});
+  const ns = await navState(), nav = ns.text;
   await show(p, "board");
   const n = await p.evaluate(() => ({ mods: document.querySelectorAll("#v-board .card.module").length, ch: document.querySelectorAll("#v-board [data-point]").length }));
   await shot(p, "board-1-simulation");
-  check("BOARD-01 one card per module, every channel", /I\/O board/.test(nav) && n.mods === 6 && n.ch === 80, `menu has I/O board; ${n.mods} module cards, ${n.ch} channels`);
+  check("BOARD-01 one card per module, every channel", /I\/O board/.test(nav) && n.mods === 6 && n.ch === 80,
+    `menu ${/I\/O board/.test(nav) ? "has" : "lacks"} I/O board (hardware group ${ns.group ? "shown" : "hidden"}, board link ${ns.board ? "shown" : "hidden"}; menu: ${nav.replace(/\s+/g, " ").slice(0, 200)}); ${n.mods} module cards, ${n.ch} channels`);
   await p.locator("#v-board").getByRole("button", { name: "Use I/O test mode" }).click();
   await until(p, async () => (await get(p, "/api/board")).source === "IO_TEST", 10000);
   const sw = p.locator('#v-board [data-point="relay_A.DO3"] .switch');
@@ -941,17 +957,18 @@ async function hardware() {
   check("HW status line", /^Real equipment, read only/.test(hwPlain), hwPlain);
   await show(p, "overview");
   await shot(p, "hw-overview");
-  const ov = await p.evaluate(() => ({ hot: document.querySelectorAll("#v-overview svg.diagram g.hot").length, label: document.querySelector("#v-overview svg.diagram").getAttribute("aria-label") }));
-  check("HW overview diagram", ov.hot >= 40 && /read-only/.test(ov.label), `${ov.hot} parts; ${ov.label}`);
-  // 0.5.6: the real Overview draws the accepted layout (symbols by layout id), read-only, with a side panel
-  await p.locator('#v-overview svg.diagram g.hot[data-id="mp1"]').click();
-  const hwPanel = await until(p, async () => { const t = await p.locator("#v-overview .side-panel").innerText(); return /Main pump 1/.test(t) && t; }, 5000);
-  const hwBtns = await p.$$eval("#v-overview .side-panel button", bs => bs.map(x => x.textContent));
-  await p.locator('#v-overview svg.diagram g.hot[data-id="tank-main"]').click();
-  const hwTank = await until(p, async () => { const t = await p.locator("#v-overview .side-panel").innerText(); return /Main tank/.test(t) && t; }, 5000);
-  const hwHead = await p.locator("#overview-layout h2").first().innerText();
-  check("HW click-through", !!hwPanel && !!hwTank && hwBtns.length === 0 && /read-only/.test(hwHead),
-    "selecting a main pump or the main tank shows its state in the side panel, with no action: the installation is read-only");
+  // 0.7.3: until a graph is exported from the twin, the real Overview draws the earlier drawing with the shared editor,
+  // view only, as a reference: every symbol kept (linked ones with their state, the rest marked NOT MAPPED), nothing
+  // to place, connect or save. (The 0.5.6 side panel with click-through is not part of this reference view.)
+  const ov = await until(p, () => p.evaluate(() => {
+    const c = document.querySelector('#v-overview #overview-diagram[data-overview]');
+    if (!c) return null;
+    const m = c.textContent.match(/(\d+) symbol\(s\) linked to equipment, (\d+) marked NOT MAPPED/);
+    return { kind: c.dataset.overview, drawn: c.querySelectorAll(".hed-sym").length + c.querySelectorAll(".hed-ph").length,
+      kept: m ? +m[1] + +m[2] : null, acts: [...c.querySelectorAll("button")].map(b => b.textContent).filter(t => /Save|Place|Connect|Delete|Export/.test(t)) };
+  }), 10000);
+  check("HW overview diagram", !!ov && ov.kind === "legacy" && ov.drawn > 0 && ov.drawn === ov.kept && ov.acts.length === 0,
+    ov ? `${ov.kind}: ${ov.drawn} symbols drawn, ${ov.kept} reported kept, editing buttons ${JSON.stringify(ov.acts)}` : "no Overview drawing card");
   for (const v of ["nutrients", "main-tank", "main-pumps", "sector-S1", "sector-S2", "drainage"]) {
     await show(p, v);
     const t = await visibleText(p);
@@ -961,8 +978,11 @@ async function hardware() {
       `read-only: reason shown, unmapped values "not measured", no control buttons ${JSON.stringify(ctl)}`);
   }
   await show(p, "overview");
-  const drvTxt = await until(p, async () => { const t = await visibleText(p); return /Drive interface/.test(t) && /PROPOSED/.test(t) && /0x[0-9A-F]{4}/.test(t) && t; });
-  check("HW drive interface", !!drvTxt, "the overview lists drive:MAIN over Modbus with its PROPOSED map and the status word it reads");
+  // 0.7.1: the drive card is in the Overview's "Details: system, output modes, modules, drive" (closed by default)
+  const drvTxt = await until(p, async () => {
+    const t = await p.evaluate(() => { const d = [...document.querySelectorAll("#v-overview details")].find(x => /drive/.test(x.querySelector("summary").textContent)); return d ? d.textContent : ""; });
+    return /Drive interface/.test(t) && /PROPOSED/.test(t) && /0x[0-9A-F]{4}/.test(t) && t; });
+  check("HW drive interface", !!drvTxt, "the Overview's Details list drive:MAIN over Modbus with its PROPOSED map and the status word it reads");
   await show(p, "io");
   const ioDrv = await p.locator("#v-io tr", { hasText: "drive:MAIN" }).first();
   const runBtns = await ioDrv.locator("button").count();

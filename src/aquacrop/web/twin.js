@@ -111,8 +111,8 @@
         h("label", { class: "small" }, "Start at ", start),
         twice("reset", "Reset", "Press again to reset (history is kept)", "ghost", !run,
           () => act("POST", "api/twin/control", { action: "reset", start_local: start.value || null }, "twin reset")),
-        h("button", { class: "ghost", disabled: !run, onclick: () => act("POST", "api/twin/control", { action: "import" }, "imported from the real system") }, "Import from the real system")),
-      h("p", { class: "muted small" }, `${v.label} Last import from the real system: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
+        h("span", { class: "muted small" }, "Import from Overview is in Installation design below.")),
+      h("p", { class: "muted small" }, `${v.label} Last import from the main dashboard: ${v.snapshot_utc ? new Date(v.snapshot_utc).toLocaleString() : "none"}. Twin run ${v.run_id}.`));
   }
   function modeCard(v) {
     const e = v.engine, ok = can("process_control");
@@ -125,7 +125,8 @@
     if (e.mode === "STOPPING") kids.push(h("p", { class: "warn" }, "Stopping every automatic operation; MANUAL is reached only when each stop is verified."));
     if (e.mode === "RECOVERY" && v.checklist) {
       kids.push(h("div", { class: "card" }, h("strong", null, "After a restart: check, then approve"),
-        h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`))),
+        h("ul", null, v.checklist.map(c => h("li", { class: c.ok ? "" : "bad" }, `${c.ok ? "✓" : "✗"} ${c.check} (${c.detail})`,
+          !c.ok && c.fix ? h("div", { class: "small" }, "What to do: " + c.fix) : null))),
         ["AUTO", "MANUAL"].map(t => h("div", null, h("strong", null, `Approve into ${t}:`),
           h("ul", { class: "small" }, v.consequences[t].map(x => h("li", null, x))),
           twice("approve-" + t, `Approve into ${t}`, `Press again to approve into ${t}`, "", !ok,
@@ -138,7 +139,7 @@
     const run = can("sim_command");
     return h("div", { class: "card" }, h("h2", null, "Equipment"),
       v.items.length ? h("div", { class: "eq-grid" }, v.items.map(it => {
-        const faultSel = h("select", { "aria-label": `Fault for ${it.name}` }, ["", "NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW"].map(f => h("option", { value: f, selected: (it.fault || "") === f }, f || "no fault")));
+        const faultSel = h("select", { "aria-label": `Fault for ${it.name}` }, ["", "NO_FEEDBACK", "STUCK_ON", "NO_READBACK", "SENSOR_LOST", "NO_FLOW", "TRIP"].map(f => h("option", { value: f, selected: (it.fault || "") === f }, f || "no fault")));
         return h("div", { class: "eq-card" + (it.owner ? " eq-busy" : "") },
           h("div", { class: "row" }, icon(it.icon, 32), h("strong", null, it.name), pill(it.behaviour === "NOT_MODELLED" ? "NOT MODELLED" : it.behaviour.toLowerCase(), it.behaviour === "NOT_MODELLED" ? "bad" : "")),
           it.coil !== "NONE" ? h("div", { class: "row" }, led(it.commanded ? "ON" : "OFF", "asked"), led(it.coil, "output"), it.feedback !== "NONE" ? led(it.feedback, "feedback") : null) : h("p", { class: "muted small" }, "input only"),
@@ -151,7 +152,7 @@
             return h("tr", null, h("td", null, r.label), h("td", null, val), h("td", { class: "muted" }, r.point || ""), h("td", null, inp));
           }))),
           h("div", { class: "row small" }, faultSel, h("button", { class: "small ghost", disabled: !run, onclick: () => act("POST", "api/twin/fault", { target: it.item_id, fault: faultSel.value || null }, "fault set") }, "Apply fault")));
-      })) : h("p", { class: "muted" }, "No equipment in the copy yet. Create equipment on the real dashboard, then press Import from the real system."),
+      })) : h("p", { class: "muted" }, "No equipment in the copy yet. Create equipment on the main dashboard's Equipment page, then press Import from Overview."),
       h("p", { class: "muted small" }, "Lights: asked = the program's command; output = the virtual coil read back; feedback = the item's own input. UNKNOWN is never shown as OFF."));
   }
   function programsCard(v) {
@@ -213,16 +214,30 @@
     try {
       const v = await api("GET", "api/twin");
       S.v = v;
+      if (v.identity) {                                   // 0.7.1: the twin's build and whether the main dashboard matches
+        const id = v.identity, warn = [];
+        $("build").textContent = `build ${id.build.split("+")[1] ? id.build.split("+")[1].slice(0, 7) : id.build} · ${id.project.config_id}`;
+        $("build").title = `Program ${id.build}, Digital Twin, project ${id.project.config_id} ${id.project.config_version}`;
+        if (id.web_drift) warn.push(`This twin's files changed after it started: ${id.web_drift}.`);
+        if (id.partner && id.partner.match === false) warn.push(`The main dashboard runs another build (${id.partner.build}); this twin runs ${id.build}. Install both from the same release.`);
+        $("identity-warn").textContent = warn.join(" ");
+        $("identity-warn").classList.toggle("hidden", !warn.length);
+      }
       if (v.runtime_id !== S.rid) S.rid = v.runtime_id;
       // the diagram and change cards stay in the page (never detached) and refresh themselves, so a drag or an
       // open editor there is not cut off; the other parts are not redrawn under a field being used
       const D = window.AqTwinDiagram;
       const X = window.AqTwinChanges;
-      if (!$("t-top")) $("main").replaceChildren(h("div", { id: "t-top" }), D.card(), h("div", { id: "t-rest" }), X.card());
+      const Gr = window.AqTwinGraph;                   // 0.7.0: water over the explicit graph
+      const Mo = window.AqTwinModules;                 // 0.7.0: simulated modules
+      if (!$("t-top")) $("main").replaceChildren(...[h("div", { id: "t-top" }), Gr ? Gr.card() : null, D.card(), h("div", { id: "t-rest" }),
+        Mo ? Mo.card() : null, window.AqTwinNutrient ? window.AqTwinNutrient.card() : null, X.card()].filter(Boolean));
       const ae = document.activeElement;
       const using = id => ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest("#" + id);
       if (!using("t-top")) $("t-top").replaceChildren(controls(v));
       if (!using("t-rest")) $("t-rest").replaceChildren(modeCard(v), opsCard(v), equipmentGrid(v), programsCard(v), resultsCard(v));
+      if (Gr) Gr.update(v);
+      if (Mo) Mo.update(false);
       D.update(v);
       X.update(v);
     } catch (e) { /* shown by the next action */ }

@@ -146,12 +146,17 @@ class StorageUnavailable(OSError):
 CHECKPOINT_EVERY_S = 60.0
 
 
+STARTUP_WAIT_S = 30.0          # the first writes of a start (session record, command reconciliation, ...)
+STARTUP_GRACE_S = 60.0         # for this long after the historian opens, every waited write gets STARTUP_WAIT_S
+
+
 class Historian:
     def __init__(self, db_path: str | Path, cfg: InstallationConfig, session_id: str, *, queue_max: int = 512,
                  backend_name: str = "SIMULATED"):
         self.db_path = Path(db_path)
         self.cfg = cfg
         self.session_id = session_id
+        self._born = time.monotonic()                 # start of the STARTUP_GRACE_S period
         self.backend_name = backend_name
         con = connect(self.db_path)
         self.applied_migrations = migrate(con, self.db_path, reserve_bytes=cfg.historian.free_space_reserve_bytes)
@@ -179,7 +184,7 @@ class Historian:
         self.submit(lambda c: c.execute(
             "INSERT INTO process_sessions(session_id,started_utc,config_id,config_version,profile,software_version)"
             " VALUES(?,?,?,?,?,?)", (session_id, utc_iso(), cfg.config_id, cfg.config_version, cfg.profile.value,
-                                     __version__)), wait=True)
+                                     __version__)), wait=True, timeout=STARTUP_WAIT_S)
 
     # ------------------------------------------------------------------ queue plumbing
     def submit(self, fn: Callable[[sqlite3.Connection], Any], *, wait: bool = False, timeout: float = 3.0,
@@ -187,6 +192,8 @@ class Historian:
         """Queue `fn` for the writer thread. `solo_without_fk` runs it in its own transaction with
         foreign-key enforcement off (bulk retention deletes; the caller keeps references consistent)."""
         fut: Future = Future()
+        if time.monotonic() - getattr(self, "_born", 0.0) < STARTUP_GRACE_S:
+            timeout = max(timeout, STARTUP_WAIT_S)    # a start waits for the database to open (slow disk, loaded host)
         try:
             self._q.put((fn, fut, solo_without_fk), block=not droppable, timeout=None if droppable else timeout)
         except queue.Full:
@@ -461,7 +468,9 @@ class Historian:
                           "' [reconciled at restart: outcome never persisted]', outcome_utc=? WHERE request_id=?",
                           [(utc_iso(), i) for i in ids])
             return ids
-        return self.submit(op, wait=True)
+        # at start the writer may still be opening and checking the database (a slow SD card, a loaded runner):
+        # a start must not fail on the 3 s default meant for routine writes
+        return self.submit(op, wait=True, timeout=STARTUP_WAIT_S)
 
     def record_config(self, cfg: InstallationConfig) -> dict:
         """CONFIG_LOADED at every start, plus CONFIG_CHANGED (with the changed keys) when the effective

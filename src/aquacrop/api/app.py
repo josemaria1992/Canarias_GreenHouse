@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import __version__
+from ..build import identity as build_identity
 from ..config.catalog import CATALOG
 from ..config.schema import InstallationConfig
 from ..domain.model import AccessPolicy, ControllerState, Outcome, PointId, PointKind, SignalSource, new_id
@@ -33,7 +34,7 @@ from ..historian.backup import create_backup
 from ..historian.recording import slot_clock_epoch
 from ..historian.trends import TrendCache, trend_buckets, trend_level
 from ..historian.writer import Historian
-from ..security.auth import Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret
+from ..security.auth import NAVIGATION, Accounts, AuthError, Perm, Principal, RateLimiter, Role, load_or_create_secret, needs_text
 from ..twin.clock import SPEEDS
 from . import pages
 from .service import SimulationService
@@ -115,10 +116,12 @@ class ActuatorFaultIn(Body):
 
 class ProcessStateIn(Body):
     target: ControllerState
+    expect: ControllerState | None = None   # 0.7.0 (R34-01): the state the user's preview showed; refused if changed
 
 
 class ManualOpIn(Body):
     op: dict[str, str | float | int]
+    expect: ControllerState | None = None
 
 
 class ReasonIn(Body):
@@ -272,6 +275,19 @@ def _check_namespace(hist: Historian, cfg: InstallationConfig, session_id: str) 
                          f"use a separate state directory or db_path for {cfg.profile.value}")
 
 
+class ProposalRefIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str = Field(pattern=r"^(items|drawing)-[0-9a-f]{16}\.json$")
+    item_id: str | None = Field(default=None, max_length=48)
+
+
+class ProjectIn(BaseModel):
+    """A project document to preview or apply (IMPORT-01, 0.7.3); its size is limited again when it is read."""
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=2 * 1024 * 1024 + 1)
+    expected_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_host: str = "127.0.0.1",
                session_id: str | None = None) -> FastAPI:
     state_dir = Path(state_dir)
@@ -368,7 +384,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             return JSONResponse({"detail": "chunked bodies not accepted"}, status_code=411)
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers[pages.VERSION_HEADER] = __version__
+        resp.headers[pages.VERSION_HEADER] = build_identity()["build"]
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
@@ -442,7 +458,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             except AuthError as e:
                 return deny(e.status, str(e), p.username)
             if not limiter.hit(f"mut:{p.session_hash}", sec.mutation_rate_per_minute):
-                return deny(429, "rate limit", p.username)
+                return deny(429, "too many requests in a short time: wait a moment, then try again", p.username)
         request.state.principal = p
         if not is_sim and (path in SIM_ONLY_EXACT or any(path == x or path.startswith(x + "/") for x in SIM_ONLY)):
             return JSONResponse({"detail": f"simulation-only endpoint; this installation is {cfg.profile.value}"},
@@ -459,7 +475,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         def dep(request: Request) -> Principal:
             p: Principal = request.state.principal
             if not p.can(perm):
-                why = "password change required" if p.must_change_password else f"permission {perm.value} required"
+                why = "password change required" if p.must_change_password else needs_text(perm)
                 _reject(request, 403, why, p.username)
             return p
         return dep
@@ -493,11 +509,12 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             _reject(request, 403, "origin not allowed")
         if not limiter.hit(f"login:{client}", sec.login_rate_per_minute) or \
                 not limiter.hit(f"login-user:{body.username}", sec.login_rate_per_minute):
-            _reject(request, 429, "too many login attempts", body.username)
+            _reject(request, 429, "too many sign-in attempts: wait a minute, then try again", body.username)
         try:
             token, p = accounts.login(body.username, body.password, client)
         except AuthError as e:
-            _reject(request, e.status, "login failed", body.username)
+            _reject(request, e.status, "sign-in failed: check the user name and password (an administrator can "
+                                       "reset a forgotten password or re-enable a disabled account)", body.username)
         secure = request.url.scheme == "https" or not loopback_http_ok
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=secure, path="/",
                             max_age=sec.session_absolute_hours * 3600)
@@ -518,7 +535,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     async def session(p: Principal = Depends(require(Perm.READ))):
         return {"username": p.username, "role": p.role.value, "commissioning": p.has_commissioning,
                 "csrf_token": accounts.csrf_for(p.session_hash), "must_change_password": p.must_change_password,
-                "permissions": [x.value for x in Perm if p.can(x)]}
+                "permissions": [x.value for x in Perm if p.can(x)], "navigation": NAVIGATION[p.role.value]}
 
     @app.post("/api/auth/password")
     def change_password(body: PasswordIn, request: Request, response: Response):
@@ -534,16 +551,30 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"ok": True, "detail": "password changed; all sessions revoked, log in again"}
 
     @app.get("/api/openapi.json", include_in_schema=False)
-    def openapi(p: Principal = Depends(require(Perm.READ))):
+    def openapi(p: Principal = Depends(require(Perm.ADMIN_READ))):
         return app.openapi()
 
     # ------------------------------------------------------------------ health / status
     @app.get("/api/health")
     def health():
-        """Unauthenticated, minimal: no values, no identities."""
+        """Unauthenticated, minimal: no values, no user identities; the software build, so an installation can be
+        checked without signing in (0.7.1)."""
         ok_store, _ = hist.can_accept_starts()
         task = svc.task_health()
-        return {"ok": ok_store and task["ok"], "storage_ok": ok_store, "acquisition_ok": task["ok"]}
+        return {"ok": ok_store and task["ok"], "storage_ok": ok_store, "acquisition_ok": task["ok"],
+                "runtime": "MAIN", "version": __version__, "build": build_identity()["build"]}
+
+    @app.get("/api/version")
+    def version_view(p: Principal = Depends(require(Perm.READ))):
+        """Which program is running here (0.7.1): the build (version, source commit, web files), the runtime, the profile
+        and the project, and whether the Digital Twin runs the same build. No filesystem paths."""
+        from ..build import partner, web_drift
+        ident = build_identity()
+        return {"runtime": "MAIN", "version": __version__, "build": ident["build"], "commit": ident["commit"],
+                "tree_clean": ident["tree_clean"], "source": ident["source"], "built_utc": ident["built_utc"],
+                "started_utc": ident["started_utc"], "web_drift": web_drift(), "profile": cfg.profile.value,
+                "project": {"config_id": cfg.config_id, "config_version": cfg.config_version, "timezone": cfg.site.timezone},
+                "partner": partner(feed_dir, "TWIN")}
 
     def _freshness() -> dict:
         now = datetime.now(timezone.utc)
@@ -568,6 +599,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         alarms = list(r.alarms.open.values())
         return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
                 "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
+                "build": build_identity()["build"],
                 "timezone": cfg.site.timezone, "topology": cfg.topology, "controller": _controller_summary(r),
                 "twin": {"activity": svc.clock.activity.value, "speed": svc.clock.speed, "run_id": r.run_id,
                          "sim_s": r.sim_s, "tick": r.tick, "source": r.backend.source.value, "scenario": svc.scenario,
@@ -610,6 +642,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         lease = svc.lease_view()
         return {"banner": svc.banner, "profile": cfg.profile.value, "config_id": cfg.config_id,
                 "config_version": cfg.config_version, "software_version": __version__, "session_id": session_id,
+                "build": build_identity()["build"],
                 "timezone": cfg.site.timezone, "controller": None, "twin": None,
                 "devices": _devices_view(), "drives": svc.drive_view(), "relay_modes": svc.relay_mode_view(),
                 "bench_lease": lease,
@@ -646,7 +679,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "cycle_id": s.cycle_id, "sequence": s.sequence}
 
     @app.get("/api/points")
-    async def points(p: Principal = Depends(require(Perm.READ))):
+    async def points(p: Principal = Depends(require(Perm.OPS_READ))):
         samples = _samples()
         groups = []
         for d in cfg.devices:
@@ -673,7 +706,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return hist.read(run)
 
     @app.get("/api/board")
-    def board(p: Principal = Depends(require(Perm.READ))):
+    def board(p: Principal = Depends(require(Perm.OPS_READ))):
         """Everything the I/O board draws, in one answer: each module with its channels, the latest reading,
         the last output command (asked) beside the coil readback (reported), the input changes seen and
         the channel's assignment record. On the simulation the modules are virtual."""
@@ -732,11 +765,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return out
 
     @app.get("/api/assignments")
-    def assignment_list(p: Principal = Depends(require(Perm.READ))):
+    def assignment_list(p: Principal = Depends(require(Perm.OPS_READ))):
         return {"assignments": assignments.current(), "signals": assignments.options()}
 
     @app.get("/api/assignments/history")
-    def assignment_history(point: str = Query(..., max_length=64), p: Principal = Depends(require(Perm.READ))):
+    def assignment_history(point: str = Query(..., max_length=64), p: Principal = Depends(require(Perm.OPS_READ))):
         return assignments.history(point)
 
     @app.post("/api/assignments")
@@ -766,11 +799,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
             raise HTTPException(409, str(e))
 
     @app.get("/api/iochecks")
-    def iocheck_list(p: Principal = Depends(require(Perm.READ))):
+    def iocheck_list(p: Principal = Depends(require(Perm.OPS_READ))):
         return channel_checks.latest()
 
     @app.get("/api/assignments/export")
-    def assignment_export(fmt: str = Query("yaml", pattern="^(yaml|json)$"), p: Principal = Depends(require(Perm.READ))):
+    def assignment_export(fmt: str = Query("yaml", pattern="^(yaml|json)$"), p: Principal = Depends(require(Perm.OPS_READ))):
         doc = assignments.export(__version__, channel_checks.latest())
         name = f"aquacrop-io-assignments-{cfg.config_id}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         if fmt == "json":
@@ -809,15 +842,20 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     equipment.dependents = programs.dependents
     app.state.programs = programs
     feed_dir = Path(os.environ["AQUACROP_FEED_DIR"]) if os.environ.get("AQUACROP_FEED_DIR") else None
+    from ..build import publish as publish_identity
+    publish_identity(feed_dir, "MAIN", {"profile": cfg.profile.value, "config_id": cfg.config_id,
+                                        "config_version": cfg.config_version})
     twin_url = os.environ.get("AQUACROP_TWIN_URL")
 
     def publish():
         if feed_dir is None:
             return None
         try:
+            blk = getattr(app.state, "blocks", None)
             return twin_feed.publish_snapshot(feed_dir, cfg=cfg, equipment=equipment, programs=programs, hist=hist,
                                               software_version=__version__,
-                                              layout=layout_mod.canonical(layouts.current()[0]))
+                                              layout=layout_mod.canonical(layouts.current()[0]),
+                                              hydraulics=blk.export() if blk is not None else None)
         except OSError as e:
             hist.event("TWIN_SNAPSHOT_FAILED", {"error": str(e)}, actor="system")
             return None
@@ -828,7 +866,147 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     if feed_dir is not None:
         with contextlib.suppress(OSError):
             handoff_key = twin_feed.write_handoff_key(feed_dir)
-    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish)
+    # ------------------------------------------------------------------ blocks and the hydraulic graph (0.7.0)
+    from ..blocks.store import BlockStore
+    from ..equipment.views import design_views, hydraulic_items
+    from . import blocks as block_routes
+    blocks = BlockStore(hist, items=lambda: hydraulic_items(equipment))
+    app.state.blocks = blocks
+    if not is_sim:                                   # item alarm limits on the real readings (0.7.0, ALM-01)
+        import time as _time
+        from ..equipment.views import limit_inputs
+        _lim: dict = {"t": -1e9, "views": {}}
+
+        def item_limits():
+            now = _time.monotonic()
+            if now - _lim["t"] > 5:                  # the item records are re-read every 5 s, not every poll
+                _lim["views"], _lim["t"] = design_views(equipment, verified_only=True), now
+            return limit_inputs(_lim["views"], svc.samples, datetime.now(timezone.utc))
+        svc.item_limits = item_limits
+
+    def block_dependents(block_id: str) -> list[str]:
+        return sorted({v["program_id"] for v in programs.versions() if v["status"] != "RETIRED"
+                       and (v["body"].get("authoring") or {}).get("block_id") == block_id})
+    def proof_context(program_id: str, version: int) -> str | None:
+        """The proof context digest of this program version on the real system now (programs/proof.py, R07-01)."""
+        from ..programs import proof
+        try:
+            v = programs.get(program_id, version)
+        except Exception:
+            return None
+        g = blocks.graph()
+        g = g if g.nodes else None
+        lay = None if g is not None else layout_mod.digest(layouts.current()[0])
+        return proof.context(v, design_views(equipment), g, lay)["digest"]
+    app.state.proof_context = proof_context
+
+    block_routes.register(app, require, blocks, dependents=block_dependents,
+                          legacy_layout=lambda: (layouts.current()[0], "the real system's drawing"))
+
+    @app.get("/api/blocks/prerequisites")
+    def block_prerequisites(p: Principal = Depends(require(Perm.OPS_READ))):
+        """UX-01: why a block's source, destination or meter choice is empty, and the stage still missing."""
+        from ..blocks.prerequisites import check
+        from ..twin.changes import read_exports
+        its = blocks.items()
+        graph = blocks.topology()["graph"]
+        exported = set()
+        for x in (read_exports(feed_dir) if feed_dir else []):
+            g = (((x.get("hydraulics") or {}).get("topology") or {}).get("graph") or {})
+            exported |= {n.get("item") or n.get("id") for n in g.get("nodes") or []}
+        unlinked = []
+        if not graph.get("nodes"):
+            from ..topology.migrate import propose
+            pr = propose(layouts.current()[0], {k: v.get("kind") for k, v in its.items()},
+                         {k: v.get("name") for k, v in its.items()})
+            unlinked = [{"kind": u["kind"], "label": u["label"]} for u in pr["unresolved"] if u.get("kind")]
+        return check(its, graph.get("nodes") or [], exported, unlinked,
+                     readiness=lambda iid: equipment.readiness(iid) if iid in equipment.keys() else None)
+    program_routes.register(app, require, programs, equipment, cfg, feed_dir, publish, blocks=blocks,
+                            views=lambda: design_views(equipment), proof_context=proof_context)
+    from . import runs as run_routes
+    run_routes.register(app, require, hist, programs)
+
+    # ------------------------------------------------------------------ project exchange (0.7.3, IMPORT-01)
+    from .. import exchange as xch
+    from ..blocks.store import BlockRefused
+    from ..equipment.store import EquipmentRefused
+    from ..programs.store import ProgramRefused
+
+    import threading as _threading
+    project_lock = _threading.Lock()                  # C075-04: preview check and writes happen as one step
+    imports_dir = state_dir / "imports"
+    feed_proposals = feed_dir / "proposals" if feed_dir is not None else None
+
+    def _project(text: str) -> dict:
+        try:
+            return xch.loads(text)
+        except xch.ExchangeRefused as e:
+            raise HTTPException(422, str(e))
+
+    def current_drawing() -> dict:
+        """The installation as the Overview draws it (C075-03): the explicit graph, or the earlier drawing through the
+        same faithful converter, with that earlier layout and its digest kept for the exchange."""
+        t = blocks.topology()
+        if t["graph"].get("nodes"):
+            return {"graph": t["graph"], "diagram": blocks.diagram("installation").get("diagram") or {}}
+        from ..topology.migrate import propose
+        lay = layouts.current()[0]
+        its = blocks.items()
+        pr = propose(lay, {k: v.get("kind") for k, v in its.items()}, {k: v.get("name") for k, v in its.items()})
+        return {"graph": pr["topology"], "diagram": pr["diagram"], "source": pr["source"],
+                "legacy_layout": layout_mod.canonical(lay)}
+
+    @app.get("/api/project/export")
+    def project_export(fmt: str = Query("json", pattern="^(json|yaml)$"),
+                       p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        doc = xch.export(equipment, blocks, programs, __version__, current_drawing())
+        hist.event("PROJECT_EXPORTED", {"format": fmt}, actor=p.username)
+        return Response(xch.dumps(doc, fmt), media_type="application/json" if fmt == "json" else "application/yaml",
+                        headers={"Content-Disposition": f'attachment; filename="aquacrop-project.{fmt}"'})
+
+    @app.post("/api/project/import/preview")
+    def project_preview(body: ProjectIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        return xch.preview(_project(body.text), equipment, blocks, programs)
+
+    @app.post("/api/project/import/apply")
+    def project_apply(body: ProjectIn, p: Principal = Depends(require(Perm.CONFIG_ADMIN))):
+        doc = _project(body.text)
+        if not body.expected_digest:
+            raise HTTPException(409, "preview the document first: apply only what the preview showed")
+        with project_lock:
+            try:
+                out = xch.apply(doc, p.username, equipment, blocks, programs, imports_dir, body.expected_digest,
+                                drawing_dirs=(feed_proposals,) if feed_proposals else ())
+            except xch.StalePreview as e:
+                raise HTTPException(409, str(e))
+            except xch.ExchangeRefused as e:
+                raise HTTPException(409, str(e))
+        hist.event("PROJECT_IMPORTED", {"digest": out["digest"], "written": len(out["written"]),
+                                        "proposals": len(out["proposals"]), "conflicts": len(out["not_written"])},
+                   actor=p.username)
+        publish()
+        return out
+
+    @app.get("/api/project/proposals")
+    def project_proposals(p: Principal = Depends(require(Perm.OPS_READ))):
+        """What an import left to finish (C075-03): items to create on Equipment, drawings to open in the twin."""
+        try:
+            return {"items": xch.item_proposals(imports_dir, {i["item_id"] for i in equipment.items()}),
+                    "drawings": xch.drawing_proposals(imports_dir)}
+        except xch.ExchangeRefused as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/project/proposals/dismiss")
+    def project_dismiss(body: ProposalRefIn, p: Principal = Depends(require(Perm.EQUIPMENT_EDIT))):
+        try:
+            xch.dismiss(imports_dir, body.file, body.item_id)
+            if body.item_id is None and feed_proposals is not None and body.file.startswith("drawing-"):
+                (feed_proposals / body.file).unlink(missing_ok=True)
+        except xch.ExchangeRefused as e:
+            raise HTTPException(404, str(e))
+        hist.event("PROJECT_PROPOSAL_DISMISSED", {"file": body.file, "item_id": body.item_id}, actor=p.username)
+        return {"ok": True}
 
     # ------------------------------------------------------------------ physical bench tests (0.5.0, ADR-0018 §9)
     from . import operation as operation_routes
@@ -836,17 +1014,26 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     if not is_sim and cfg.bench_tests.enabled:
         from ..programs.live import LiveEngineHost
         live_engine = LiveEngineHost(svc, hist, equipment, programs, session_id)
+
+        def proof_refusal(program_id: str, version: int) -> str | None:
+            from ..programs.authoring import superseded_safety
+            from ..programs.proof import refusal
+            v = programs.get(program_id, version)
+            return superseded_safety(v["body"], blocks) or refusal(v["simulation"], v["digest"],
+                                                                    proof_context(program_id, version))
+        live_engine.proof_refusal = proof_refusal
     app.state.live_engine = live_engine
-    operation_routes.register(app, require, live_engine, programs, equipment, cfg)
+    operation_routes.register(app, require, live_engine, programs, equipment, cfg, proof_context=proof_context,
+                              blocks=blocks)
 
     @app.get("/api/twin-link")
-    def twin_link(p: Principal = Depends(require(Perm.READ))):
+    def twin_link(p: Principal = Depends(require(Perm.OPS_READ))):
         return {"url": twin_url, "feed": feed_dir is not None,
                 "note": ("The digital twin is a separate service with its own database and virtual modules. "
                          "Opening or running it never affects the real system.")}
 
     @app.post("/api/twin-link/ticket")
-    def twin_ticket(p: Principal = Depends(require(Perm.READ))):
+    def twin_ticket(p: Principal = Depends(require(Perm.OPS_READ))):
         """A one-time, 60-second ticket that opens the twin as this user without a second login (0.5.5)."""
         if handoff_key is None or not twin_url:
             raise HTTPException(409, "the twin is not configured on this controller")
@@ -859,7 +1046,8 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return p.can(Perm.EQUIPMENT_EDIT) and p.has_commissioning
 
     from . import changes as changes_routes
-    changes_routes.register(app, require, equipment, programs, feed_dir, state_dir, hist, can_accept_layout, publish)
+    changes_routes.register(app, require, equipment, programs, feed_dir, state_dir, hist, can_accept_layout, publish,
+                            blocks=blocks)
 
     def live_readings() -> dict:
         from ..equipment.definitions import ItemBody, TypeBody
@@ -900,6 +1088,45 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "issues": layout_mod.issues(lay, items), "proposals": props, "can_accept": can_accept_layout(p),
                 "previous": meta.get("previous") if prev is not None else None}
 
+    @app.get("/api/overview/diagram")
+    def overview_diagram(p: Principal = Depends(require(Perm.READ))):
+        """The Overview's drawing (0.7.1, owner decision): the approved installation graph and its drawing, as exported
+        from Digital Twin and applied here, with each item's live state. Until one exists, the earlier drawing is
+        the Overview and this says so. Read-only for every role; it changes nothing."""
+        from ..topology import definitions as td
+        t, d = blocks.topology(), blocks.diagram("installation")
+        explicit = bool(t["graph"].get("nodes"))
+        lay, meta = layouts.current()
+        from ..equipment.definitions import TypeBody
+        types = {(x["type_id"], x["version"]): TypeBody.model_validate(x["body"]) for x in equipment.types()}
+        bound = {}
+        for b in equipment.bindings().values():
+            bound.setdefault(b["item_id"], []).append(b["role"])
+        channels = {}                    # what each item needs and has: passive parts need no channel at all
+        for it in equipment.items(include_retired=False):
+            tb = types.get((it["type_id"], it["type_version"]))
+            roles = [r for r in (tb.roles if tb else [])]
+            channels[it["item_id"]] = {"roles": len(roles), "required": [r.role for r in roles if r.required],
+                                       "bound": sorted(bound.get(it["item_id"], []))}
+        legacy_view = None
+        if not explicit:                             # 0.7.3: the earlier drawing through the same converter as the twin's
+            from ..topology.migrate import propose     # import, so Overview and Twin draw it identically
+            its = blocks.items()
+            pr = propose(lay, {k: v.get("kind") for k, v in its.items()}, {k: v.get("name") for k, v in its.items()})
+            legacy_view = {"topology": pr["topology"], "diagram": pr["diagram"], "kept": pr["kept"]}
+        return {"explicit": explicit, "topology": {"rev": t["rev"], "digest": t["digest"], "graph": t["graph"]},
+                "legacy_view": legacy_view,
+                "channels": channels,
+                "diagram": {"rev": d["rev"], "diagram": d["diagram"]}, "symbols": td.symbols_public(),
+                "items": blocks.items(), "readings": live_readings(),
+                "legacy": {"source": meta.get("source"), "accepted_by": meta.get("accepted_by"),
+                           "accepted_utc": meta.get("accepted_utc"), "symbols": len(lay.nodes)},
+                "migration": ("The Overview draws the installation graph exported from the Digital Twin."
+                              if explicit else
+                              "The Overview still draws the earlier drawing. Its editable successor is designed in the "
+                              "Digital Twin: Import from Overview, edit and simulate, then Export to Overview. The earlier "
+                              "drawing stays unchanged until an export is applied, and is kept as a reference after.")}
+
     def _layout_choice(p: Principal, lay, source: str, note: str) -> dict:
         if not can_accept_layout(p):
             raise HTTPException(403, "only administrators and operators with commissioning change the diagram")
@@ -910,7 +1137,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return r
 
     @app.post("/api/layout/accept")
-    def layout_accept(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+    def layout_accept(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.OPS_READ))):
         rec = next((r for r in (layout_mod.read_proposals(feed_dir) if feed_dir else []) if r["digest"] == body.digest), None)
         if rec is None:
             raise HTTPException(404, "no such proposal from the twin")
@@ -918,7 +1145,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                               body.note)
 
     @app.post("/api/layout/restore")
-    def layout_restore(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.READ))):
+    def layout_restore(body: LayoutChoiceIn, p: Principal = Depends(require(Perm.OPS_READ))):
         lay = layouts.get(body.digest)
         if lay is None:
             raise HTTPException(404, "no accepted layout with this digest")
@@ -1026,7 +1253,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "mapping": [m.model_dump() | {"provenance": "SIMULATED"} for m in cfg.virtual_mapping]}
 
     @app.get("/api/scenarios")
-    async def scenarios(p: Principal = Depends(require(Perm.READ))):
+    async def scenarios(p: Principal = Depends(require(Perm.OPS_READ))):
         # what loading one does besides starting the model again (O-03): read from its own script
         def effects(sc) -> list[str]:
             kinds = {k for _, k, _ in sc.steps}
@@ -1172,11 +1399,11 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     @app.post("/api/processes/{pid}/state")
     async def process_state(pid: str, body: ProcessStateIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
-        return _ok(_guard(lambda: irt().process_request(p.username, pid, body.target)))
+        return _ok(_guard(lambda: irt().process_request(p.username, pid, body.target, expect=body.expect)))
 
     @app.post("/api/processes/{pid}/manual")
     async def process_manual(pid: str, body: ManualOpIn, p: Principal = Depends(require(Perm.PROCESS_CONTROL))):
-        return _ok(_guard(lambda: irt().process_manual(p.username, pid, body.op)))
+        return _ok(_guard(lambda: irt().process_manual(p.username, pid, body.op, expect=body.expect)))
 
     @app.post("/api/processes/{pid}/reset")
     async def process_reset(pid: str, p: Principal = Depends(require(Perm.LOCKOUT_RESET))):
@@ -1219,7 +1446,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return _guard(call)
 
     @app.get("/api/recipes")
-    async def recipes(p: Principal = Depends(require(Perm.READ))):
+    async def recipes(p: Principal = Depends(require(Perm.OPS_READ))):
         from ..control.recipes import form_schema
         r = irt()
         a = r.recipes.active()
@@ -1288,7 +1515,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return s.astimezone(timezone.utc).isoformat(), e.astimezone(timezone.utc).isoformat()
 
     @app.get("/api/events")
-    def events(p: Principal = Depends(require(Perm.READ)), start: str | None = None, end: str | None = None,
+    def events(p: Principal = Depends(require(Perm.OPS_READ)), start: str | None = None, end: str | None = None,
                kind: str | None = None, limit: int = Query(500, ge=1, le=5000)):
         s, e = _range(start, end, 120)
         sql = "SELECT id, utc, kind, actor, run_id, sim_s, payload_json FROM events WHERE utc>=? AND utc<=?"
@@ -1306,7 +1533,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"events": out, "truncated": len(rows) > limit, "recent_runtime": rt().events[-50:] if is_sim else []}
 
     @app.get("/api/commands/history")
-    def command_history(p: Principal = Depends(require(Perm.READ)), limit: int = Query(200, ge=1, le=2000)):
+    def command_history(p: Principal = Depends(require(Perm.OPS_READ)), limit: int = Query(200, ge=1, le=2000)):
         rows = hist.query("SELECT rowid AS seq, request_id, actor, target, desired, origin, reason, intent_utc, outcome, "
                           "detail, readback, outcome_utc, backend FROM commands ORDER BY intent_utc DESC LIMIT ?", (limit,))
         reg = hist.quarantines
@@ -1316,7 +1543,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
     trend_cache = TrendCache()       # final buckets of year-long charts (historian/trends.py)
 
     @app.get("/api/trends")
-    def trends(p: Principal = Depends(require(Perm.READ)), points: str = Query(..., max_length=2000),
+    def trends(p: Principal = Depends(require(Perm.OPS_READ)), points: str = Query(..., max_length=2000),
                start: str | None = None, end: str | None = None, limit: int = Query(20000, ge=1, le=100000),
                basis: str | None = Query(None, pattern="^(WALL|SIMULATION_TIME|LEGACY_UNKNOWN)$"),
                max_points: int = Query(2000, ge=100, le=20000)):
@@ -1384,7 +1611,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 "display_timezone": cfg.site.timezone}
 
     @app.get("/api/export.csv")
-    def export_csv(p: Principal = Depends(require(Perm.READ)), points: str | None = None, start: str | None = None,
+    def export_csv(p: Principal = Depends(require(Perm.OPS_READ)), points: str | None = None, start: str | None = None,
                    end: str | None = None, after_id: int = 0, limit: int = Query(100000, ge=1, le=200000),
                    display_tz: str | None = None):
         # Bounded reader: at most 200 000 rows (one short read transaction) per page; continue with after_id.
@@ -1464,7 +1691,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                         headers={"Content-Disposition": "attachment; filename=aquacrop-audit.csv"})
 
     @app.get("/api/analytics")
-    def analytics(p: Principal = Depends(require(Perm.READ)), start: str | None = None, end: str | None = None):
+    def analytics(p: Principal = Depends(require(Perm.OPS_READ)), start: str | None = None, end: str | None = None):
         """Runtime / delivered-volume estimates per origin with coverage disclosure. Origins are never summed.
         Bounded reader: at most ANALYTICS_MAX_DAYS per request and ANALYTICS_MAX_ROWS_PER_POINT rows a point."""
         s, e = _range(start, end, 60)
@@ -1510,7 +1737,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 **{k: kinds.count(k) for k in ("AI", "DI", "DO")}}
 
     @app.get("/api/settings")
-    async def settings(p: Principal = Depends(require(Perm.READ))):
+    async def settings(p: Principal = Depends(require(Perm.ADMIN_READ))):
         import platform
         import sys
         from ..release import release_info
@@ -1573,7 +1800,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                 if u["role"] == "admin" and not u["disabled"] and u["username"] != exclude]
 
     @app.get("/api/users/roles")
-    def user_roles(p: Principal = Depends(require(Perm.READ))):
+    def user_roles(p: Principal = Depends(require(Perm.ADMIN_READ))):
         from ..security.auth import COMMISSIONING_TEXT, ROLE_TEXT
         return {"roles": ROLE_TEXT, "commissioning": COMMISSIONING_TEXT}
 
@@ -1618,7 +1845,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     # ------------------------------------------------------------------ retention hold / confirmation
     @app.get("/api/retention")
-    def retention_state(p: Principal = Depends(require(Perm.READ))):
+    def retention_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """Retention state; while held, also the proposed cutoff and the rows it would delete."""
         v = svc.retention.view()
         if v["held"] is not None:
@@ -1642,7 +1869,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     # ------------------------------------------------------------------ timestamp quarantine (ADR-0011)
     @app.get("/api/history/quarantine")
-    def quarantine_state(p: Principal = Depends(require(Perm.READ))):
+    def quarantine_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """Quarantines in force and, when records are stamped later than the current clock, the proposal
         an administrator can confirm. Read-only."""
         from ..historian.quarantine import propose, review_due
@@ -1727,7 +1954,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return {"started": True, "destination": "sd_card" if cfg.offsite_backup.enabled else str(state_dir / "backups")}
 
     @app.get("/api/backup")
-    def backup_state(p: Principal = Depends(require(Perm.READ))):
+    def backup_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """Local backups, the latest restore drill and the off-device copy (an owner decision)."""
         from ..historian.backup import latest_drill, list_backups
         dest = state_dir / "backups"
@@ -1749,7 +1976,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
                                 "not survive loss of this device")}
 
     @app.get("/api/offsite")
-    def offsite_state(p: Principal = Depends(require(Perm.READ))):
+    def offsite_state(p: Principal = Depends(require(Perm.ADMIN_READ))):
         """SD-card backups, upload queue, cloud copies, restore drills and the copy policy (ADR-0012).
         Read from state files; nothing is contacted."""
         return offsite.view()
@@ -1767,7 +1994,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
 
     # ------------------------------------------------------------------ bench (real, read-only profile)
     @app.get("/api/bench")
-    async def bench_state(p: Principal = Depends(require(Perm.READ))):
+    async def bench_state(p: Principal = Depends(require(Perm.OPS_READ))):
         if is_sim:
             return {"available": False, "reason": "SIMULATED profile: bench writes do not exist here"}
         from ..control.bench import CONFIRMATION_PHRASE, MAX_LEASE_S, MIN_LEASE_S
@@ -1810,7 +2037,7 @@ def create_app(cfg: InstallationConfig, *, state_dir: str | Path = "var", bind_h
         return lease.public(svc._mono())
 
     @app.post("/api/bench/lease/revoke")
-    async def bench_revoke(p: Principal = Depends(require(Perm.READ))):
+    async def bench_revoke(p: Principal = Depends(require(Perm.OPS_READ))):
         # Any signed-in user may end a lease early: ending only stops further writes and sends nothing.
         return {"revoked": svc.revoke(f"revoked by {p.username}", p.username)}
 

@@ -29,10 +29,10 @@
   const $ = id => document.getElementById(id);
   // A refresh that was already fetching when the user changed a field or a choice on this page does not
   // rebuild it: that would put back the old value just before the user presses the button next to it.
-  const edits = { seq: 0, id: null };
+  const edits = { seq: 0, id: null, at: 0 };
   document.addEventListener("change", e => {
     const v = e.target && e.target.closest ? e.target.closest("section") : null;
-    if (v) { edits.seq += 1; edits.id = v.id; }
+    if (v) { edits.seq += 1; edits.id = v.id; edits.at = Date.now(); }
   }, true);
   let rendering = null;          // the edit count when the current refresh started
   let renderingView = null;      // the page the current refresh is drawing (the user may already have moved on)
@@ -44,7 +44,10 @@
     const seen = {};
     return [...el.querySelectorAll("input,select,textarea")].map(f => {
       const card = f.closest(".card"), row = f.closest("tr"), lab = f.closest("label");
-      const sig = [f.tagName, f.type, f.placeholder, f.getAttribute("aria-label"), f.name,
+      // UX-06: a field inside a record's own scope (data-state-key, e.g. one equipment type's editor) is matched by
+      // that record, never by its position or a caption another card shares
+      const scope = f.closest("[data-state-key]");
+      const sig = [scope ? scope.dataset.stateKey : "", f.tagName, f.type, f.placeholder, f.getAttribute("aria-label"), f.name,
         card && card.querySelector("h2") ? card.querySelector("h2").textContent : "",
         row && row.querySelector("td") ? row.querySelector("td").textContent : "",
         lab ? lab.firstChild && lab.firstChild.textContent : ""].join("|");
@@ -63,14 +66,18 @@
     const keep = el.dataset.view === view ? new Map(fieldKeys(el).filter(([, f]) => f.dataset.dirty && f.type !== "file")
       .map(([k, f]) => [k, f.type === "checkbox" || f.type === "radio" ? f.checked : f.value])) : new Map();
     const same = el.dataset.view === view;
-    const opened = new Map(same ? [...el.querySelectorAll("details > summary")].map(x => [x.textContent, x.parentElement.open]) : []);
+    const opened = new Map(same ? detailKeys(el).map(([k, d]) => [k, d.open]) : []);
+    // the field being used keeps its focus, caret and scroll through a refresh (UX-06)
+    const fk = same ? fieldKeys(el) : [], ae = document.activeElement;
+    const focused = fk.find(([, f]) => f === ae);
+    const caret = focused && typeof ae.selectionStart === "number" ? [ae.selectionStart, ae.selectionEnd, ae.scrollTop] : null;
     // a part scrolled sideways (the diagram on a phone, a wide table) stays where the user scrolled it
     const scrolled = same ? [...el.querySelectorAll(".diagram-wrap, table")].map(x => x.scrollLeft) : [];
     el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
     if (scrolled.some(Boolean)) [...el.querySelectorAll(".diagram-wrap, table")].forEach((x, i) => { if (scrolled[i]) x.scrollLeft = scrolled[i]; });
     el.dataset.view = view;
     el.dataset.drawn = String(++drawn);    // lets a page that redraws only on change tell a skipped draw
-    for (const x of el.querySelectorAll("details > summary")) if (opened.has(x.textContent)) x.parentElement.open = opened.get(x.textContent);
+    for (const [k, d] of detailKeys(el)) if (opened.has(k)) d.open = opened.get(k);
     if (keep.size) for (const [k, f] of fieldKeys(el)) {
       if (!keep.has(k)) continue;
       const v = keep.get(k);
@@ -78,7 +85,25 @@
       else if (f.tagName !== "SELECT" || [...f.options].some(o => o.value === v)) f.value = v;
       f.dataset.dirty = "1";
     }
+    if (focused) {
+      const again = fieldKeys(el).find(([k]) => k === focused[0]);
+      if (again) {
+        again[1].focus({ preventScroll: true });
+        if (caret) try { again[1].setSelectionRange(caret[0], caret[1]); again[1].scrollTop = caret[2]; } catch (e) { /* not a text field */ }
+      }
+    }
     return el;
+  }
+  // an open/closed part keeps its state by its record (data-state-key), else by its caption and how many
+  // identical captions come before it
+  function detailKeys(el) {
+    const seen = {};
+    return [...el.querySelectorAll("details")].map(d => {
+      if (d.dataset.stateKey) return [d.dataset.stateKey, d];
+      const s = d.querySelector(":scope > summary"), t = s ? s.textContent : "";
+      seen[t] = (seen[t] || 0) + 1;
+      return [t + "#" + seen[t], d];
+    });
   }
   function toast(msg, bad, raw) {
     const t = $("toast"); t.textContent = msg; t.title = raw && raw !== msg ? raw : ""; t.classList.remove("hidden");
@@ -180,8 +205,44 @@
     }
     $("login-view").classList.add("hidden"); $("pwchange-view").classList.add("hidden"); $("app").classList.remove("hidden");
     $("who").textContent = `${sess.username} (${sess.role}${sess.commissioning ? ", commissioning" : ""})`;
-    route(); refresh();
+    S.role = sess.role; S.nav = sess.navigation || [];
+    applyNav();
+    route(); refresh(); identity();
   }
+  /** 0.7.1: which build runs here and whether the Digital Twin runs the same one; a mismatch is said, never hidden. */
+  async function identity() {
+    let v;
+    try { v = await api("GET", "/api/version"); } catch (e) { return; }
+    const short = v.build.replace(/\.w[0-9a-f]+$/, "");
+    $("build").textContent = `${v.version} · build ${(v.commit || "unknown").slice(0, 7)}${v.tree_clean === false ? " (changed)" : ""} · ${v.project.config_id}`;
+    $("build").title = `Program ${v.build} (${v.source}), main dashboard, profile ${v.profile}, project ${v.project.config_id} ${v.project.config_version}`;
+    const warn = [];
+    if (v.web_drift) warn.push(`This dashboard's files changed after it started: ${v.web_drift}.`);
+    if (v.partner && v.partner.match === false) warn.push(`The Digital Twin runs another build (${v.partner.build}); this dashboard runs ${short}. Install both from the same release before relying on twin results.`);
+    $("identity-warn").textContent = warn.join(" ");
+    $("identity-warn").classList.toggle("hidden", !warn.length);
+  }
+  setInterval(() => { if (S.user) identity(); }, 60000);
+  // 0.7.0 role navigation (ADR-0023): exactly the pages of the role. The server refuses the rest anyway.
+  const VIEW_NAV = { overview: "overview", blocks: "blocks", twin: "twin", "hw-add": "hw-add", programs: "programs",
+    history: "history", alarms: "alarms", equipment: "equipment", "equipment-types": "equipment-types", operation: "programs",
+    io: "hardware", board: "hardware", discovery: "hw-add", control: "hardware", settings: "settings", start: "settings" };
+  function applyNav() {
+    document.querySelectorAll("#nav [data-nav]").forEach(a => {
+      const on = S.nav.includes(a.dataset.nav);
+      a.classList.toggle("hidden", !on);
+      if (a.dataset.viewerLabel) a.textContent = S.role === "viewer" ? a.dataset.viewerLabel : "Alarms & Events";
+    });
+  }
+  function navAllows(view) {
+    const k = VIEW_NAV[view];
+    if (k) return S.nav.includes(k);
+    return S.role !== "viewer" || /^(sector-|main-|drainage|diagram)/.test(view);   // process pages: read-only views
+  }
+  const NEEDS = { blocks: "an operator or administrator account", twin: "an operator or administrator account",
+    "hw-add": "an operator or administrator account", history: "an operator or administrator account",
+    equipment: "an operator or administrator account", "equipment-types": "an operator or administrator account", hardware: "an administrator account",
+    settings: "an administrator account" };
   $("login-form").addEventListener("submit", async ev => {
     ev.preventDefault();
     const f = new FormData(ev.target);
@@ -256,12 +317,18 @@
       setStale(false);
       await plantForStatus();
       renderBanner();
-      const ae = document.activeElement;   // don't rebuild a view while the user is typing in it
-      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)
+      const ae = document.activeElement;   // don't rebuild a view while the user is typing in it; a choice just made
+      // (a radio, a checkbox, a list whose value just changed) is not typing: the form it changes must follow it
+      const choice = ae && (ae.tagName === "INPUT" && /^(radio|checkbox)$/.test(ae.type) || ae.tagName === "SELECT" && Date.now() - edits.at < 1500);
+      const typing = ae && ae.closest && ae.closest("#" + section(S.view)) && (/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && !choice
+          || ae.closest("[role=application]"))   // nor while the keyboard works in the drawing: it would lose its focus
         || Date.now() - pressed < 2000;     // nor between pressing and releasing a button: the click would be lost
       const fn = VIEWS[S.view] || (window.AqPlant && (isInst() || isReal()) ? window.AqPlant.resolve(S.view) : null);
       try {
-        if (fn && !typing) await fn();
+        if (!navAllows(S.view)) {
+          if (!typing) mount(section(S.view), h("div", { class: "card", "data-denied": S.view }, h("h2", null, "Not available for your account"),
+            h("p", null, `This page needs ${NEEDS[VIEW_NAV[S.view]] || "another role"}.`), h("p", null, h("a", { href: "#overview" }, "Back to the overview"))));
+        } else if (fn && !typing) await fn();
         else if (!fn && !typing) mount("v-plant", h("div", { class: "card" }, "This page does not exist in this profile."));
       } catch (e) {
         // a page that cannot be drawn says so; it is not a lost connection unless a request failed
@@ -296,7 +363,7 @@
     b.className = "banner " + (st.banner.startsWith("SIMULATION") ? "sim" : st.banner.includes("ARMED") ? "armed" : "real");
     const real = st.profile !== "SIMULATED";
     document.querySelectorAll('#nav a[href="#control"]').forEach(a => a.classList.toggle("hidden", real || isInst()));
-    // the developer I/O board is for the people who commission the modules: not for a viewer account
+    // the developer I/O board: in the administrator's Hardware group only (0.7.0)
     $("nav-board").classList.toggle("hidden", !(can("sim_command") || can("process_control") || can("io_assign")));
     if ((real || isInst()) && window.AqPlant) window.AqPlant.buildNav();   // process pages (read-only on hardware, ADR-0009 addendum)
     plainStatus(st);
@@ -497,10 +564,25 @@
       h("button", { class: "cmd small", disabled: !can("backup") || b.running, onclick: () => act("POST", "/api/backup", undefined, "backup started; it ends with a BACKUP_CREATED or BACKUP_FAILED event") }, "Create backup now"));
   }
 
+  /** 0.7.1 (owner decision): the Overview is the installation's drawing with its state written on it. What must stay
+   *  visible besides it is short: active alarms, modules that do not answer, and whether physical writes are possible.
+   *  The system, module and drive tables are kept under Details, not repeated as panels. */
   async function hwOverview() {
     const st = S.status, al = await api("GET", "/api/alarms"), lease = st.bench_lease;
-    const diag = window.AqPlant ? await window.AqPlant.hwDiagram().catch(() => null) : null;
+    const diag = window.AqOverview ? await window.AqOverview.card().catch(e => h("div", { class: "card" }, h("p", { class: "error" }, "The drawing could not be shown: " + e.message)))
+      : (window.AqPlant ? await window.AqPlant.hwDiagram().catch(() => null) : null);
+    const down = Object.entries(st.devices).filter(([, d]) => !d.online);
     mount("v-overview", diag,
+      h("div", { class: "card", "data-overview-status": "" },
+        h("div", { class: "row wrap" },
+          lease ? pill(st.physical_writes, "bad") : pill(st.physical_writes, "ok"),
+          al.open.length ? pill(`${al.open.length} active alarm${al.open.length === 1 ? "" : "s"}`, al.open.some(o => o.severity === "CRITICAL") ? "bad" : "warn") : pill("no active alarm", "ok"),
+          down.length ? pill(`${down.length} module${down.length === 1 ? "" : "s"} not answering`, "bad") : pill("every module answers", "ok"),
+          st.storage.ok ? null : pill("STORAGE DEGRADED: " + st.storage.reason, "bad")),
+        al.open.length ? h("ul", { class: "small" }, al.open.slice(0, 8).map(o => h("li", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn"), ` ${o.rule_id} — ${o.target} (${o.active ? "active" : "cleared"})`)),
+          al.open.length > 8 ? h("li", null, h("a", { href: "#alarms" }, `${al.open.length - 8} more on Alarms & Events`)) : null) : null,
+        down.length ? h("p", { class: "bad small" }, "Not answering: ", down.map(([k, d]) => `${k} (${d.bus_id} @${d.address}${d.last_error ? ": " + d.last_error : ""})`).join("; "), ". Its readings are UNKNOWN on the drawing.") : null),
+      h("details", { class: "card" }, h("summary", null, "Details: system, output modes, modules, drive"),
       h("div", { class: "grid" },
         h("div", { class: "card" }, h("h2", null, "System"), h("dl", { class: "kv" },
           h("dt", null, "Profile"), h("dd", null, st.profile),
@@ -517,7 +599,7 @@
           al.open.length ? h("table", null, h("tbody", null, al.open.map(o => h("tr", null, h("td", null, pill(o.severity, o.severity === "CRITICAL" ? "bad" : "warn")),
             h("td", null, o.rule_id), h("td", null, o.target), h("td", null, o.active ? "active" : "cleared"))))) : h("p", { class: "muted" }, "None"))),
       h("div", { class: "card" }, h("h2", null, "Devices (each polled and reported independently)"), devTable(st)),
-      driveCard(st.drives));
+      driveCard(st.drives)));
   }
 
   // The shared drive's Modbus interface (ADR-0015): read every poll; written only under a bench lease.
@@ -895,6 +977,9 @@
           i.op !== "retire" ? h("div", { class: "small " + (i.exercised_by.length ? "muted" : "warn") }, i.exercised_by.length ? `Ran in the twin in ${i.exercised_by.join(", ")}` : "Not exercised by any program run in the twin") : null,
           diffTable(i.diff))),
         x.bindings.length ? h("div", null, h("strong", null, "Channels"), h("ul", { class: "small" }, x.bindings.map(b => h("li", null, `${b.item_id}.${b.role}: ${b.base_point || "no channel"} → ${b.point || "no channel"} (arrives as proposed; verify it at the bench)`)))) : null,
+        x.hydraulics ? h("div", null, h("strong", null, x.hydraulics.graph_changed ? "Installation graph: connections changed" : "Installation drawing changed"),
+          h("p", { class: "small" }, `${x.hydraulics.nodes} parts, ${x.hydraulics.edges} pipes. ${x.hydraulics.meaning}.`),
+          x.hydraulics.blocks.length ? h("p", { class: "small" }, "Block versions (arrive as drafts to validate on Blocks): ", x.hydraulics.blocks.join(", ")) : null) : null,
         x.programs.map(p => h("div", null, h("strong", null, `Program ${p.name}: ${p.base_version ? "new version replacing v" + p.base_version : "new program"}`), " ",
           p.passed ? pill(`TWIN PASSED (${p.runs.filter(r => r.result === "DONE").length} DONE${p.failed ? ", " + p.failed + " not DONE" : ""})`, p.failed ? "warn" : "ok") : pill("NO TWIN PROOF", "bad"),
           diffTable(p.diff), !p.diff ? h("pre", { class: "small mono" }, JSON.stringify(p.body, null, 1)) : null)),
@@ -1397,7 +1482,61 @@
     }
     return { groups: [...groups].filter(([, xs]) => xs.length), unused };
   }
+  // 0.7.0 Operation History: recent program runs first, each opening its timeline (recorded events, commands, alarms)
+  function runsCard(R, RD) {
+    const row = r => h("tr", { class: S.runSel === r.op_id ? "selected-row" : null },
+      h("td", null, fmtTime(r.started_utc)), h("td", null, `${r.program_id} v${r.version}`), h("td", null, r.origin ? r.origin.toLowerCase() : ""),
+      h("td", null, pill(r.result, r.result === "DONE" ? "ok" : r.result === "NOT ENDED" ? "warn" : "bad")),
+      h("td", null, r.requested_L ? `${r.measured_L} of ${r.requested_L} L${r.uncertain_L ? `, ${r.uncertain_L} L uncertain` : ""}` : (r.runtime_s != null ? `${r.runtime_s} s` : "")),
+      h("td", null, h("button", { class: "small ghost", onclick: () => { S.runSel = S.runSel === r.op_id ? null : r.op_id; refresh(); } }, S.runSel === r.op_id ? "Close" : "Timeline")));
+    return h("div", { class: "card", "data-runs": "" }, h("div", { class: "row" }, h("h2", null, "Program runs"),
+      h("a", { href: "/api/history/runs.csv", download: "aquacrop-runs.csv" }, "Download CSV")),
+      h("p", { class: "muted small" }, R.meaning),
+      R.runs.length ? h("table", { class: "compact" }, h("thead", null, h("tr", null, ["Started", "Program", "Origin", "Result", "Delivered / ran", ""].map(x => h("th", null, x)))),
+        h("tbody", null, R.runs.map(row))) : h("p", { class: "muted" }, "No program has run yet."),
+      RD ? h("div", { class: "card" }, h("h3", null, `${RD.program_id} v${RD.version}: ${RD.result}`),
+        RD.reason ? h("p", null, RD.reason) : null,
+        h("table", { class: "compact small" }, h("tbody", null, RD.timeline.map(e => h("tr", null, h("td", null, fmtTime(e.utc)), h("td", null, e.kind.toLowerCase().replace(/_/g, " ")), h("td", null, e.what))))),
+        runChart(RD), runConfig(RD.configuration),
+        RD.program_body ? h("details", null, h("summary", { class: "small" }, "The program version this run used"), h("pre", { class: "small mono" }, JSON.stringify(RD.program_body, null, 2))) : null) : null);
+  }
+  // 0.7.3 HIST-03: the configuration the run executed with, as recorded when it started
+  function runConfig(C) {
+    if (!C) return null;
+    return h("div", { "data-run-config": "" }, h("h4", null, "Configuration when this run started"),
+      C.changed_since.length ? h("ul", { class: "warn small" }, C.changed_since.map(x => h("li", null, x))) : h("p", { class: "small" }, "Nothing used by this run has changed since."),
+      C.block ? h("p", { class: "small" }, `Block ${C.block.name} v${C.block.version} (${C.block.status.toLowerCase()})${C.block.duty ? ", lead alternation " + C.block.duty.pumps.join(" / ") : ""}.`) : null,
+      h("table", { class: "compact small" }, h("thead", null, h("tr", null, ["Equipment", "Version", "Type", "Reading/output", "Channel then"].map(x => h("th", null, x)))),
+        h("tbody", null, C.bindings.map(b => { const it = C.items.find(i => i.item_id === b.item_id) || {};
+          return h("tr", null, h("td", null, b.name), h("td", null, it.version == null ? "—" : "v" + it.version), h("td", null, it.type_id ? `${it.type_id} v${it.type_version}` : "—"),
+            h("td", null, b.role), h("td", { class: "mono" }, b.point ? `${b.point} (${b.status.toLowerCase()})` : "no channel")); }))),
+      h("p", { class: "muted small" }, C.meaning));
+  }
+  // 0.7.3 DATA-01: the run's channels over its time, gaps and bad quality as recorded, the timeline as annotations
+  function runChart(RD) {
+    const ch = RD.chart;
+    if (!ch || !ch.points.length) return null;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("class", "chart");
+    svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Chart of this run's channels: " + ch.points.map(p => p.label).join(", "));
+    const legend = h("div", { class: "legend small" });
+    const t0 = new Date(Date.parse(RD.started_utc) - 60000), t1 = new Date(Date.parse(RD.ended_utc || new Date().toISOString()) + 60000);
+    const pids = ch.points.map(p => p.point).slice(0, 16);
+    const c = S.runChart, q = `/api/trends?points=${encodeURIComponent(pids.join(","))}&start=${encodeURIComponent(t0.toISOString())}&end=${encodeURIComponent(t1.toISOString())}`;
+    // an ended run's samples do not change: fetched once; a running one at most every 10 s
+    const get = c && c.op === RD.op_id && (RD.ended_utc || Date.now() - c.at < 10000) ? Promise.resolve(c.tr)
+      : api("GET", q).then(tr => { S.runChart = { op: RD.op_id, tr, at: Date.now() }; return tr; });
+    get.then(tr => {
+      const series = trendSeries(tr, pids, pid => { const p = ch.points.find(x => x.point === pid); return { kind: pid.split(".").pop().replace(/[0-9]+$/, ""), label: p ? p.label : pid }; });
+      const events = RD.timeline.map(e => [Date.parse(e.utc), `${e.kind.toLowerCase().replace(/_/g, " ")}: ${e.what}`]);
+      const leg = AqChart.render(svg, { series, events, tStart: t0.getTime(), tEnd: t1.getTime(), timezone: S.tz, note: "" });
+      legend.replaceChildren(...leg.map(l => h("span", null, h("span", { style: "color:" + l.color, "aria-hidden": "true" }, l.suspect ? "◌ " : "■ "), l.name)));
+    }).catch(e => legend.replaceChildren(h("span", { class: "bad" }, String(e.message || e))));
+    return h("div", { "data-run-chart": "" }, h("h4", null, "This run's channels"), svg, legend, h("p", { class: "muted small" }, ch.meaning + ". Digital channels are lanes below the curves; markers are the run's steps, commands and alarms."));
+  }
+
   VIEWS.history = async function () {
+    const R = await api("GET", "/api/history/runs?limit=20").catch(() => ({ runs: [], meaning: "" }));
+    const RD = S.runSel ? await api("GET", "/api/history/runs/" + encodeURIComponent(S.runSel)).catch(() => null) : null;
     const C = await historyChoices();
     const known = new Set(S.allPoints.map(p => p.id));
     S.trendSel = S.trendSel.filter(x => known.has(x));
@@ -1437,8 +1576,8 @@
     // the runtime and volume estimate reads every sample: only for ranges up to a day
     const an = span <= 86400000 ? await api("GET", "/api/analytics?start=" + encodeURIComponent(start.toISOString()) + "&end=" + encodeURIComponent(end.toISOString()))
       : { estimates: {}, note: "Running time and volume estimates are shown for ranges up to one day." };
-    mount("v-history",
-      h("div", { class: "card" }, h("h2", null, "History"),
+    mount("v-history", runsCard(R, RD),
+      h("div", { class: "card" }, h("h2", null, "Readings"),
         h("p", { class: "muted" }, `Choose up to 8 readings (${S.trendSel.length} chosen) and a time range. Times are site time (${S.tz}). A reading is recorded every minute.`),
         ranges,
         h("p", null, `From ${fmtTime(start.toISOString())} to ${fmtTime(end.toISOString())}`),
@@ -1596,6 +1735,25 @@
   }
 
   // ------------------------------------------------ settings
+  // 0.7.3 IMPORT-01: the design as one JSON/YAML document; an import is previewed record by record and writes DRAFTs only
+  function projectCard() {
+    const P = S.project = S.project || {};
+    const text = h("textarea", { rows: 4, class: "mono small", "aria-label": "Project document (JSON or YAML)", placeholder: "Paste an AquaCrop project document, or choose a file" });
+    if (P.text) text.value = P.text;
+    const file = h("input", { type: "file", accept: ".json,.yaml,.yml", "aria-label": "Project file", onchange: async ev => { const f = ev.target.files[0]; if (!f) return; if (f.size > 2097152) { P.msg = { bad: true, text: "The file is larger than 2 MiB." }; VIEWS.settings(); return; } P.text = await f.text(); P.pv = null; VIEWS.settings(); } });
+    const preview = async () => { P.text = text.value; try { P.pv = await api("POST", "/api/project/import/preview", { text: P.text }); P.msg = null; } catch (e) { P.pv = null; P.msg = { bad: true, text: String(e.message || e) }; } S.settingsLoaded = false; VIEWS.settings(); };
+    const apply = async () => { try { const r = await api("POST", "/api/project/import/apply", { text: P.text, expected_digest: P.pv.digest }); P.msg = { text: `Written as drafts: ${r.written.map(w => w.kind + " " + w.id).join(", ") || "nothing"}. Proposals: ${r.proposals.length}${r.proposals.length ? " (equipment to create is listed on Equipment; a drawing opens from the Digital Twin)" : ""}. Not written: ${r.not_written.length}.` }; P.pv = null; } catch (e) { P.msg = { bad: true, text: String(e.message || e) }; } S.settingsLoaded = false; VIEWS.settings(); };
+    const pv = P.pv, CLS = { NEW: "ok", "NEW VERSION": "ok", SAME: "", PROPOSAL: "warn", CONFLICT: "bad" };
+    return h("div", { class: "card", "data-project": "" }, h("h2", null, "Project exchange"),
+      h("p", { class: "muted small" }, "The design (equipment types and items, blocks, programs, the drawing) as one document. Never included: users, passwords, sessions, bench leases, secrets, channel bindings, history."),
+      h("div", { class: "row wrap" }, h("a", { class: "button small", href: "/api/project/export?fmt=json", download: "aquacrop-project.json" }, "Export JSON"), h("a", { class: "button small ghost", href: "/api/project/export?fmt=yaml", download: "aquacrop-project.yaml" }, "Export YAML")),
+      h("h3", null, "Import"), file, text, h("div", { class: "row" }, h("button", { onclick: preview }, "Preview the import")),
+      P.msg ? h("p", { class: (P.msg.bad ? "bad" : "ok") + " small", role: "status" }, P.msg.text) : null,
+      pv ? [h("table", { class: "compact small" }, h("thead", null, h("tr", null, ["Record", "What happens", "Why"].map(x => h("th", null, x)))),
+          h("tbody", null, pv.rows.map(r => h("tr", null, h("td", null, `${r.kind} ${r.id}`), h("td", null, pill(r.action, CLS[r.action] || "")), h("td", null, r.why))))),
+        h("p", { class: "muted small" }, pv.meaning),
+        h("button", { disabled: !pv.rows.some(r => r.action === "NEW" || r.action === "NEW VERSION") && !pv.rows.some(r => r.kind === "drawing" && r.action === "PROPOSAL"), onclick: apply }, "Apply: write the drafts")] : null);
+  }
   VIEWS.settings = async function () {
     if (S.settingsLoaded && S.view === "settings" && document.activeElement && document.activeElement.closest && document.activeElement.closest("#v-settings")) return;
     const [s, ret, bk, qu, off] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/retention").catch(() => null),
@@ -1607,6 +1765,7 @@
     const userForm = can("user_admin") ? usersCard(s, ROLES) : h("p", { class: "muted" }, "Only an administrator manages users.");
     mount("v-settings",
       h("div", { class: "grid" },
+        can("config_admin") ? projectCard() : null,
         h("div", { class: "card" }, h("h2", null, "Versions"), h("dl", { class: "kv" },
           h("dt", null, "Software"), h("dd", null, s.software_version),
           h("dt", null, "Release"), h("dd", null, releaseLine(s.release)),

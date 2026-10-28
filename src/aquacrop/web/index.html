@@ -40,30 +40,30 @@
       <span id="nav-current" class="nav-current"></span>
     </div>
     <nav id="nav" aria-label="Pages">
-      <a href="#start">Getting started</a>
-      <a href="#overview">Overview</a>
-      <span id="nav-inst" class="hidden"></span>
-      <a href="#twin">Digital Twin</a>
-      <a href="#io">I/O test bench</a>
-      <a href="#board" id="nav-board" class="hidden">I/O board</a>
-      <a href="#hw-add">Add module</a>
-      <a href="#discovery">Discovery</a>
-      <a href="#equipment">Equipment</a>
-      <a href="#equipment-types">Equipment types</a>
-      <a href="#programs">Programs</a>
-      <a href="#operation">Operation</a>
-      <a href="#control">Control</a>
-      <a href="#history">History</a>
-      <a href="#alarms">Alarms &amp; events</a>
-      <a href="#settings">Settings</a>
+      <a href="#overview" data-nav="overview">Overview</a>
+      <a href="#equipment" data-nav="equipment">Equipment</a>
+      <span class="nav-group hidden" data-nav="equipment-types"><a href="#equipment-types">Equipment types</a></span>
+      <a href="#blocks" data-nav="blocks">Blocks</a>
+      <a href="#twin" data-nav="twin">Digital Twin</a>
+      <a href="#hw-add" data-nav="hw-add">Add Module</a>
+      <a href="#programs" data-nav="programs">Programs</a>
+      <a href="#history" data-nav="history">Operation History</a>
+      <a href="#alarms" data-nav="alarms" data-viewer-label="Alarms">Alarms &amp; Events</a>
+      <span class="nav-group hidden" data-nav="hardware"><span id="nav-inst" class="hidden"></span>
+        <a href="#operation">Operation</a><a href="#io">I/O test bench</a>
+        <a href="#board" id="nav-board" class="hidden">I/O board</a><a href="#discovery">Discovery</a>
+        <a href="#control">Control</a></span>
+      <span class="nav-group hidden" data-nav="settings"><a href="#settings">Settings</a>
+        <a href="#start">Getting started</a></span>
     </nav>
-    <div class="who"><span id="who"></span> <button id="logout" class="ghost">Log out</button></div>
+    <div class="who"><span id="who"></span> <span id="build" class="build-id" title="The program running here"></span> <button id="logout" class="ghost">Log out</button></div>
   </header>
   <div id="statusline" class="statusline">
     <span id="status-plain"></span>
     <button id="status-more" type="button" class="linkbtn" aria-expanded="false" aria-controls="status-tech">Details</button>
     <div id="status-tech" class="status-tech hidden"></div>
   </div>
+  <div id="identity-warn" class="identity-warn hidden" role="alert"></div>
   <main>
     <section id="v-overview" class="view"></section>
     <section id="v-twin" class="view"></section>
@@ -76,6 +76,7 @@
     <section id="v-settings" class="view"></section>
     <section id="v-plant" class="view"></section>
     <section id="v-equipment" class="view"></section>
+    <section id="v-blocks" class="view"></section>
     <section id="v-hw-add" class="view"></section>
     <section id="v-discovery" class="view"></section>
     <section id="v-equipment-types" class="view"></section>
@@ -90,9 +91,15 @@
 <script src="/static/layout.js"></script>
 <script src="/static/plant.js"></script>
 <script src="/static/icons.js"></script>
+<script src="/static/ids.js"></script>
 <script src="/static/equipment.js"></script>
 <script src="/static/commissioning.js"></script>
 <script src="/static/programs.js"></script>
 <script src="/static/operation.js"></script>
+<script src="/static/router.js"></script>
+<script src="/static/hydraulic-editor.js"></script>
+<script src="/static/type-form.js"></script>
+<script src="/static/blocks.js"></script>
+<script src="/static/overview.js"></script>
 </body>
 </html>

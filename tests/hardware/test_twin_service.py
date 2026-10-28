@@ -62,15 +62,17 @@ def test_twin_config_has_only_virtual_buses_and_its_own_database(live_and_twin):
     assert twin_app.state.hist.db_path != app.state.hist.db_path and cfg.config_id.endswith("-twin")
 
 
-def test_every_login_works_in_the_twin_with_the_same_password(live_and_twin):
+def test_operator_and_admin_logins_work_in_the_twin_with_the_same_password_a_viewer_is_refused(live_and_twin):
     twin = live_and_twin[3]
-    for u in ("admin1", "bench1", "view1"):
+    for u in ("admin1", "bench1"):
         login(twin, u, TWIN_ORIGIN)
-    h = login(twin, "view1", TWIN_ORIGIN)
+    r = twin.post("/api/auth/login", json={"username": "view1", "password": PW["view1"]}, headers={"Origin": TWIN_ORIGIN})
+    assert r.status_code == 403 and "operators and administrators" in r.json()["detail"]     # 0.7.0, ADR-0023
+    h = login(twin, "bench1", TWIN_ORIGIN)
     rid = twin.get("/api/auth/session").json()["runtime_id"]
     assert rid.startswith("TWIN:")
-    r = twin.post("/api/twin/control", json={"action": "run"}, headers=h | {"X-Runtime-Id": rid})
-    assert r.status_code == 403                               # viewers watch, operators run
+    r = twin.post("/api/twin/control", json={"action": "pause"}, headers=h | {"X-Runtime-Id": rid})
+    assert r.status_code == 200, r.text                       # operators run the twin
 
 
 def test_a_program_runs_in_the_twin_and_its_evidence_reaches_the_live_version(live_and_twin):
@@ -109,8 +111,10 @@ def test_twin_mode_and_faults_never_change_the_live_side(live_and_twin):
     twin.post("/api/twin/fault", json={"target": "relay_A", "fault": "MODULE_OFFLINE"}, headers=H)
     assert twin.get("/api/twin").json()["engine"]["mode"] == "AUTO"
     assert app.state.svc.workers["rs485_a"].health()["state"] == "RUNNING"   # the live poller is untouched
-    assert not [r for r in app.state.hist.query("SELECT kind FROM events WHERE kind LIKE 'TWIN_%'")
-                if r["kind"] != "TWIN_SNAPSHOT_PUBLISHED"]
+    # the live side's own snapshot publishing (published, or a transient Windows file lock on the feed) is not a twin
+    # effect; anything else named TWIN_ in the live history would be (fdf40b8 CI: listed by kind when it fails)
+    kinds = [r["kind"] for r in app.state.hist.query("SELECT kind FROM events WHERE kind LIKE 'TWIN_%'")]
+    assert not [k for k in kinds if k not in ("TWIN_SNAPSHOT_PUBLISHED", "TWIN_SNAPSHOT_FAILED")], kinds
 
 
 def test_the_real_dashboard_hands_its_login_to_the_twin_once(live_and_twin):
@@ -208,9 +212,9 @@ def test_layout_is_edited_in_the_twin_and_accepted_on_the_real_system(live_and_t
 
 def test_a_live_password_change_ends_the_users_twin_sessions(live_and_twin):
     app, live, twin_app, twin, bus, hl = live_and_twin
-    login(twin, "view1", TWIN_ORIGIN)
+    login(twin, "bench1", TWIN_ORIGIN)
     assert twin.get("/api/auth/session").status_code == 200
-    app.state.accounts.reset_password("view1", "a brand new password 99")
+    app.state.accounts.reset_password("bench1", "a brand new password 99")
     assert live.post("/api/twin-link/publish", headers=hl).status_code == 200
     twin_app.state.svc.sync_users(twin_app.state.accounts)
     assert twin.get("/api/auth/session").status_code == 401
@@ -450,17 +454,44 @@ def test_an_export_that_can_no_longer_be_applied_can_be_dismissed(live_and_twin)
     assert live.get("/api/twin-changes", headers=hl).json()["pending"] == []
 
 
-def test_pages_name_their_scripts_by_version_and_say_which_version_answers(live_and_twin):
+def test_pages_name_their_scripts_by_build_and_say_which_build_answers(live_and_twin):
+    """0.7.1: the cache key and the header are the build identity (version, commit, web files), not the version alone:
+    a browser can never keep scripts of another build under the same version. Main and twin report each other."""
     from aquacrop import __version__
+    from aquacrop.build import identity
+    build = identity()["build"]
+    assert build.startswith(__version__ + "+") and ".w" in build
     app, live, twin_app, twin, bus, hl = live_and_twin
     for client, page in ((live, "/"), (twin, "/")):
         r = client.get(page)
-        assert r.headers["cache-control"].startswith("no-cache") and r.headers["x-aquacrop-version"] == __version__
-        assert f'<meta name="aquacrop-version" content="{__version__}">' in r.text
-        assert f'app.css?v={__version__}"' in r.text and ".js\"" not in r.text      # every script is versioned
-    assert "immutable" in live.get(f"/static/app.js?v={__version__}").headers["cache-control"]
+        assert r.headers["cache-control"].startswith("no-cache") and r.headers["x-aquacrop-version"] == build
+        assert f'<meta name="aquacrop-version" content="{build}">' in r.text
+        assert f'app.css?v={identity()["asset_key"]}"' in r.text and ".js\"" not in r.text      # every script is versioned
+    assert "immutable" in live.get(f"/static/app.js?v={identity()['asset_key']}").headers["cache-control"]
+    assert live.get(f"/static/app.js?v={__version__}").headers["cache-control"] == "no-cache"   # another build's key
     assert live.get("/static/app.js").headers["cache-control"] == "no-cache"
-    assert live.get("/api/health").headers["x-aquacrop-version"] == __version__
+    h = live.get("/api/health")
+    assert h.headers["x-aquacrop-version"] == build and h.json()["build"] == build and h.json()["runtime"] == "MAIN"
+    assert twin.get("/api/health").json() | {} == twin.get("/api/health").json() and twin.get("/api/health").json()["build"] == build
+    v = live.get("/api/version", headers=hl).json()
+    assert v["build"] == build and v["runtime"] == "MAIN" and v["project"]["config_id"] == app.state.cfg.config_id
+    assert v["partner"]["runtime"] == "TWIN" and v["partner"]["match"] is True, v["partner"]
+    assert "state_dir" not in v and not any("\\" in str(x) or "/var/" in str(x) for x in v.values())   # no paths
+    H = _twin_h(twin, "bench1")
+    assert twin.get("/api/twin", headers=H).json()["identity"]["partner"]["match"] is True
+    # a twin of another build is reported, never assumed to match
+    import json
+    import os
+    from pathlib import Path
+    f = Path(os.environ["AQUACROP_FEED_DIR"]) / "evidence" / "identity-twin.json"   # where the twin may write
+    f.write_text(json.dumps(json.loads(f.read_text()) | {"build": "0.7.0+old"}), encoding="utf-8")
+    v = live.get("/api/version", headers=hl).json()
+    assert v["partner"]["match"] is False and "0.7.0+old" in v["partner"]["detail"]
+    # 0.7.3: without the main's identity file the twin falls back to the build named in the main's snapshot
+    from aquacrop.build import partner
+    (Path(os.environ["AQUACROP_FEED_DIR"]) / "identity-main.json").unlink()
+    assert live.post("/api/twin-link/publish", headers=hl).status_code == 200
+    assert partner(Path(os.environ["AQUACROP_FEED_DIR"]), "MAIN")["match"] is True
 
 
 def test_after_approval_the_twin_no_longer_lists_what_the_real_system_has(live_and_twin):

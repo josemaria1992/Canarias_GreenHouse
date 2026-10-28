@@ -149,6 +149,7 @@ class HardwareService:
         self.lock = threading.RLock()
         self.samples: dict[str, Sample] = {}
         self.alarms = AlarmEngine(cfg, emit=lambda kind, payload: hist.event(kind, payload, actor="system"))
+        self.item_limits = None              # () -> limit inputs of the equipment items (0.7.0), set by the app
         self.alarms.restore(hist.load_open_alarms())
         self._cycle = itertools.count(1)
         self.backend = ModbusBackend(cfg, context=self._ctx, monotonic=monotonic)
@@ -243,6 +244,11 @@ class HardwareService:
                 self.samples[s.point_id] = s
             self.alarms.evaluate_devices(status, None)
             self.alarms.evaluate_samples(self.samples, self._mono(), None)
+            if self.item_limits is not None:
+                try:
+                    self.alarms.evaluate_item_limits(self.item_limits(), self._mono(), None)
+                except Exception as e:           # a broken item record never stops acquisition
+                    self.hist.event("ITEM_LIMITS_ERROR", {"error": repr(e)}, actor="system")
             evaluate_storage_alarm(self.hist, self.alarms)
             evaluate_recorder_alarm(self.recorder, self.alarms)
             self.retention.tick(self.alarms)     # clock trust is checked even while snapshots are held

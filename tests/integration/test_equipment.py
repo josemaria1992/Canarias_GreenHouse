@@ -74,8 +74,10 @@ def test_create_item_bind_and_verify_an_output_with_readback(sim):
                                              "icon": "lamp", "body": {}}, headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["version"] == 1
-    # an operator without the commissioning flag cannot choose channels
+    # 0.7.0 (ADR-0023): an operator without the commissioning flag proposes a channel, but cannot verify it
     assert c.post("/api/equipment/bind", json={"item_id": "led-1", "role": "on", "point": "digital_A.DO1"},
+                  headers=h).json()["status"] == "PROPOSED"
+    assert c.post("/api/equipment/bind/verify", json={"item_id": "led-1", "role": "on", "observation": "lit"},
                   headers=h).status_code == 403
     c.post("/api/auth/logout", headers=h)
     h = login(c, "bench1")
@@ -84,8 +86,6 @@ def test_create_item_bind_and_verify_an_output_with_readback(sim):
     assert r.status_code == 409 and "OPEN_DRAIN_SINK" in r.text
     r = c.post("/api/equipment/bind", json={"item_id": "led-1", "role": "on", "point": "digital_A.DI1"}, headers=h)
     assert r.status_code == 409 and "needs a DO channel" in r.text
-    assert c.post("/api/equipment/bind", json={"item_id": "led-1", "role": "on", "point": "digital_A.DO1"},
-                  headers=h).json()["status"] == "PROPOSED"
     ready = c.get("/api/equipment", headers=h).json()["readiness"]["led-1"]
     assert not ready["ready"] and ready["unverified"] == ["On"]
     r = c.post("/api/equipment/bind/verify", json={"item_id": "led-1", "role": "on", "observation": "LED lit"}, headers=h)
@@ -108,7 +108,7 @@ def test_create_item_bind_and_verify_an_output_with_readback(sim):
     c.post("/api/auth/logout", headers=h)
     h = login(c, "bench1")
     r = c.post("/api/equipment/bind", json={"item_id": "led-2", "role": "on", "point": "digital_A.DO1"}, headers=h)
-    assert r.status_code == 409 and "already carries led-1.on" in r.text
+    assert r.status_code == 409 and "is already used by led-1 (on)" in r.text
 
 
 def test_new_type_version_changes_no_item_until_upgraded(sim):

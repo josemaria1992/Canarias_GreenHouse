@@ -12,7 +12,7 @@ import json
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
 
 from ..config.catalog import CATALOG, AIMode, ModelId
 from ..domain.model import PointId, PointKind
@@ -21,6 +21,16 @@ ID_RE = r"^[a-z0-9][a-z0-9_\-]{0,47}$"
 _ID = re.compile(ID_RE)
 
 # Built-in icon names. The UI draws each one from an inline SVG it ships; nothing is uploaded.
+# R402-02: the flow units a litre count understands, as the factor to litres per minute. A reading in any other unit is
+# never counted as litres: a program refuses to start on it, and a litre step fails if one appears.
+FLOW_TO_L_MIN = {"L/min": 1.0, "L/h": 1.0 / 60.0, "m³/h": 1000.0 / 60.0, "m3/h": 1000.0 / 60.0, "L/s": 60.0}
+
+
+def flow_factor(unit: str | None) -> float | None:
+    """Litres per minute for one engineering unit of a flow reading, or None when the unit is not a flow rate."""
+    return FLOW_TO_L_MIN.get((unit or "").strip())
+
+
 ICONS = ("pump", "valve", "tank", "level", "flow", "pressure", "temperature", "button", "lamp", "fan",
          "heater", "motor", "sensor", "switch", "drop", "gauge", "plug", "generic")
 
@@ -158,6 +168,12 @@ class Limits(_M):
     max_starts_per_hour: int | None = Field(default=None, ge=1, le=3600)
 
 
+# What a type is in the hydraulic graph (0.7.0, ADR-0024). It decides the ports a symbol of the type has; the
+# category and the icon never do. None: not part of the water graph (a button, a test lamp).
+HYDRAULIC_KINDS = ("source", "tank", "pump", "valve", "meter", "sensor", "sector")
+PASSIVE_KINDS = ("source", "tank", "sector")       # no channel needed: they have no I/O of their own
+
+
 class SimSpec(_M):
     behavior: SimBehavior = SimBehavior.NOT_MODELLED
     delay_s: float = Field(default=1.0, ge=0, le=600)            # FOLLOW_COMMAND / VALVE_TRAVEL
@@ -169,15 +185,19 @@ class TypeBody(_M):
     description: str = Field(default="", max_length=500)
     default_icon: str = "generic"
     properties: tuple[PropertyDef, ...] = ()
-    roles: tuple[RoleDef, ...] = Field(min_length=1)
+    roles: tuple[RoleDef, ...] = ()
     operations: tuple[Operation, ...] = ()
     limits: Limits = Limits()
     simulation: SimSpec = SimSpec()
+    hydraulic: Literal["source", "tank", "pump", "valve", "meter", "sensor", "sector"] | None = None
 
     @model_validator(mode="after")
     def _check(self):
         if self.default_icon not in ICONS:
             raise ValueError(f"icon {self.default_icon!r} is not a built-in icon")
+        if not self.roles and self.hydraulic not in PASSIVE_KINDS:
+            raise ValueError("a type needs at least one channel role, unless it is a passive water part "
+                             "(a tank, a water source or a sector)")
         for seq, what in ((self.properties, "property key"), (self.roles, "role")):
             names = [getattr(x, "key", None) or getattr(x, "role") for x in seq]
             dup = sorted({n for n in names if names.count(n) > 1})
@@ -225,6 +245,14 @@ class AlarmLimit(_M):
     low: float | None = None
     high: float | None = None
     deadband: float = Field(default=0.0, ge=0)
+    delay_s: float = Field(default=0.0, ge=0, le=3600)      # 0.7.0: how long the limit is passed before it raises
+
+    @model_serializer(mode="wrap")
+    def _ser(self, handler):
+        d = handler(self)
+        if d.get("delay_s") == 0.0:
+            d.pop("delay_s")                      # bodies written before 0.7.0 keep their exact form
+        return d
 
     @model_validator(mode="after")
     def _check(self):
@@ -378,7 +406,7 @@ TEMPLATES: dict[str, dict] = {
                   _role("fault", "Fault", "INPUT", "DIGITAL", "FAULT", required=False)],
         "operations": ["RUN_FOR", "SCHEDULE", "DELIVER_VOLUME", "KEEP_BETWEEN", "TRIGGERED", "SEQUENCE_STEP"],
         "limits": {"max_runtime_s": 3600, "min_off_s": 10},
-        "simulation": {"behavior": "PUMP_FLOW", "delay_s": 1.0, "demo_flow_L_min": 20}}},
+        "simulation": {"behavior": "PUMP_FLOW", "delay_s": 1.0, "demo_flow_L_min": 20}, "hydraulic": "pump"}},
     "valve": {"name": "Valve", "body": {
         "category": "Valves", "default_icon": "valve",
         "description": "A valve opened by one output, with optional open/closed position switches.",
@@ -388,41 +416,41 @@ TEMPLATES: dict[str, dict] = {
                         feedback_timeout_s=10)],
         "operations": ["RUN_FOR", "SCHEDULE", "SEQUENCE_STEP"],
         "limits": {"max_runtime_s": 7200},
-        "simulation": {"behavior": "VALVE_TRAVEL", "delay_s": 3.0}}},
+        "simulation": {"behavior": "VALVE_TRAVEL", "delay_s": 3.0}, "hydraulic": "valve"}},
     "level": {"name": "Level sensor", "body": {
         "category": "Level sensors", "default_icon": "level",
         "description": "A 4-20 mA level transmitter.",
         "roles": [_role("level", "Level", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"], unit="cm")],
-        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}, "hydraulic": "sensor"}},
     "flow": {"name": "Flow meter (4-20 mA flow rate)", "body": {
         "category": "Flow meters", "default_icon": "flow",
         "description": "A flow-rate transmitter on an analog input. Volume is integrated from fresh readings.",
         "roles": [_role("flow", "Flow rate", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"],
                         unit="L/min")],
-        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}, "hydraulic": "meter"}},
     # 0.6.2: the installation's other transmitters (owner request: the starter creates every part)
     "pressure": {"name": "Pressure transmitter", "body": {
         "category": "Pressure sensors", "default_icon": "pressure",
         "description": "A 4-20 mA pressure transmitter (a sector's line pressure).",
         "roles": [_role("pressure", "Pressure", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"],
                         unit="bar")],
-        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}, "hydraulic": "sensor"}},
     "ph": {"name": "pH probe", "body": {
         "category": "Water quality", "default_icon": "drop",
         "description": "A pH transmitter on a 4-20 mA input.",
         "roles": [_role("ph", "pH", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"], unit="pH")],
-        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}, "hydraulic": "sensor"}},
     "ec": {"name": "EC probe", "body": {
         "category": "Water quality", "default_icon": "gauge",
         "description": "An electrical conductivity transmitter on a 4-20 mA input.",
         "roles": [_role("ec", "EC", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"], unit="mS/cm")],
-        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}, "hydraulic": "sensor"}},
     "temperature": {"name": "Temperature transmitter", "body": {
         "category": "Water quality", "default_icon": "temperature",
         "description": "A water temperature transmitter on a 4-20 mA input.",
         "roles": [_role("temperature", "Temperature", "INPUT", "ANALOG", "MEASUREMENT", electrical=["CURRENT_4_20"],
                         unit="°C")],
-        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}}},
+        "operations": ["MEASURE"], "simulation": {"behavior": "MANUAL_ANALOG"}, "hydraulic": "sensor"}},
     "button": {"name": "Button", "body": {
         "category": "Buttons", "default_icon": "button", "description": "A push button or switch on a digital input.",
         "roles": [_role("pressed", "Pressed", "INPUT", "DIGITAL", "STATE")],
@@ -435,4 +463,54 @@ TEMPLATES: dict[str, dict] = {
         "operations": ["RUN_FOR", "SCHEDULE", "TRIGGERED", "SEQUENCE_STEP"],
         "limits": {"max_runtime_s": 1800},
         "simulation": {"behavior": "FOLLOW_COMMAND", "delay_s": 0.5}}},
+    # 0.7.0 passive water parts: no channel of their own. Their numbers are the item's properties; unknown values
+    # stay unset (the twin then shows NOT MODELLED for what needs them), and a demo value says so in its provenance.
+    "tank": {"name": "Tank", "body": {
+        "category": "Tanks", "default_icon": "tank", "hydraulic": "tank",
+        "description": "A tank. Its level is measured by a separate level sensor associated with it.",
+        "properties": [{"key": "capacity_l", "label": "Capacity", "kind": "NUMBER", "unit": "L", "min": 0.1,
+                        "max": 1e7},
+                       {"key": "sim_initial_l", "label": "Water at the start of a simulation", "kind": "NUMBER",
+                        "unit": "L", "min": 0, "max": 1e7},
+                       {"key": "level_full", "label": "Level reading when full", "kind": "NUMBER", "min": 0,
+                        "max": 1e6},
+                       {"key": "provenance", "label": "Where the numbers come from", "kind": "CHOICE",
+                        "choices": ["MEASURED", "DATASHEET", "OWNER_CONFIGURED", "DEMO", "UNKNOWN"],
+                        "default": "UNKNOWN"}]}},
+    "water_source": {"name": "Water source", "body": {
+        "category": "Sources", "default_icon": "drop", "hydraulic": "source",
+        "description": "Where water comes from (mains, a well). It supplies water only along explicit pipes.",
+        "properties": [{"key": "supply_l_min", "label": "Supply rate in a simulation", "kind": "NUMBER",
+                        "unit": "L/min", "min": 0.01, "max": 1e5},
+                       {"key": "provenance", "label": "Where the numbers come from", "kind": "CHOICE",
+                        "choices": ["MEASURED", "DATASHEET", "OWNER_CONFIGURED", "DEMO", "UNKNOWN"],
+                        "default": "UNKNOWN"}]}},
+    "sector": {"name": "Irrigation sector", "body": {
+        "category": "Sectors", "default_icon": "drop", "hydraulic": "sector",
+        "description": "Where water is delivered. A drain share, if configured, leaves by its drain port.",
+        "properties": [{"key": "drain_fraction", "label": "Share that drains back in a simulation", "kind": "NUMBER",
+                        "min": 0, "max": 1},
+                       {"key": "drain_delay_s", "label": "Drain delay in a simulation", "kind": "NUMBER", "unit": "s",
+                        "min": 0, "max": 86400},
+                       {"key": "provenance", "label": "Where the numbers come from", "kind": "CHOICE",
+                        "choices": ["MEASURED", "DATASHEET", "OWNER_CONFIGURED", "DEMO", "UNKNOWN"],
+                        "default": "UNKNOWN"}]}},
 }
+
+
+# 0.7.1: types activated before 0.7.0 have no `hydraulic` field, so their items could not be placed in the graph and
+# the earlier drawing could not be converted. Such a type takes the water kind of the built-in template it was made
+# from: by its type id, else by its category when that names exactly one kind. A type that states a kind keeps it.
+TEMPLATE_KINDS = {tid: t["body"].get("hydraulic") for tid, t in TEMPLATES.items()}
+_by_category: dict[str, set] = {}
+for _t in TEMPLATES.values():
+    _by_category.setdefault(_t["body"].get("category"), set()).add(_t["body"].get("hydraulic"))
+CATEGORY_KINDS = {c: next(iter(k)) for c, k in _by_category.items() if len(k) == 1 and None not in k}
+
+
+def water_kind(tb: "TypeBody", type_id: str | None = None) -> tuple[str | None, str | None]:
+    """(kind, where it comes from: "type" or "built-in template"), or (None, None)."""
+    if tb.hydraulic:
+        return tb.hydraulic, "type"
+    k = TEMPLATE_KINDS.get(type_id or "") or CATEGORY_KINDS.get(tb.category or "")
+    return (k, "built-in template") if k else (None, None)
