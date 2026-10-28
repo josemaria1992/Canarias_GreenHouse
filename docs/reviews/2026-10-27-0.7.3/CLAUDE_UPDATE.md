@@ -80,7 +80,7 @@ These are the owner's facts about the physical bench. They are recorded here and
 | Question | Owner's answer |
 |---|---|
 | `start:fill-main`, `fill-a`, `fill-b`, `fill-acid`: does each fill pipe join the mains pipe? | **Yes.** A pipe runs from mains to each tank with a valve in between. These are the explicit `v-fill-*` valves. |
-| `inline:dose-a/b/acid:v-out-*`: is the outlet valve in series on the dosing pipe? | **No outlet valve** (owner, 28 Oct 2026). Each dosing line, after the fertiliser and acid tanks, has a pump and a flow meter (the explicit `tp-*` and `flow-tp-*`). The three valve items "Fertiliser A outlet", "Fertiliser B outlet" and "Acid outlet" have no physical valve: the owner retires them on Equipment, and the question then no longer arises. |
+| `inline:dose-a/b/acid:v-out-*`: is the outlet valve in series on the dosing pipe? | **Yes** (owner, 28 Oct 2026). Each dosing line, from a fertiliser or acid tank to the main tank, has an outlet valve in series with its pump and flow meter (`v-out-*`, `tp-*`, `flow-tp-*`). |
 | `inline:return:rp2`: is Return pump 2 in series with Return pump 1? | **No.** They are parallel pumps inside the drainage tank, and the second one is there in case one fails. Added in `fc34fe6`: a pump drawn on a line that already has a pump is asked Yes (in series), No, or **Parallel spare**. Parallel spare gives it the same suction and the same downstream as its partner, never in series. A test confirms that with this answer the bench drawing is ready and that Return pumps 1 and 2 both take from the drainage tank and join before the return meter. |
 | `tap:ec`, `tap:ph`: do they measure Main tank? | **Yes.** |
 | `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no main tank temperature sensor (owner, 28 Oct 2026): the configured item "Main tank temperature" has no physical sensor, and the owner retires it on Equipment. |
@@ -193,7 +193,7 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 
 ## Remaining
 
-- **C077:** deployed in 0.7.8. The owner answered the dosing valves and the temperature sensor (28 Oct): the three outlet valve items and "Main tank temperature" are to be retired on Equipment by the owner. Return pump 2 can now be answered as a parallel spare (`fc34fe6`). Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
+- **C077:** deployed in 0.7.8. The owner answered the dosing valves and the temperature sensor (28 Oct): each dosing line has its outlet valve in series (answer yes); "Main tank temperature" has no physical sensor and is to be retired on Equipment by the owner. Return pump 2 can now be answered as a parallel spare (`fc34fe6`). Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
 - **UX-07:** deployed in 0.7.8; the owner's request routing and operator access (`9e0ef90`) are **not deployed yet**.
 
 - CI result on `7075853`.
