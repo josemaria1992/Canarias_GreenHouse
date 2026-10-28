@@ -1,4 +1,4 @@
-# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes, UX-07 and R402
+# Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes, UX-07, R402 and R913
 
 Status: **C077-01..08, UX-07 and R402-01..06 are implemented on the branch** (see below); **deployed to the bench as 0.7.8** on the owner's request (27 Oct 2026, 23:45 CET); the owner's 28 Oct decisions on requests and operator access followed as **0.7.9** (28 Oct, 08:50 CET). No AUTO, lease or output command was used. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
@@ -85,6 +85,34 @@ These are the owner's facts about the physical bench. They are recorded here and
 | `tap:ec`, `tap:ph`: do they measure Main tank? | **Yes.** |
 | `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no main tank temperature sensor (owner, 28 Oct 2026): the configured item "Main tank temperature" has no physical sensor, and the owner retires it on Equipment. |
 | `tap:pres-s1`, `tap:pres-s2`: do they measure the sector pipes? | **Yes.** |
+
+## R913 findings (Codex re-review of c913846) and the owner's 28 Oct requests
+
+Author tests only. Independent acceptance: **NOT RUN**. **Not deployed**: the bench runs 0.7.9 (`ab96a7e`), which has none of this section.
+
+| ID | Implementation | Author evidence | Remaining |
+|---|---|---|---|
+| R913-01 valve before the failed pump is verified OFF | `0480169`. When a litre target is met during a pump changeover and the program has no separate normal stop, the sequence's remaining OFF/WAIT steps become the stop plan, in their order. Each is verified, and OFF is sent again while unverified. A program with its own normal stop keeps using that plan. No standby ON (R402-03 kept). | `test_r913_01_…`: dropped OFFs for 8 s plus verification delayed 20 s; at every 0.5 s step the valve is never OFF while pump-a is still this operation's duty. The stop steps are recorded pump-a, then valve-1, and both end OFF. It fails on the previous engine. | — |
+| R913-02 litres during the finishing stop | `0480169`. Once a litre step has begun, its meter is counted through later steps and the whole stop, until the operation ends (`op.meter`, `_residual_metering`). A reading lost meanwhile adds its estimate to the uncertain volume (`PROGRAM_METER_LOST`); the stop goes on. | `test_r913_02_…`: residual flow from the late-stopping pump is in the record, within 1.5 L of the water that flowed, with uncertain 0. A reading lost during the stop gives DONE with `uncertain_L` > 0 and the stop completed. Both fail on the previous engine. `test_twin08` now accepts the water measured while the pump stops (about one tick). | — |
+| R913-03 second reading of one quantity | `9da2d2a`. A new reading of a known quantity is keyed `pressure`, `pressure_2`, … (also when "something else" is changed to a quantity), and reopening reads the quantity back from that key. An older or copied custom key (e.g. `bearing_temperature`) is recognised by an unambiguous unit. Saved keys never change. A unit that does not fit the quantity is refused when it is new or changed, on a saved reading too. | JS: two pressures and two temperatures reopen as such with stable keys; older/copied custom keys; a changed unit is refused. API: form → draft endpoint → reopen gives `pressure`/`pressure_2`, both pressure in bar. | — |
+| R913-04 old open requests hidden | `2c25e6e`. The API returns every OPEN request (no cap) plus the reviewed history a page at a time (`limit`/`offset`, `reviewed_total`). The card lists all waiting requests, with Approve and Reject, before the history, which has "Show older". | `test_r913_04_…`: an old open request behind 205 reviewed ones is listed and can be rejected; paging reaches the last reviewed ones. | Browser re-check of the card: NOT RUN for this change. |
+| Owner: programs can be removed | `72768cb`. `POST /api/programs/retire` is for administrators and requires a reason. Every version becomes RETIRED, its history stays, and it leaves the list. This is refused while any version is active ("deactivate it first on Operation"). The card has Retire. Also: program validation accepted only L/min for a litre meter, contradicting R402-02; it now accepts every flow unit the engine converts. | `test_program_store.py`: refused while active, then retired after deactivation, both versions kept, a second retire refused. The existing validation test is updated. | — |
+| Owner: messages say what to do | `23492b5`. **The safety rules are unchanged.** The texts now name the cause and the next step. | See the details below the table. | The texts of older process controllers (`control/`) were not reviewed beyond their alarm wording. |
+
+**What the message review changed (`23492b5`):**
+- **Restart and AUTO checklist:** each failed check carries a `fix`, and the refusal lists those fixes. For example, "Main tank EC has no measuring range: on Equipment, enter its scaling …, or clear its channel until the sensor is connected", instead of "EC is fresh (missing, stale or unscaled)". Operation and the Twin show "What to do" under each failed check.
+- **One helper (`Engine._unread`) for every unreadable signal:** it distinguishes no channel, no measuring range, no reading yet, a bad-quality reading, a stale reading and an mA/V mismatch. It is used by start and stop conditions, fault inputs, keep-between sensors, the restart checklist and flow meters.
+- **Engine refusals and failure reasons:** mode changes, Run now, inactive programs, conflicts, missing output channel, missing runtime limit, volume cap, no flow, lost flow reading, step feedback, OFF not verified.
+- **Stores:**
+  - programs: validated or retired versions, existing drafts, not validated, not active;
+  - equipment: type status, type in use, no active version, retired items, channel already used, citing an unverified assignment;
+  - blocks.
+- **Access and sign-in:** "permission x required" becomes who may do it (`needs_text`): "this needs an administrator account …; ask an administrator if your account should have it". Clearer sign-in failure and rate-limit texts. "password change required" is unchanged because the UI depends on it.
+- **Program alarms in run history** now read in words with "What to do" (stop not verified, program failed, safety limit, stop condition unreadable, pump failed, conflict, equipment fault, restart). The demo configurations' reservoir and return-tank alarms got their wording.
+- **Tests:**
+  - `test_a_restart_refusal_says_which_sensor_and_what_to_do` covers the owner's exact bench case;
+  - assertions that pinned the old wording were updated to the new texts.
+- Full suite on the final code: 849 passed, 8 skipped, 3 failed on the first run (three older tests pinning the old wording and the pre-R913-02 litre bound); those 3 updated and passing; every JS test passed.
 
 ## R402 findings (Codex review of e40285f)
 
@@ -206,4 +234,4 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 - The signed-in real-bench walkthrough by the owner.
 - VPN DNS or hosts entries for other clients, and the DHCP reservation.
 
-Ready for independent Codex re-review of R402-01..06 (and the C077/UX-07 rows they amend): **YES**, apart from the open owner items above.
+Ready for independent Codex re-review of R913-01..04, program retirement and the message review: **YES** (not deployed; the bench runs 0.7.9).
