@@ -146,7 +146,8 @@ class StorageUnavailable(OSError):
 CHECKPOINT_EVERY_S = 60.0
 
 
-STARTUP_WAIT_S = 30.0          # the first writes of a start (session record, command reconciliation)
+STARTUP_WAIT_S = 30.0          # the first writes of a start (session record, command reconciliation, ...)
+STARTUP_GRACE_S = 60.0         # for this long after the historian opens, every waited write gets STARTUP_WAIT_S
 
 
 class Historian:
@@ -155,6 +156,7 @@ class Historian:
         self.db_path = Path(db_path)
         self.cfg = cfg
         self.session_id = session_id
+        self._born = time.monotonic()                 # start of the STARTUP_GRACE_S period
         self.backend_name = backend_name
         con = connect(self.db_path)
         self.applied_migrations = migrate(con, self.db_path, reserve_bytes=cfg.historian.free_space_reserve_bytes)
@@ -190,6 +192,8 @@ class Historian:
         """Queue `fn` for the writer thread. `solo_without_fk` runs it in its own transaction with
         foreign-key enforcement off (bulk retention deletes; the caller keeps references consistent)."""
         fut: Future = Future()
+        if time.monotonic() - getattr(self, "_born", 0.0) < STARTUP_GRACE_S:
+            timeout = max(timeout, STARTUP_WAIT_S)    # a start waits for the database to open (slow disk, loaded host)
         try:
             self._q.put((fn, fut, solo_without_fk), block=not droppable, timeout=None if droppable else timeout)
         except queue.Full:
