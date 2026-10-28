@@ -119,6 +119,7 @@ class Op:
     uncertain_L: float = 0.0
     requested_L: float | None = None
     last_rate: tuple[datetime, float] | None = None
+    meter: tuple[str, str] | None = None             # R913-02: (item, role) counted until the operation ends
     last_flow_ok_mono: float | None = None
     step_base_L: float = 0.0
     guard_since: dict = field(default_factory=dict)  # stop condition index -> mono since it holds
@@ -1186,13 +1187,15 @@ class Engine:
             return "normal", list(a.normal_stop)
         return "none", []
 
-    def _begin_stop(self, op: Op, why: str, *, result: str) -> None:
+    def _begin_stop(self, op: Op, why: str, *, result: str, plan: tuple[str, list] | None = None) -> None:
         if op.state != "RUNNING":
             return
         op.state, op.reason, op.result = "STOPPING", why, result
         op.replace = None                            # a changeover in progress ends: the stop path owns every OFF now
         op.stop_since = op.stop_step_since = self.clock.mono()
         op.stop_plan_name, op.stop_plan = self._choose_plan(op, result)
+        if plan is not None and op.stop_plan_name == "none":
+            op.stop_plan_name, op.stop_plan = plan
         op.stop_idx, op.stop_sent, op.stopping_items, op.plan_done = 0, set(), [], False
         self.event("PROGRAM_OP_STOPPING", {"op_id": op.op_id, "why": why, "result": result,
                                            "plan": op.stop_plan_name}, "system")
@@ -1380,7 +1383,48 @@ class Engine:
                     st["n"] = op.body.trigger.max_count
         self.event("PROGRAM_OP_ENDED", rec, "system")
 
+    def _residual_metering(self, op: Op) -> None:
+        """R913-02: water still measured after a litre step (a pump coasting, stopping late, or not yet verified OFF)
+        belongs to the same cycle. Valid readings keep being counted until the operation ends; a reading lost
+        meanwhile adds its estimate to the uncertain volume and counting stops (the stop itself goes on)."""
+        meter, role = op.meter
+        it = self._items.get(meter)
+        p = it.points.get(role) if it else None
+        s = self.io.sample(p) if p else None
+        rate = self._analog(it, role) if it else None
+        factor = flow_factor(it.body.scaling[role].unit) if rate is not None else None
+        if rate is None or s is None or factor is None:
+            if op.last_rate is not None:
+                gap = (self.clock.utc() - op.last_rate[0]).total_seconds()
+                if gap > (it.body.stale_after_s if it else 5.0):
+                    op.uncertain_L += max(0.0, op.last_rate[1]) * gap / 60.0
+                    op.meter = None
+                    self.event("PROGRAM_METER_LOST", {"op_id": op.op_id, "meter": meter, "uncertain_L": round(op.uncertain_L, 3),
+                                                      "why": "flow reading lost while the operation was finishing"}, "system")
+            return
+        rate *= factor
+        t = s.acquired_utc
+        if op.last_rate is not None and t > op.last_rate[0]:
+            dt = (t - op.last_rate[0]).total_seconds()
+            litres = max(0.0, (op.last_rate[1] + rate) / 2.0) * dt / 60.0
+            if dt > it.body.stale_after_s:
+                op.uncertain_L += litres
+            else:
+                op.measured_L += litres
+        if op.last_rate is None or t > op.last_rate[0]:
+            op.last_rate = (t, rate)
+
+    def _in_litre_step(self, op: Op) -> bool:
+        a = op.body.action
+        if op.state != "RUNNING" or op.replace:
+            return False                             # a changeover counts through _changeover_metering
+        if a.type == "DELIVER_VOLUME":
+            return True
+        return a.type == "SEQUENCE" and op.step < len(a.steps) and a.steps[op.step].do == "DELIVER"
+
     def _advance(self, op: Op) -> None:
+        if op.meter is not None and not self._in_litre_step(op) and not op.replace:
+            self._residual_metering(op)
         if op.state in ("STOPPING", "STOP_UNVERIFIED"):
             self._advance_stop(op)
             return
@@ -1419,6 +1463,7 @@ class Engine:
             if iid not in op.off_sent and not self._feedback_ok(op, iid):
                 return
         if a.type == "DELIVER_VOLUME":
+            op.meter = (a.meter, a.meter_role)
             self._deliver(op, a.meter, a.meter_role, a.target_L, a.no_flow_timeout_s, a.min_flow_L_min,
                           finish=lambda: self._begin_stop(op, f"delivered {op.measured_L:.2f} L", result="DONE"))
         elif a.type == "KEEP_BETWEEN":
@@ -1576,7 +1621,12 @@ class Engine:
                                                                "measured_L": round(op.measured_L, 3), "why": why}, "system")
             if result == "RUNTIME_GUARD":
                 self.alarm("PROGRAM_RUNTIME_GUARD", op.program_id, True, {"op_id": op.op_id})
-            self._begin_stop(op, why, result=result)
+            # R913-01: with no separate normal stop, the sequence's remaining OFF and WAIT steps are the stop plan, in
+            # their order and each verified (OFF sent again while unverified): a valve never closes before the pump
+            # ahead of it is proven OFF
+            a = op.body.action
+            tail = [s for s in a.steps[op.step + 1:] if s.do in ("OFF", "WAIT")] if a.type == "SEQUENCE" else []
+            self._begin_stop(op, why, result=result, plan=("sequence", tail) if tail else None)
             return
         if r["phase"] == "STOPPING":
             ok, coil, fb = self._off_state(op, failed)
@@ -1770,6 +1820,8 @@ class Engine:
                 if mono - op.step_since < s.seconds:
                     return
             elif s.do == "DELIVER":
+                if op.meter != (s.meter, s.meter_role):
+                    op.meter, op.last_rate = (s.meter, s.meter_role), None   # another meter: its own first reading
                 if not self._deliver(op, s.meter, s.meter_role, s.target_L, s.no_flow_timeout_s, s.min_flow_L_min,
                                      finish=lambda: None):
                     if op.state != "RUNNING":
@@ -1779,7 +1831,8 @@ class Engine:
                     return
             op.step += 1
             op.step_since = mono
-            op.last_rate = None
+            if op.meter is None:
+                op.last_rate = None                  # R913-02: a meter in use keeps its last reading across steps
             op.step_base_L = op.measured_L
             self.event("PROGRAM_STEP", {"op_id": op.op_id, "step": op.step}, "system")
         if op.state == "RUNNING" and op.step >= len(steps):

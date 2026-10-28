@@ -476,3 +476,59 @@ def test_r402_02_a_meter_reading_another_quantity_is_refused_for_a_litre_target(
     with pytest.raises(Refused, match="not a flow rate"):
         r.e.run_now("t", "p")
     assert r.on_frames() == []
+
+
+# ------------------------------------------------------------------ R913-01/02: a satisfied litre step finishes in order and counted
+def _run_tracking(r, seconds):
+    """Run in 0.5 s steps; return the water that actually flowed (60 L/min while either pump output is ON) and the
+    first moment the valve output closed while pump-a was not yet verified OFF (None if never)."""
+    water, bad = 0.0, None
+    for _ in range(int(seconds / 0.5)):
+        if r.twin.s.coils.get(PA) or r.twin.s.coils.get(PB):
+            water += 60.0 * 0.5 / 60.0
+        r.run(0.5)
+        if not r.twin.s.coils.get(V1) and bad is None and r.e.ops:
+            op = next(iter(r.e.ops.values()))
+            if "pump-a" in op.on:                                 # still this operation's duty: not verified OFF
+                bad = r.clock.mono()
+    return water, bad
+
+
+def test_r913_01_the_valve_never_closes_before_the_failed_pump_is_verified_off():
+    # no separate normal stop: the sequence's own tail (pump OFF, then valve OFF) is the stop plan, in order
+    r, op = _litre_rig(target=11, delay_s=20)
+    assert not op.body.action.normal_stop
+    _drop_off(r, 8)
+    water, bad = _run_tracking(r, 90)
+    assert bad is None, "the sector valve closed while the failed pump was not verified OFF"
+    f = r.e.finished[-1]
+    assert f["result"] == "DONE" and not any(t == PB and d for t, d in _targets(r))   # still no standby ON
+    assert not r.twin.s.coils.get(PA) and not r.twin.s.coils.get(V1)
+    steps = [p["item"] for k, p in r.events if k == "PROGRAM_STOP_STEP"]
+    assert steps.index("pump-a") < steps.index("valve-1")             # the configured order, each verified
+
+
+def test_r913_02_water_measured_while_the_failed_pump_stops_counts_in_the_cycle_record():
+    r, op = _litre_rig(target=11, delay_s=20)
+    _drop_off(r, 8)                                                  # pump-a keeps pumping measured water for 8 s
+    before = op.measured_L
+    water, _ = _run_tracking(r, 90)
+    f = r.e.finished[-1]
+    total = before + water
+    assert f["result"] == "DONE" and f["uncertain_L"] == 0
+    assert f["measured_L"] > 11 + 5, f                               # the residual flow is in the record
+    assert abs(f["measured_L"] - total) <= 1.5, (f["measured_L"], total)   # and it matches what flowed
+
+
+def test_r913_02_a_reading_lost_during_the_finishing_stop_is_reported_uncertain_not_dropped():
+    r, op = _litre_rig(target=11, delay_s=20)
+    _drop_off(r, 8)
+    r.run(4)                                                         # the target is met; the stop is under way
+    assert op.state in ("STOPPING", "STOP_UNVERIFIED")
+    sample = r.e.io.sample
+    r.e.io.sample = lambda point: None if point == "analog_A.AI1" else sample(point)
+    r.run(90)
+    f = r.e.finished[-1]
+    assert f["result"] == "DONE" and f["uncertain_L"] > 0            # the unmeasured water is named, never silent
+    assert "PROGRAM_METER_LOST" in r.kinds()
+    assert not r.twin.s.coils.get(PA) and not r.twin.s.coils.get(V1)  # the stop itself completed
