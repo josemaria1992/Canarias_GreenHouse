@@ -33,7 +33,7 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
 
-from ..equipment.definitions import ID_RE, ItemBody, Operation, Purpose, TypeBody
+from ..equipment.definitions import ID_RE, ItemBody, Operation, Purpose, TypeBody, flow_factor
 from .schedule import written_length_s
 
 MAX_STEPS = 32
@@ -327,12 +327,12 @@ def validate(p: ProgramBody, items: dict[str, dict], types: dict[tuple[str, int]
             continue
         if r.direction.value != "INPUT":
             out.append(f"{it['name']} {r.label} is not an input")
-        if (iid, role) in meters:                    # a volume integrates litres per minute: nothing else will do
+        if (iid, role) in meters:                    # a volume needs a flow rate (R402-02: converted to L/min)
             sc = ItemBody.model_validate(it["body"]).scaling.get(role)
             unit = (sc.unit if sc else r.unit) or ""
-            if r.purpose != Purpose.MEASUREMENT or unit.replace(" ", "").lower() != "l/min":
-                out.append(f"{it['name']} {r.label} is not a flow-rate measurement in L/min "
-                           f"({unit or 'no unit'}): it cannot measure a volume")
+            if r.purpose != Purpose.MEASUREMENT or flow_factor(unit) is None:
+                out.append(f"{it['name']} {r.label} reads {unit or 'no unit'}, not a flow rate, so it cannot measure "
+                           "a volume: choose a flow meter, or set its unit on Equipment to L/min, L/h, m³/h or L/s")
         elif (iid, role) in analog_sensors and r.purpose != Purpose.MEASUREMENT:
             out.append(f"{it['name']} {r.label} is not an analog measurement")
         if physical:

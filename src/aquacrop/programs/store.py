@@ -287,6 +287,28 @@ class ProgramStore:
                 self.h.event("PROGRAM_DEACTIVATED", {"program": program_id, "runtime": r["runtime_id"], "why": why},
                              actor=actor)
 
+    def retire(self, actor: str, program_id: str, reason: str) -> dict:
+        """Remove a program from use (owner, 28 Oct 2026): every version becomes RETIRED and its history stays. Refused
+        while any version is active anywhere, so nothing that can run disappears: deactivate it first."""
+        with self._lock:
+            have = [v for v in self.versions() if v["program_id"] == program_id]
+            if not have:
+                raise ProgramRefused(f"program {program_id} does not exist")
+            if all(v["status"] == "RETIRED" for v in have):
+                raise ProgramRefused(f"{have[-1]['name']} is already retired")
+            rows = self.h.query("SELECT a.runtime_id, a.action FROM program_activations a JOIN "
+                                "(SELECT runtime_id, max(seq) AS seq FROM program_activations WHERE program_id=? "
+                                "GROUP BY runtime_id) m ON a.seq=m.seq", (program_id,))
+            on = [r["runtime_id"] for r in rows if r["action"] == "ACTIVATED"]
+            if on:
+                raise ProgramRefused(f"{have[-1]['name']} is active, so it can still run: deactivate it first on "
+                                     "Operation (Deactivate, an administrator), then retire it")
+            self.h.submit(lambda c: c.execute("UPDATE programs SET status='RETIRED', updated_utc=? WHERE program_id=?",
+                                              (_now(), program_id)), wait=True)
+            self.h.event("PROGRAM_RETIRED", {"program": program_id, "versions": [v["version"] for v in have],
+                                             "reason": reason}, actor=actor)
+            return {"ok": True, "program_id": program_id, "status": "RETIRED"}
+
     def record_simulation(self, program_id: str, version: int, evidence: dict) -> dict:
         v = self.get(program_id, version)
         if evidence.get("digest") != v["digest"]:

@@ -52,6 +52,11 @@ class PreviewIn(_B):
     form: dict
 
 
+class RetireIn(_B):
+    program_id: str = Field(max_length=48)
+    reason: str = Field(min_length=1, max_length=300)
+
+
 class RenameIn(_B):
     program_id: str = Field(max_length=48)
     public_id: str = Field(max_length=48)
@@ -282,6 +287,19 @@ def register(app, require, programs, equipment, cfg, feed_dir: Path | None, publ
             raise HTTPException(404, f"program {body.program_id} does not exist")
         try:
             r = programs.rename(p.username, key, body.public_id, body.expected_rev)
+        except ProgramRefused as e:
+            raise HTTPException(409, str(e))
+        publish()
+        return r
+
+    @app.post("/api/programs/retire")
+    def retire(body: RetireIn, p: Principal = Depends(require(Perm.EQUIPMENT_ACTIVATE))):
+        """Remove a program from the list (every version RETIRED, history kept); refused while it is active."""
+        key = programs.resolve(body.program_id)
+        if key is None:
+            raise HTTPException(404, f"program {body.program_id} does not exist")
+        try:
+            r = programs.retire(p.username, key, body.reason)
         except ProgramRefused as e:
             raise HTTPException(409, str(e))
         publish()

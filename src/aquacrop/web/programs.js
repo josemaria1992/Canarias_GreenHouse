@@ -275,7 +275,16 @@
       can("equipment_edit") ? h("div", { class: "row" },
         !legacy ? h("button", { class: "small", onclick: edit }, v.status === "DRAFT" && v.form.form_version !== 1 ? "Edit" : "Change (new version)") : null,
         h("button", { class: "small ghost", onclick: () => { P0.open[v.program_id] = !open; U.refresh(); } }, open ? "Hide definition" : "Show definition"),
-        h("a", { class: "small", href: "#operation" }, "Run or stop on Operation")) : null,
+        h("a", { class: "small", href: "#operation" }, "Run or stop on Operation"),
+        // owner, 28 Oct 2026: a program can be removed (retired; its history stays). Active programs are deactivated first.
+        h("button", { class: "small ghost", disabled: !can("equipment_activate"),
+          title: can("equipment_activate") ? null : "Retiring a program needs an administrator account",
+          onclick: async () => {
+            if (v.active_on && v.active_on.length) { U.toast(`${v.name} is active: deactivate it first on Operation, then retire it.`, true); return; }
+            const why = prompt(`Retire ${v.name}? It disappears from this list; its history is kept. Reason:`);
+            if (!why || !why.trim()) return;
+            await U.act("POST", "/api/programs/retire", { program_id: v.program_id, reason: why.trim() }, `${v.name} retired`);
+          } }, "Retire")) : null,
       legacy && can("equipment_edit") ? h("p", { class: "muted small" }, "Written before the forms: it keeps its definition and runs as before. It is shown here read-only; a form version is a new program you write and test.") : null,
       open ? h("pre", { class: "small mono" }, JSON.stringify(v.body, null, 2)) : null);
   }
