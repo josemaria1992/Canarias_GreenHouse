@@ -82,6 +82,22 @@
     if ((body.roles || []).length && body.roles.every(r => r.purpose === "STATE")) return "button";
     return "custom";
   }
+  // R913-03: what a reading measures is kept in its key (pressure, pressure_2, ...), so any number of readings of one
+  // quantity reopen the same; an older or copied key is recognised by an unambiguous unit (°C, bar, mS/cm, ...)
+  const QUANTITY_KEY = /^(flow|level|pressure|ph|ec|temperature)(?:_\d+)?$/;
+  function measureOf(r) {
+    const k = QUANTITY_KEY.exec(r.role || "");
+    if (k) return k[1];
+    const by = Object.entries(MEASURES).filter(([m, x]) => m !== "other" && x.units.includes(r.unit));
+    return by.length === 1 ? by[0][0] : "other";
+  }
+  function quantityKey(m, label, taken) {
+    if (!MEASURES[m] || m === "other") return slug(label || "reading", taken);
+    if (!taken.includes(m)) return m;
+    let n = 2;
+    while (taken.includes(`${m}_${n}`)) n++;
+    return `${m}_${n}`;
+  }
   /** The form for a stored definition: everything it holds is kept; only presentation fields are added. */
   function fromBody(body, meta) {
     const b = clone(body || {});
@@ -92,7 +108,7 @@
       // `stored`: the role is in a saved version (items may hold its channel and history); a new or copied type has none
       roles: (b.roles || []).map(r => Object.assign(clone(r), { pol: r.inverted ? "open" : "closed", known: true,
         stored: !!(meta && meta.version),
-        measure: r.purpose === "MEASUREMENT" ? (MEASURES[r.role] ? r.role : "other") : undefined })),
+        unit0: r.unit, measure: r.purpose === "MEASUREMENT" ? measureOf(r) : undefined })),
       props: clone(b.properties || []), limits: clone(b.limits || {}), ops: clone(b.operations || []),
       sim: clone(b.simulation || { behavior: "NOT_MODELLED" }), requests: [], adding: null, errors: {} };
   }
@@ -131,8 +147,7 @@
     const mm = MEASURES[m];
     r.unit = mm.units.length ? mm.units[0] : "";
     if (m !== "other") r.label = mm.word;
-    const taken = f.roles.filter(x => x !== r).map(x => x.role);
-    r.role = m !== "other" && !taken.includes(m) ? m : slug(r.label || mm.word, taken);
+    r.role = quantityKey(m, r.label || mm.word, f.roles.filter(x => x !== r).map(x => x.role));
     return true;
   }
   function addStatus(f, purpose, label) {
@@ -145,7 +160,7 @@
   }
   function addReading(f, label, measure, unit, electrical) {
     const taken = f.roles.map(r => r.role);
-    const key = MEASURES[measure] && measure !== "other" && !taken.includes(measure) ? measure : slug(label, taken);
+    const key = quantityKey(measure, label, taken);
     f.roles.push({ role: key, label: label || MEASURES[measure].word, direction: "INPUT", signal: "ANALOG", purpose: "MEASUREMENT",
       required: true, electrical: electrical ? [electrical] : [], unit: unit || "", measure, pol: "closed", known: true });
     if (!f.ops.includes("MEASURE")) f.ops.push("MEASURE");
@@ -169,7 +184,7 @@
     if (f.hydraulic) b.hydraulic = f.hydraulic; else delete b.hydraulic;
     b.roles = f.roles.map(r => {
       const o = {};
-      for (const k of Object.keys(r)) if (!["pol", "known", "stored", "measure", "_removed"].includes(k) && r[k] !== undefined) o[k] = clone(r[k]);
+      for (const k of Object.keys(r)) if (!["pol", "known", "stored", "measure", "unit0", "_removed"].includes(k) && r[k] !== undefined) o[k] = clone(r[k]);
       if (r.signal === "DIGITAL" && r.direction === "INPUT") o.inverted = r.pol === "open";
       if (o.unit === "") delete o.unit;
       return o;
@@ -197,7 +212,7 @@
       if (r.direction === "INPUT" && r.signal === "DIGITAL" && !r.pol)
         out.push({ field: "role:" + r.role, text: `Say how “${r.label}” signals: does its contact close or open when it is active? If the wiring is not confirmed yet, leave this signal out for now.` });
       if (r.purpose === "MEASUREMENT" && !String(r.unit || "").trim()) out.push({ field: "role:" + r.role, text: `Choose the unit of “${r.label}”.` });
-      else if (r.purpose === "MEASUREMENT" && !r.stored && MEASURES[r.measure] && MEASURES[r.measure].units.length && !MEASURES[r.measure].units.includes(r.unit))
+      else if (r.purpose === "MEASUREMENT" && (!r.stored || r.unit !== r.unit0) && MEASURES[r.measure] && MEASURES[r.measure].units.length && !MEASURES[r.measure].units.includes(r.unit))
         out.push({ field: "role:" + r.role, text: `“${r.label}” measures ${MEASURES[r.measure].word.toLowerCase()}: its unit is one of ${MEASURES[r.measure].units.join(", ")}, not ${r.unit}.` });
     }
     const labels = f.roles.map(r => String(r.label || "").trim().toLowerCase()).filter(Boolean);

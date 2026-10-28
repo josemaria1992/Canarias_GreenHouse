@@ -145,3 +145,36 @@ test("changing what a new reading measures persists through save and reopen; a s
   const t = back.roles.find(r => r.purpose === "MEASUREMENT");
   assert.deepEqual([t.role, t.measure, t.unit], ["temperature", "temperature", "°C"]);
 });
+
+// R913-03: several readings of one quantity, and copied/older custom keys, keep what they measure on reopen
+test("two readings of the same quantity keep their quantity through save and reopen, with keys unchanged", () => {
+  const f = M.startFrom("custom", {});
+  f.name = "Line monitor";
+  M.addReading(f, "Pressure", "pressure", "bar");
+  M.addReading(f, "Something", "other", "x");
+  assert.ok(M.setMeasure(f, f.roles[1], "pressure"));
+  f.roles[1].label = "Discharge pressure";
+  M.addReading(f, "Temperature", "temperature", "°C");
+  M.addReading(f, "Bearing temperature", "temperature", "°C");
+  const saved = M.toBody(f);
+  assert.deepEqual(saved.roles.map(r => r.role), ["pressure", "pressure_2", "temperature", "temperature_2"]);
+  const again = M.fromBody(saved, { name: "Line monitor", type_id: "line_monitor", version: 1 });
+  assert.deepEqual(again.roles.map(r => [r.role, r.measure, r.unit]),
+    [["pressure", "pressure", "bar"], ["pressure_2", "pressure", "bar"], ["temperature", "temperature", "°C"], ["temperature_2", "temperature", "°C"]]);
+  assert.deepEqual(M.toBody(again).roles.map(r => r.role), saved.roles.map(r => r.role));   // stable keys
+  // a unit changed to one that does not fit the quantity is refused, saved reading or not
+  again.roles[3].unit = "bar";
+  assert.ok(M.problems(again).some(p => /measures temperature: its unit is one of °C, not bar/.test(p.text)));
+});
+
+test("an older or copied reading with a custom key is recognised by its unit", () => {
+  const body = { category: "Other", default_icon: "generic", operations: ["MEASURE"], simulation: { behavior: "NOT_MODELLED" },
+    roles: [{ role: "bearing_temperature", label: "Bearing temperature", direction: "INPUT", signal: "ANALOG", purpose: "MEASUREMENT", unit: "°C" },
+      { role: "discharge", label: "Discharge", direction: "INPUT", signal: "ANALOG", purpose: "MEASUREMENT", unit: "bar" },
+      { role: "odd", label: "Odd", direction: "INPUT", signal: "ANALOG", purpose: "MEASUREMENT", unit: "rpm" }] };
+  const f = M.fromBody(body, { name: "Old", type_id: "old", version: 3 });
+  assert.deepEqual(f.roles.map(r => r.measure), ["temperature", "pressure", "other"]);
+  const c = M.copyOf({ name: "Old", body });
+  assert.deepEqual(c.roles.map(r => [r.role, r.measure]), [["bearing_temperature", "temperature"], ["discharge", "pressure"], ["odd", "other"]]);
+  assert.equal(M.problems(f).filter(p => /unit is one of/.test(p.text)).length, 0);   // unchanged saved units pass
+});

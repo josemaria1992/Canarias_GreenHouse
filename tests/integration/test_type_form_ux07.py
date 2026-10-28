@@ -91,3 +91,33 @@ def test_r402_05_a_changed_measurement_goes_through_the_draft_endpoint_and_reope
         """
         back = json.loads(subprocess.run(["node", "-e", js2], capture_output=True, text=True, timeout=60, check=True).stdout)
         assert back == [["pressure", "pressure", "Pressure", "bar"]]
+
+
+def test_r913_03_two_readings_of_one_quantity_go_through_the_draft_endpoint_and_reopen_the_same(tmp_path, icfg):
+    app = _app(tmp_path, icfg)
+    with TestClient(app, base_url=ORIGIN) as c:
+        h = login(c, "admin1")
+        js = f"""
+        const M = require({json.dumps(str(FORM))});
+        const f = M.startFrom("custom", {{}});
+        f.name = "Line monitor";
+        M.addReading(f, "Pressure", "pressure", "bar");
+        M.addReading(f, "Something", "other", "x");
+        M.setMeasure(f, f.roles[1], "pressure"); f.roles[1].label = "Discharge pressure";
+        console.log(JSON.stringify({{ problems: M.problems(f), body: M.toBody(f) }}));
+        """
+        try:
+            r = json.loads(subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60, check=True).stdout)
+        except FileNotFoundError:
+            pytest.skip("node is not installed")
+        assert r["problems"] == []
+        assert c.post("/api/equipment/types/draft", json={"type_id": "line_monitor", "name": "Line monitor", "body": r["body"]},
+                      headers=h).status_code == 200
+        saved = next(t for t in c.get("/api/equipment", headers=h).json()["types"] if t["type_id"] == "line_monitor")
+        js2 = f"""
+        const M = require({json.dumps(str(FORM))});
+        const f = M.fromBody({json.dumps(saved["body"])}, {{ name: "Line monitor", type_id: "line_monitor", version: {saved["version"]} }});
+        console.log(JSON.stringify(f.roles.map(r => [r.role, r.measure, r.unit])));
+        """
+        back = json.loads(subprocess.run(["node", "-e", js2], capture_output=True, text=True, timeout=60, check=True).stdout)
+        assert back == [["pressure", "pressure", "bar"], ["pressure_2", "pressure", "bar"]]
