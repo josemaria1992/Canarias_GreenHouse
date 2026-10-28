@@ -146,6 +146,9 @@ class StorageUnavailable(OSError):
 CHECKPOINT_EVERY_S = 60.0
 
 
+STARTUP_WAIT_S = 30.0          # the first writes of a start (session record, command reconciliation)
+
+
 class Historian:
     def __init__(self, db_path: str | Path, cfg: InstallationConfig, session_id: str, *, queue_max: int = 512,
                  backend_name: str = "SIMULATED"):
@@ -179,7 +182,7 @@ class Historian:
         self.submit(lambda c: c.execute(
             "INSERT INTO process_sessions(session_id,started_utc,config_id,config_version,profile,software_version)"
             " VALUES(?,?,?,?,?,?)", (session_id, utc_iso(), cfg.config_id, cfg.config_version, cfg.profile.value,
-                                     __version__)), wait=True)
+                                     __version__)), wait=True, timeout=STARTUP_WAIT_S)
 
     # ------------------------------------------------------------------ queue plumbing
     def submit(self, fn: Callable[[sqlite3.Connection], Any], *, wait: bool = False, timeout: float = 3.0,
@@ -461,7 +464,9 @@ class Historian:
                           "' [reconciled at restart: outcome never persisted]', outcome_utc=? WHERE request_id=?",
                           [(utc_iso(), i) for i in ids])
             return ids
-        return self.submit(op, wait=True)
+        # at start the writer may still be opening and checking the database (a slow SD card, a loaded runner):
+        # a start must not fail on the 3 s default meant for routine writes
+        return self.submit(op, wait=True, timeout=STARTUP_WAIT_S)
 
     def record_config(self, cfg: InstallationConfig) -> dict:
         """CONFIG_LOADED at every start, plus CONFIG_CHANGED (with the changed keys) when the effective
