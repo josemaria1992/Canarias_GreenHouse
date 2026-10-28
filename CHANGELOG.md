@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.9 (2026-10-28): owner decisions on equipment type requests and access
+
+- A need the equipment type form cannot meet is sent to the operators, who review it and approve or reject it (a
+  reason is required to reject) on Equipment types. Approving changes no type, item, program or output.
+- Operators open Equipment types (drafting with the guided form, requests); activation stays with administrators.
+
 ## 0.7.8 (2026-10-27): review C077 and R402, equipment types without code (UX-07)
 
 - Sectors on one pump group take turns; a stop (Stop all, a user stop, leaving AUTO, a lost lease, a changed program)
