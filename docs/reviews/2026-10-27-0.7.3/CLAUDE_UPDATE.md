@@ -1,6 +1,6 @@
 # Claude implementation update — 0.7.7 (C075 review, owner decisions and answers, UX-01..06), C077 fixes, UX-07 and R402
 
-Status: **C077-01..08, UX-07 and R402-01..06 are implemented on the branch** (see below); **deployed to the bench as 0.7.8** on the owner's request (27 Oct 2026, 23:45 CET). No AUTO, lease or output command was used. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
+Status: **C077-01..08, UX-07 and R402-01..06 are implemented on the branch** (see below); **deployed to the bench as 0.7.8** on the owner's request (27 Oct 2026, 23:45 CET); the owner's 28 Oct decisions on requests and operator access followed as **0.7.9** (28 Oct, 08:50 CET). No AUTO, lease or output command was used. Earlier: 0.7.7 was implemented and deployed to the bench (0.7.6 plus the owner's pump-replacement answers). CI on the final commit had not finished when this was
 written. Independent review pending. The previous update (0.7.5) is in this file's Git history.
 
 ## Source identity
@@ -174,6 +174,12 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 
 ## Deployment and access
 
+- **0.7.9 (owner's request, 28 Oct 2026):**
+  - Release `aquacrop-0.7.9.zip` from `ab96a7e`, sha256 `1de10898c43d46dd6a2f172917bd98c5604618c4fb120f78a8f8e612088fffe1`, build `0.7.9+ab96a7e14b.wfbb4abe0`. It adds the owner's request routing and operator access (`9e0ef90`).
+  - Before the upgrade: full suite on `c913846` (845 passed, 8 skipped, 0 failed), every JS test passed, `verify_release.py` 28/28. On the CM4, Python 3.11 compiled the wheel's 118 modules, and `preflight311.sh` passed.
+  - Upgrade 0.7.8 → 0.7.9. The pre-upgrade backup `/var/lib/aquacrop/backups/pre-upgrade/aquacrop-2026-10-28T074939.495827Z.sql.gz` was verified. 0.7.8 stays installed for rollback.
+  - After the upgrade: main, twin and Caddy are active; health through Caddy reports MAIN 0.7.9 with storage and acquisition OK; TWIN reports 0.7.9; no service errors were logged.
+  - No AUTO, lease or output command was used, and the owner's import answers were not applied.
 - **0.7.8 (owner's request, 27 Oct 2026):**
   - Release `aquacrop-0.7.8.zip` from `ea9301f`, sha256 `30155215c00b8f4c95205df0be1384ab0facf629a595fe8340d4861b4b7fd14a`, build `0.7.8+ea9301f265.wd95a6186`.
   - Before the upgrade: full suite on `8cbc344` (844 passed, 8 skipped, 0 failed), every JS test passed, `verify_release.py` 28/28. On the CM4, Python 3.11 compiled the wheel's 118 modules, and `preflight311.sh` passed (imports, refused Preview/Save, programs, block prerequisites, project export).
@@ -194,7 +200,7 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 ## Remaining
 
 - **C077:** deployed in 0.7.8. The owner answered the dosing valves and the temperature sensor (28 Oct): each dosing line has its outlet valve in series (answer yes); "Main tank temperature" has no physical sensor and is to be retired on Equipment by the owner. Return pump 2 can now be answered as a parallel spare (`fc34fe6`). Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
-- **UX-07:** deployed in 0.7.8; the owner's request routing and operator access (`9e0ef90`) are **not deployed yet**.
+- **UX-07:** deployed in 0.7.8; the owner's request routing and operator access (`9e0ef90`) are deployed in 0.7.9.
 
 - CI result on `7075853`.
 - The signed-in real-bench walkthrough by the owner.
