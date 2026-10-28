@@ -80,10 +80,10 @@ These are the owner's facts about the physical bench. They are recorded here and
 | Question | Owner's answer |
 |---|---|
 | `start:fill-main`, `fill-a`, `fill-b`, `fill-acid`: does each fill pipe join the mains pipe? | **Yes.** A pipe runs from mains to each tank with a valve in between. These are the explicit `v-fill-*` valves. |
-| `inline:dose-a/b/acid:v-out-*`: is the outlet valve in series on the dosing pipe? | **Clarification asked.** The owner answered "flow meters in series". The `flow-tp-*` meters are already explicit and in series, but `v-out-*` are valve items. It is still open whether each dosing line has an outlet valve. |
+| `inline:dose-a/b/acid:v-out-*`: is the outlet valve in series on the dosing pipe? | **No outlet valve** (owner, 28 Oct 2026). Each dosing line, after the fertiliser and acid tanks, has a pump and a flow meter (the explicit `tp-*` and `flow-tp-*`). The three valve items "Fertiliser A outlet", "Fertiliser B outlet" and "Acid outlet" have no physical valve: the owner retires them on Equipment, and the question then no longer arises. |
 | `inline:return:rp2`: is Return pump 2 in series with Return pump 1? | **No.** They are parallel pumps inside the drainage tank, and the second one is there in case one fails. Added in `fc34fe6`: a pump drawn on a line that already has a pump is asked Yes (in series), No, or **Parallel spare**. Parallel spare gives it the same suction and the same downstream as its partner, never in series. A test confirms that with this answer the bench drawing is ready and that Return pumps 1 and 2 both take from the drainage tank and join before the return meter. |
 | `tap:ec`, `tap:ph`: do they measure Main tank? | **Yes.** |
-| `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no temperature sensor in any tank. Where the configured "Main tank temperature" sensor is, or whether it should be removed, is still open. |
+| `tap:temp`: does Main tank temperature measure Main tank? | **No.** There is no main tank temperature sensor (owner, 28 Oct 2026): the configured item "Main tank temperature" has no physical sensor, and the owner retires it on Equipment. |
 | `tap:pres-s1`, `tap:pres-s2`: do they measure the sector pipes? | **Yes.** |
 
 ## R402 findings (Codex review of e40285f)
@@ -127,9 +127,17 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 
 **Unsupported, and explained in the form:** a second control output (close, reverse, a second speed); any behaviour the engine has no logic for; twin models beyond the existing ones (NOT MODELLED stays). A CLOSED position signal is shown with the equipment, but programs do not use it.
 
-**Owner decisions still needed:**
-- Where requests for unsupported needs go, and who reviews them. Until then they are kept on the page only.
-- Whether operators should reach the types page to draft types. The server already lets operators save drafts, but the page is administrator-only, as before. Permissions were not changed.
+**Owner decisions, 28 Oct 2026, implemented in `9e0ef90`:**
+- **Requests go to the operators, who review them and approve or reject them.**
+  - "Send to the operators for review" in Add a feature records the request; it is kept on the page only until it is sent.
+  - A Requests card on Equipment types lists every request for operators and administrators, with Approve, and Reject (a reason is required). One decision per request, with the reviewer and note shown.
+  - Requests are audited events (`EQUIPMENT_TYPE_REQUEST`, `EQUIPMENT_TYPE_REQUEST_REVIEWED`), so there is no new table and the schema stays 7. Approving changes no type, item, program or output.
+  - Not decided, so not restricted: whether a requester may approve their own request.
+- **Operators open Equipment types.** It is in the operator menu and role text, for drafting with the guided form and for requests. Activating, retiring and "Make available" stay with administrators: the server refuses an operator's activation, and the button is disabled for them.
+- Evidence:
+  - `tests/integration/test_type_requests_owner.py`: send; viewer refused; listing for operators and administrators; reject without a reason refused; one decision only; unknown request 404; types and items unchanged; operator activation refused. `test_rbac_070.py` covers the operator menu.
+  - Browser on a bench copy (`evidence-owner28/`), 5/5: an operator opens the page, sends a request from the form, then approves it with a note; activation is refused.
+  - The UX-07 demo was re-run with the new behaviour: 25/25.
 
 ## UX-01..UX-06
 
@@ -185,8 +193,8 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 
 ## Remaining
 
-- **C077:** not deployed. Owner clarifications: the dosing outlet valves and where the temperature sensor is. Return pump 2 can now be answered as a parallel spare (`fc34fe6`). Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
-- **UX-07:** not deployed. Owner decisions on request routing and on operator access to the types page.
+- **C077:** deployed in 0.7.8. The owner answered the dosing valves and the temperature sensor (28 Oct): the three outlet valve items and "Main tank temperature" are to be retired on Equipment by the owner. Return pump 2 can now be answered as a parallel spare (`fc34fe6`). Tank, sector and mains items are needed on the real bench. 8 drawn connections need equipment moved apart.
+- **UX-07:** deployed in 0.7.8; the owner's request routing and operator access (`9e0ef90`) are **not deployed yet**.
 
 - CI result on `7075853`.
 - The signed-in real-bench walkthrough by the owner.
