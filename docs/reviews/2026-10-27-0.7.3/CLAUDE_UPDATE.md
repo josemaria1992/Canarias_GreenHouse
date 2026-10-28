@@ -88,7 +88,7 @@ These are the owner's facts about the physical bench. They are recorded here and
 
 ## R913 findings (Codex re-review of c913846) and the owner's 28 Oct requests
 
-Author tests only. Independent acceptance: **NOT RUN**. **Not deployed**: the bench runs 0.7.9 (`ab96a7e`), which has none of this section.
+Author tests only. Independent acceptance: **NOT RUN**. Deployed to the bench as **0.7.10** (`23af8a0`) on the owner's request; see Deployment.
 
 | ID | Implementation | Author evidence | Remaining |
 |---|---|---|---|
@@ -202,6 +202,12 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 
 ## Deployment and access
 
+- **0.7.10 (owner's request, 28 Oct 2026, 09:45 CET):**
+  - Release `aquacrop-0.7.10.zip` from `23af8a0`, sha256 `7275e972bc99f8efe3c3a075bd6a1e8b1e79556beb614217cb9c52a3ed0b368a`, build `0.7.10+23af8a03ab.w1e895ac0`. It adds R913-01..04, program retirement and the message review.
+  - Before the upgrade: full suite on the code (849 passed, 8 skipped; the 3 tests that pinned the old wording were updated and pass), every JS test passed, `verify_release.py` 28/28. On the CM4, Python 3.11 compiled the wheel's 118 modules, and `preflight311.sh` passed.
+  - Upgrade 0.7.9 → 0.7.10. The pre-upgrade backup `/var/lib/aquacrop/backups/pre-upgrade/aquacrop-2026-10-28T084356.276159Z.sql.gz` was verified. 0.7.9 stays installed for rollback.
+  - After the upgrade: main, twin and Caddy are active; health through Caddy reports MAIN 0.7.10 with storage and acquisition OK; TWIN reports 0.7.10; no service errors were logged.
+  - No AUTO, lease or output command was used, no program was retired, and the owner's import answers were not applied.
 - **0.7.9 (owner's request, 28 Oct 2026):**
   - Release `aquacrop-0.7.9.zip` from `ab96a7e`, sha256 `1de10898c43d46dd6a2f172917bd98c5604618c4fb120f78a8f8e612088fffe1`, build `0.7.9+ab96a7e14b.wfbb4abe0`. It adds the owner's request routing and operator access (`9e0ef90`).
   - Before the upgrade: full suite on `c913846` (845 passed, 8 skipped, 0 failed), every JS test passed, `verify_release.py` 28/28. On the CM4, Python 3.11 compiled the wheel's 118 modules, and `preflight311.sh` passed.
@@ -234,4 +240,4 @@ Browser demo: a fresh bench-data copy (localhost, simulated, throwaway accounts)
 - The signed-in real-bench walkthrough by the owner.
 - VPN DNS or hosts entries for other clients, and the DHCP reservation.
 
-Ready for independent Codex re-review of R913-01..04, program retirement and the message review: **YES** (not deployed; the bench runs 0.7.9).
+Ready for independent Codex re-review of R913-01..04, program retirement and the message review: **YES** (deployed as 0.7.10; author-reported).
